@@ -15,6 +15,7 @@ from openai import APITimeoutError as OpenAIAPITimeoutError
 from gateway.api.routes._pipeline import (
     PROVIDER_BAD_REQUEST_DETAIL,
     PROVIDER_BILLING_DETAIL,
+    PROVIDER_CONTEXT_MANAGEMENT_UNSUPPORTED_DETAIL,
     PROVIDER_CREDENTIALS_DETAIL,
     PROVIDER_MODEL_NOT_FOUND_DETAIL,
     PROVIDER_RATE_LIMITED_DETAIL,
@@ -27,6 +28,13 @@ from gateway.api.routes._platform import _provider_failure_http_exc
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
 
 _RAW = "raw provider detail SECRET token=abc123"
+
+# The exact bare NotImplementedError any-llm's default Messages path raises when a
+# request sets context_management/betas against a provider without a native
+# Anthropic Messages API (see AnyLLM._amessages).
+_CONTEXT_MANAGEMENT_MSG = (
+    "context_management and betas require a provider with a native Anthropic Messages API"
+)
 
 # The exact upstream OpenAI message for the tools + reasoning_effort rejection.
 _REASONING_TOOLS_MSG = (
@@ -129,6 +137,57 @@ def test_status_read_from_attached_response() -> None:
 @pytest.mark.parametrize("exc", [_StatusError(500), _StatusError(503), Exception(_RAW), ValueError(_RAW)])
 def test_unclassifiable_returns_none(exc: BaseException) -> None:
     assert classify_provider_error(exc) is None
+
+
+def test_bridged_context_management_maps_to_actionable_400() -> None:
+    """A request that sets context_management/betas against a bridged provider is
+    rejected by any-llm's default Messages path with a bare NotImplementedError
+    that carries no HTTP status. It must surface as a 400 with an actionable
+    detail, not fall through to the generic 500, because retrying is guaranteed
+    to fail identically."""
+    exc = NotImplementedError(_CONTEXT_MANAGEMENT_MSG)
+    assert classify_provider_error(exc) == (400, PROVIDER_CONTEXT_MANAGEMENT_UNSUPPORTED_DETAIL)
+
+
+def test_context_management_detail_does_not_imply_retry() -> None:
+    """The detail must point at the real cause (native Anthropic model or unset
+    fields), never tell the caller to try again."""
+    mapping = classify_provider_error(NotImplementedError(_CONTEXT_MANAGEMENT_MSG))
+    assert mapping is not None
+    assert "retry" not in mapping.detail.lower()
+    assert "temporar" not in mapping.detail.lower()
+
+
+def test_unrelated_not_implemented_error_stays_unclassifiable() -> None:
+    """An unrelated NotImplementedError is not this specific rejection and keeps
+    its generic 500 path."""
+    assert classify_provider_error(NotImplementedError("some other NotImplementedError")) is None
+
+
+class _ProviderErrorWrapping(Exception):
+    """Mimics what otari receives once ``ANY_LLM_UNIFIED_EXCEPTIONS=1`` becomes
+    the default: any-llm's ``convert_exception`` classifies the raw
+    NotImplementedError message into a generic ``ProviderError`` (no
+    ``status_code``, class name matching nothing), preserving the raw exception
+    on ``original_exception``."""
+
+    def __init__(self, original_exception: BaseException) -> None:
+        super().__init__(str(original_exception))
+        self.original_exception = original_exception
+
+
+def test_bridged_context_management_maps_to_400_when_wrapped_by_unified_exceptions() -> None:
+    """The signal survives any-llm's unified-exceptions wrapper, so the fix is
+    forward-compatible with ``ANY_LLM_UNIFIED_EXCEPTIONS=1`` (see the shared
+    ``original_exception`` unwrap in ``upstream_error_message``)."""
+    exc = _ProviderErrorWrapping(NotImplementedError(_CONTEXT_MANAGEMENT_MSG))
+    assert classify_provider_error(exc) == (400, PROVIDER_CONTEXT_MANAGEMENT_UNSUPPORTED_DETAIL)
+
+
+def test_context_management_maps_to_400_in_failure_status_code() -> None:
+    """The usage-log status follows the classification: this request-shape error
+    is recorded as 400, not the generic 502."""
+    assert failure_status_code(NotImplementedError(_CONTEXT_MANAGEMENT_MSG)) == 400
 
 
 def test_no_classified_detail_leaks_raw_message() -> None:

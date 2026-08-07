@@ -186,6 +186,10 @@ PROVIDER_BILLING_DETAIL = (
     "Top up the provider account, or route this model to a provider that has credit."
 )
 PROVIDER_RATE_LIMITED_DETAIL = "The provider rate-limited this request"
+PROVIDER_CONTEXT_MANAGEMENT_UNSUPPORTED_DETAIL = (
+    "context_management and betas require a model backed by Anthropic's native Messages API. "
+    "Route to an Anthropic model, or leave the betas/context_management fields unset for this model."
+)
 ALL_PROVIDERS_FAILED_DETAIL = "All upstream providers failed"
 ALL_PROVIDERS_TIMED_OUT_DETAIL = "All upstream providers timed out"
 SANDBOX_NOT_CONFIGURED_DETAIL = (
@@ -287,6 +291,16 @@ def _is_reasoning_effort_tools_conflict(exc: BaseException) -> bool:
     return "function tools" in upstream_error_message(exc).lower()
 
 
+# any-llm's default Messages path raises a bare NotImplementedError carrying this
+# exact message when a request sets context_management/betas against a provider
+# without a native Anthropic Messages API (see AnyLLM._amessages). classify_provider_error
+# gates on `isinstance(exc, NotImplementedError)` plus this message so an unrelated
+# NotImplementedError is not mistaken for this specific, actionable rejection.
+_CONTEXT_MANAGEMENT_UNSUPPORTED_MSG = (
+    "context_management and betas require a provider with a native Anthropic Messages API"
+)
+
+
 def classify_provider_error(exc: BaseException) -> ProviderErrorMapping | None:
     """Map an upstream provider exception to a safe, specific (status, detail).
 
@@ -306,6 +320,20 @@ def classify_provider_error(exc: BaseException) -> ProviderErrorMapping | None:
     kind, status_code = upstream_exception_shape(exc)
     if kind == "timeout":
         return ProviderErrorMapping(status.HTTP_504_GATEWAY_TIMEOUT, PROVIDER_TIMEOUT_DETAIL)
+    # any-llm's default Messages path rejects a request that sets
+    # context_management/betas against a provider without a native Anthropic
+    # Messages API (see AnyLLM._amessages). It currently raises a bare
+    # NotImplementedError (no HTTP status); once ANY_LLM_UNIFIED_EXCEPTIONS=1
+    # becomes the default, that NotImplementedError is wrapped in a generic
+    # ProviderError, so the message is the stable signal and upstream_error_message
+    # surfaces it both directly and through original_exception. Either way this is
+    # a request-shape problem, not a transient provider fault: it will never
+    # succeed by retrying, so it must surface as a 400 with an actionable detail
+    # rather than falling through to the generic 500. Gated on the fixed message
+    # so an unrelated NotImplementedError -- already an unclassifiable 500 path --
+    # is not repurposed as this specific error.
+    if _CONTEXT_MANAGEMENT_UNSUPPORTED_MSG in upstream_error_message(exc):
+        return ProviderErrorMapping(status.HTTP_400_BAD_REQUEST, PROVIDER_CONTEXT_MANAGEMENT_UNSUPPORTED_DETAIL)
     if status_code is None:
         return None
     # Account billing exhaustion, which several providers report as a 400/422
