@@ -34,6 +34,7 @@ from openai.types.responses.response_output_item_added_event import ResponseOutp
 from openai.types.responses.response_output_item_done_event import ResponseOutputItemDoneEvent
 
 from gateway.core.observation import NormalizedTool, normalized_tool
+from gateway.core.usage import GatewayUsage, responses_usage
 from gateway.log_config import logger
 from gateway.services._tool_loop import StreamAction, run_tool_loop, run_tool_loop_stream
 from gateway.services.mcp_loop import (
@@ -354,6 +355,9 @@ class _ResponsesToolLoopStrategy:
             acc["output"] += result.usage.output_tokens or 0
             acc["total"] += result.usage.total_tokens or 0
 
+    def usage_snapshot(self, result: Response) -> GatewayUsage | None:
+        return responses_usage(getattr(result, "usage", None))
+
     def fold_usage(self, result: Response, acc: dict[str, Any]) -> None:
         _fold_usage(result, acc["input"], acc["output"], acc["total"])
         # Prepend a native ``web_search_call`` item per gateway-run search. The
@@ -595,6 +599,12 @@ class _ResponsesToolLoopStrategy:
             if iter_usage is not None:
                 acc["output_tokens"] += getattr(iter_usage, "output_tokens", 0) or 0
         acc["compactions"].extend(state.compaction_items[index] for index in sorted(state.compaction_items))
+
+    def stream_usage_snapshot(self, state: _ResponsesStreamState) -> GatewayUsage | None:
+        # One round's whole usage object rides on ``response.completed``, which the
+        # strategy already keeps on the state whether the round exits or continues.
+        response = getattr(state.deferred_completed, "response", None)
+        return responses_usage(getattr(response, "usage", None))
 
     def synthetic_events(
         self, state: _ResponsesStreamState, acc: dict[str, Any]

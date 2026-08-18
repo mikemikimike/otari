@@ -26,6 +26,7 @@ from enum import Enum, auto
 from typing import Any, Generic, Protocol, TypeVar, cast
 
 from gateway.core.observation import NormalizedTool
+from gateway.core.usage import GatewayUsage
 
 ResultT = TypeVar("ResultT")
 ChunkT = TypeVar("ChunkT")
@@ -81,13 +82,24 @@ class ToolLoopStrategy(Protocol, Generic[ResultT, AccT]):
     checks the stop_reason only after the foreign-tool branch
     (``exit_after_split``); see :func:`run_tool_loop` for the consequences.
 
-    ``normalize_tools`` is the odd one out: nothing in the loop calls it. It
-    unwraps the format-shaped list :func:`_prepare` merges (nested
-    ``function.parameters`` for chat, ``input_schema`` for messages, flat
-    ``parameters`` for responses) into the format-neutral triples Reprise hashes
-    as ``tool_set_hash`` and ``tool_definitions_hash`` (otari-ai#1647). It sits on
-    the Protocol, and on its streaming twin, because that merged list is built
-    here and because ``mypy --strict`` then names any format that forgot one.
+    ``normalize_tools`` and ``usage_snapshot`` are the odd ones out: nothing in
+    the loop calls either. They exist so Reprise can read a round without
+    reimplementing three wire vocabularies (otari-ai#1647), and they sit on the
+    Protocol, and on its streaming twin, because that is where the format is
+    known and because ``mypy --strict`` then names a format that forgot one.
+
+    ``normalize_tools`` unwraps the format-shaped list :func:`_prepare` merges
+    (nested ``function.parameters`` for chat, ``input_schema`` for messages, flat
+    ``parameters`` for responses) into the format-neutral triples behind
+    ``tool_set_hash`` and ``tool_definitions_hash``.
+
+    ``usage_snapshot`` reads one round's usage off the provider's own result as a
+    :class:`~gateway.core.usage.GatewayUsage`, cache reads and cache writes
+    included, and its streaming twin ``stream_usage_snapshot`` reads the same
+    figures off the events of one upstream stream. Both return ``None`` when the
+    provider reported no usage at all, because zero and unknown are different
+    answers. Neither touches the usage accumulators, which exist to fold totals
+    into the client's response and must keep doing exactly that.
     """
 
     transcript_key: str
@@ -105,6 +117,8 @@ class ToolLoopStrategy(Protocol, Generic[ResultT, AccT]):
     def accumulate_usage(self, acc: AccT, result: ResultT) -> None: ...
 
     def fold_usage(self, result: ResultT, acc: AccT) -> None: ...
+
+    def usage_snapshot(self, result: ResultT) -> GatewayUsage | None: ...
 
     def exit_before_split(self, result: ResultT) -> bool: ...
 
@@ -161,6 +175,8 @@ class StreamToolLoopStrategy(Protocol, Generic[ChunkT, StateT, AccT]):
     def terminal_events(self, state: StateT, acc: AccT) -> list[ChunkT]: ...
 
     def accumulate_stream_usage(self, acc: AccT, state: StateT) -> None: ...
+
+    def stream_usage_snapshot(self, state: StateT) -> GatewayUsage | None: ...
 
     async def advance_stream_transcript(
         self,
