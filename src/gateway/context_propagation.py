@@ -11,7 +11,7 @@ If the header is not present, the middleware allows normal OpenTelemetry behavio
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
@@ -22,13 +22,19 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from gateway.log_config import logger
 
+if TYPE_CHECKING:
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
 
 class TraceContextPropagationMiddleware:
-    """Middleware that extracts W3C Trace Context from incoming requests.
+    """Pure ASGI middleware that extracts W3C Trace Context from incoming requests.
 
     When a request contains a traceparent header, this middleware extracts the
     trace context and sets it in the OpenTelemetry context, so subsequent spans
-    are linked to the parent trace.
+    are linked to the parent trace. Implemented as raw ASGI (like
+    `MetricsMiddleware`) rather than `BaseHTTPMiddleware`, whose `call_next`
+    returns before a streaming response body finishes sending, which would
+    detach the context before streaming spans are done.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -48,19 +54,17 @@ class TraceContextPropagationMiddleware:
 
         extracted_context = _extract_context_from_carrier(Headers(scope=scope))
 
-        if extracted_context is not None:
-            # Attach the extracted context so it becomes current for this request
-            token = otel_context.attach(extracted_context)
-            try:
-                await self.app(scope, receive, send)
-            finally:
-                # Detach the context when the request is done
-                otel_context.detach(token)
-            return None
+        if extracted_context is None:
+            await self.app(scope, receive, send)
+            return
 
-        # If extraction fails or no context is present, proceed normally
-        await self.app(scope, receive, send)
-        return None
+        token = otel_context.attach(extracted_context)
+        try:
+            # Awaiting here spans the full response, including a streamed body,
+            # so the context stays attached until streaming completes.
+            await self.app(scope, receive, send)
+        finally:
+            otel_context.detach(token)
 
 
 def _extract_context_from_carrier(carrier: Any) -> Context | None:
