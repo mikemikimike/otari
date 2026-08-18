@@ -25,6 +25,8 @@ from contextlib import AbstractAsyncContextManager, aclosing, nullcontext
 from enum import Enum, auto
 from typing import Any, Generic, Protocol, TypeVar, cast
 
+from gateway.core.observation import NormalizedTool
+
 ResultT = TypeVar("ResultT")
 ChunkT = TypeVar("ChunkT")
 StateT = TypeVar("StateT")
@@ -78,6 +80,14 @@ class ToolLoopStrategy(Protocol, Generic[ResultT, AccT]):
     finish_reason before splitting (``exit_before_split``), while messages
     checks the stop_reason only after the foreign-tool branch
     (``exit_after_split``); see :func:`run_tool_loop` for the consequences.
+
+    ``normalize_tools`` is the odd one out: nothing in the loop calls it. It
+    unwraps the format-shaped list :func:`_prepare` merges (nested
+    ``function.parameters`` for chat, ``input_schema`` for messages, flat
+    ``parameters`` for responses) into the format-neutral triples Reprise hashes
+    as ``tool_set_hash`` and ``tool_definitions_hash`` (otari-ai#1647). It sits on
+    the Protocol, and on its streaming twin, because that merged list is built
+    here and because ``mypy --strict`` then names any format that forgot one.
     """
 
     transcript_key: str
@@ -85,6 +95,8 @@ class ToolLoopStrategy(Protocol, Generic[ResultT, AccT]):
     def coerce_transcript(self, value: Any) -> list[Any]: ...
 
     def convert_pool_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+
+    def normalize_tools(self, tools: list[dict[str, Any]]) -> list[NormalizedTool]: ...
 
     async def call(self, kwargs: dict[str, Any]) -> ResultT: ...
 
@@ -131,6 +143,8 @@ class StreamToolLoopStrategy(Protocol, Generic[ChunkT, StateT, AccT]):
     def coerce_transcript(self, value: Any) -> list[Any]: ...
 
     def convert_pool_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+
+    def normalize_tools(self, tools: list[dict[str, Any]]) -> list[NormalizedTool]: ...
 
     async def open_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[ChunkT]: ...
 

@@ -28,6 +28,7 @@ from any_llm.types.messages import (
     ContentBlockStopEvent,
 )
 
+from gateway.core.observation import NormalizedTool, normalized_tool
 from gateway.log_config import logger
 from gateway.services._tool_loop import StreamAction, run_tool_loop, run_tool_loop_stream
 from gateway.services.mcp_loop import (
@@ -366,6 +367,9 @@ class _MessagesToolLoopStrategy:
 
     def convert_pool_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return openai_to_anthropic_tools(tools)
+
+    def normalize_tools(self, tools: list[dict[str, Any]]) -> list[NormalizedTool]:
+        return [normalized_tool(tool, "input_schema") for tool in tools]
 
     # ---- non-streaming hooks ----
 

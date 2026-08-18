@@ -33,6 +33,7 @@ from openai.types.responses.response_function_web_search import ActionSearch
 from openai.types.responses.response_output_item_added_event import ResponseOutputItemAddedEvent
 from openai.types.responses.response_output_item_done_event import ResponseOutputItemDoneEvent
 
+from gateway.core.observation import NormalizedTool, normalized_tool
 from gateway.log_config import logger
 from gateway.services._tool_loop import StreamAction, run_tool_loop, run_tool_loop_stream
 from gateway.services.mcp_loop import (
@@ -331,6 +332,9 @@ class _ResponsesToolLoopStrategy:
 
     def convert_pool_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return openai_to_responses_tools(tools)
+
+    def normalize_tools(self, tools: list[dict[str, Any]]) -> list[NormalizedTool]:
+        return [normalized_tool(tool, "parameters") for tool in tools]
 
     # ---- non-streaming hooks ----
 

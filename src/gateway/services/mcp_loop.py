@@ -27,6 +27,7 @@ from any_llm import acompletion
 from any_llm.types.completion import PromptTokensDetails
 
 from gateway.core.env import otari_env
+from gateway.core.observation import NormalizedTool, normalized_tool
 from gateway.log_config import logger
 from gateway.services._tool_loop import (
     MaxToolIterationsExceeded,
@@ -92,6 +93,12 @@ def inject_purpose_hints(
     else:
         out.insert(0, {"role": "system", "content": block})
     return out
+
+
+def _definition_of(tool: dict[str, Any]) -> dict[str, Any]:
+    """The chat-completions tool definition, unwrapped from its ``function`` nesting."""
+    fn = tool.get("function")
+    return fn if isinstance(fn, dict) else tool
 
 
 def _accumulate_tool_call_deltas(slots: dict[int, dict[str, Any]], deltas: list[Any]) -> None:
@@ -243,6 +250,11 @@ class _ChatToolLoopStrategy:
 
     def convert_pool_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return tools
+
+    def normalize_tools(self, tools: list[dict[str, Any]]) -> list[NormalizedTool]:
+        # Chat nests the definition under ``function``; an entry that is not a
+        # function tool is read flat, so a provider-native tool still counts by name.
+        return [normalized_tool(_definition_of(tool), "parameters") for tool in tools]
 
     # ---- non-streaming hooks ----
 

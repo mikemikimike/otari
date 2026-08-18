@@ -53,6 +53,23 @@ class NormalizedTool(NamedTuple):
     input_schema: dict[str, Any]
 
 
+def normalized_tool(definition: dict[str, Any], schema_key: str) -> NormalizedTool:
+    """Read one format's tool definition into a :class:`NormalizedTool`.
+
+    ``schema_key`` names where the format keeps the JSON Schema (``parameters``
+    for chat completions and Responses, ``input_schema`` for Anthropic Messages).
+    An entry carrying neither a description nor a schema, such as a provider-native
+    server tool the gateway never converts, still contributes its name, which is
+    what :func:`tool_set_hash` counts.
+    """
+    schema = definition.get(schema_key)
+    return NormalizedTool(
+        name=str(definition.get("name") or ""),
+        description=str(definition.get("description") or ""),
+        input_schema=schema if isinstance(schema, dict) else {},
+    )
+
+
 def message_text(content: Any) -> str:
     """Flatten a message-content value to the text the model was shown.
 
