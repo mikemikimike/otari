@@ -1,0 +1,109 @@
+"""OpenTelemetry context propagation middleware for W3C Trace Context.
+
+This middleware extracts the traceparent (and tracestate) headers from incoming
+requests using the standard `TraceContextTextMapPropagator`, and sets up the
+OpenTelemetry context so that subsequent spans created in the request are
+properly linked to the parent trace, with any vendor `tracestate` preserved.
+
+If the header is not present, the middleware allows normal OpenTelemetry behavior
+(new traces are created as needed).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import Request, Response
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace import Span
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from typing_extensions import override
+
+from gateway.log_config import logger
+
+
+class TraceContextPropagationMiddleware(BaseHTTPMiddleware):
+    """Middleware that extracts W3C Trace Context from incoming requests.
+
+    When a request contains a traceparent header, this middleware extracts the
+    trace context and sets it in the OpenTelemetry context, so subsequent spans
+    are linked to the parent trace.
+    """
+
+    @override
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        """Process incoming request and extract trace context.
+
+        Extracts the traceparent header if present and sets the OpenTelemetry
+        context before passing the request to the next middleware/handler.
+        """
+        extracted_context = _extract_context_from_carrier(request.headers)
+
+        if extracted_context is not None:
+            # Attach the extracted context so it becomes current for this request
+            token = otel_context.attach(extracted_context)
+            try:
+                response = await call_next(request)
+            finally:
+                # Detach the context when the request is done
+                otel_context.detach(token)
+            return response
+
+        # If extraction fails or no context is present, proceed normally
+        response = await call_next(request)
+        return response
+
+
+def _extract_context_from_carrier(carrier: Any) -> Context | None:
+    """Extract W3C Trace Context (traceparent + tracestate) from a carrier.
+
+    Delegates to the standard `TraceContextTextMapPropagator` instead of
+    hand-parsing the headers, so vendor `tracestate` entries are preserved
+    on the resulting span context.
+
+    Args:
+        carrier: A mapping of request headers (e.g. `request.headers`).
+
+    Returns:
+        An OpenTelemetry Context with the extracted trace context, or None if
+        extraction failed or no valid traceparent is present.
+    """
+    try:
+        context = TraceContextTextMapPropagator().extract(carrier=carrier)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to extract trace context: %s", exc)
+        return None
+
+    if trace.get_current_span(context).get_span_context().trace_id == trace.INVALID_TRACE_ID:
+        return None
+
+    return context
+
+
+def _extract_trace_context_from_carrier(carrier: Any) -> Span | None:
+    """Extract the W3C Trace Context span from a carrier.
+
+    This is a convenience function for testing that extracts just the span
+    (not the full context).
+
+    Args:
+        carrier: A mapping of request headers.
+
+    Returns:
+        The extracted non-recording span, or None if extraction failed or no
+        context is present.
+    """
+    context = _extract_context_from_carrier(carrier)
+    if context is None:
+        return None
+
+    return trace.get_current_span(context)
+
+
+
+
+
+
