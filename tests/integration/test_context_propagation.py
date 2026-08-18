@@ -62,6 +62,7 @@ def test_chat_request_propagates_trace_context_to_provider_span(
 
     assert response.status_code == 200, response.text
     spans = exporter.get_finished_spans()
-    provider_span = next(span for span in spans if span.name == "provider_request")
+    provider_span = next((s for s in spans if s.name == "provider_request"), None)
+    assert provider_span is not None, "No provider_request span found in exported spans"
     assert format(provider_span.context.trace_id, "032x") == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert provider_span.context.trace_state.get("vendor") == "value"
