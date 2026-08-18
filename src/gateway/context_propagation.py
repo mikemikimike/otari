@@ -13,18 +13,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Request, Response
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from typing_extensions import override
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from gateway.log_config import logger
 
 
-class TraceContextPropagationMiddleware(BaseHTTPMiddleware):
+class TraceContextPropagationMiddleware:
     """Middleware that extracts W3C Trace Context from incoming requests.
 
     When a request contains a traceparent header, this middleware extracts the
@@ -32,28 +31,36 @@ class TraceContextPropagationMiddleware(BaseHTTPMiddleware):
     are linked to the parent trace.
     """
 
-    @override
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Process incoming request and extract trace context.
 
         Extracts the traceparent header if present and sets the OpenTelemetry
         context before passing the request to the next middleware/handler.
+        Uses pure ASGI so context detachment happens after streaming responses
+        are fully sent.
         """
-        extracted_context = _extract_context_from_carrier(request.headers)
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        extracted_context = _extract_context_from_carrier(Headers(scope=scope))
 
         if extracted_context is not None:
             # Attach the extracted context so it becomes current for this request
             token = otel_context.attach(extracted_context)
             try:
-                response = await call_next(request)
+                await self.app(scope, receive, send)
             finally:
                 # Detach the context when the request is done
                 otel_context.detach(token)
-            return response
+            return None
 
         # If extraction fails or no context is present, proceed normally
-        response = await call_next(request)
-        return response
+        await self.app(scope, receive, send)
+        return None
 
 
 def _extract_context_from_carrier(carrier: Any) -> Context | None:

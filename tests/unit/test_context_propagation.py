@@ -6,9 +6,12 @@ in subsequent trace spans generated within the request.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.responses import StreamingResponse
 
 from gateway.core.config import GatewayConfig
 from gateway.main import create_app
@@ -260,6 +263,35 @@ def test_http_request_span_inherits_traceparent(
     )
 
 
+def test_streaming_response_span_inherits_traceparent() -> None:
+    """Verify that spans created while streaming inherit incoming trace context."""
+    from opentelemetry import trace
+
+    app = create_app(GatewayConfig())
+
+    @app.get("/test-stream-trace-span")
+    async def generate_stream_trace_span() -> StreamingResponse:
+        async def stream() -> AsyncIterator[bytes]:
+            trace_id = format(
+                trace.get_current_span().get_span_context().trace_id, "032x"
+            )
+            yield trace_id.encode("utf-8")
+
+        return StreamingResponse(stream(), media_type="text/plain")
+
+    incoming_trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+    with TestClient(app) as client:
+        response = client.get(
+            "/test-stream-trace-span",
+            headers={
+                "traceparent": f"00-{incoming_trace_id}-00f067aa0ba902b7-01",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.text == incoming_trace_id
+
+
 @pytest.mark.asyncio
 async def test_context_propagation_with_span_generation() -> None:
     """Test that a generated span inherits the extracted trace context."""
@@ -300,4 +332,3 @@ async def test_context_propagation_with_span_generation() -> None:
     span_context = spans[0].get_span_context()  # type: ignore[no-untyped-call]
     assert span_context is not None
     assert format(span_context.trace_id, "032x") == trace_id
-
