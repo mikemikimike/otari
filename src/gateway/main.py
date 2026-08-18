@@ -507,6 +507,10 @@ def create_app(config: GatewayConfig) -> FastAPI:
 
     app.add_middleware(SecurityHeadersMiddleware)
 
+    from gateway.context_propagation import TraceContextPropagationMiddleware
+
+    app.add_middleware(TraceContextPropagationMiddleware)
+
     if config.cors_allow_origins:
         allow_credentials = "*" not in config.cors_allow_origins
         app.add_middleware(
