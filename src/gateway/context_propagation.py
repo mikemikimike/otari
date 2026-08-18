@@ -80,12 +80,3 @@ def _extract_context_from_carrier(carrier: Any) -> Context | None:
         return None
 
     return context
-
-
-
-
-
-
-
-
-
