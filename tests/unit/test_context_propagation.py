@@ -97,9 +97,9 @@ def test_invalid_traceparent_format_is_handled_gracefully(client: TestClient, in
 
 
 def test_traceparent_with_trace_state_extension(client: TestClient) -> None:
-    """Verify that traceparent headers with tracestate are handled.
-    
-    The W3C spec allows a tracestate extension after the main traceparent format.
+    """Verify that traceparent and tracestate headers are handled.
+
+    The W3C Trace Context spec allows an optional `tracestate` header alongside `traceparent`.
     """
     trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
     span_id = "00f067aa0ba902b7"
