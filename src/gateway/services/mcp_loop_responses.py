@@ -308,6 +308,13 @@ class _ResponsesStreamState:
         self.function_calls: dict[int, dict[str, Any]] = {}
         self.compaction_items: dict[int, Any] = {}
         self.deferred_completed: ResponseStreamEvent | None = None
+        # This round's provider-reported usage, for the Reprise usage snapshot
+        # (otari-ai#1647). Taken from any event that carries one rather than from
+        # ``deferred_completed`` alone, because a round truncated by
+        # ``max_output_tokens`` or a content filter ends on ``response.incomplete``,
+        # which the gateway bills and which would otherwise read as unknown usage.
+        # Recorded only: no event's handling changes.
+        self.usage: Any = None
         self.owned_specs: list[dict[str, Any]] = []
         # Output items the gateway runs itself. Their events are swallowed: the
         # client can never be sent a ``function_call_output`` for a call the
@@ -465,6 +472,9 @@ class _ResponsesToolLoopStrategy:
         acc: dict[str, Any],
     ) -> tuple[StreamAction, ResponseStreamEvent]:
         etype = getattr(event, "type", None)
+        usage = getattr(getattr(event, "response", None), "usage", None)
+        if usage is not None:
+            state.usage = usage
 
         if etype == "response.created":
             if acc["started"]:
@@ -601,10 +611,10 @@ class _ResponsesToolLoopStrategy:
         acc["compactions"].extend(state.compaction_items[index] for index in sorted(state.compaction_items))
 
     def stream_usage_snapshot(self, state: _ResponsesStreamState) -> GatewayUsage | None:
-        # One round's whole usage object rides on ``response.completed``, which the
-        # strategy already keeps on the state whether the round exits or continues.
-        response = getattr(state.deferred_completed, "response", None)
-        return responses_usage(getattr(response, "usage", None))
+        # One round's whole usage object rides on its terminal event, recorded by
+        # ``observe`` whichever terminal it was. Matches what the route's
+        # ``extract_stream_usage`` bills off the same stream.
+        return responses_usage(state.usage)
 
     def synthetic_events(
         self, state: _ResponsesStreamState, acc: dict[str, Any]

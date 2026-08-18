@@ -32,7 +32,7 @@ from any_llm.types.messages import (
     MessageUsage,
 )
 from any_llm.types.responses import Response
-from openai.types.responses import ResponseCompletedEvent, ResponseUsage
+from openai.types.responses import ResponseCompletedEvent, ResponseIncompleteEvent, ResponseUsage
 from openai.types.responses.response_usage import InputTokensDetails, OutputTokensDetails
 
 from gateway.core.usage import GatewayUsage
@@ -167,6 +167,26 @@ def _message_delta(output_tokens: int) -> MessageDeltaEvent:
     )
 
 
+def _message_delta_with_iterations(iterations: list[dict[str, Any]]) -> MessageDeltaEvent:
+    """A ``message_delta`` whose ``iterations`` sum to what the round is billed.
+
+    The shape ``tests/integration/test_messages_streaming_usage.py`` pins: Anthropic
+    reports compaction sampling here and not on ``message_start``, which only ever
+    saw the first pass.
+    """
+    return MessageDeltaEvent.model_validate(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": iterations[-1]["input_tokens"],
+                "output_tokens": iterations[-1]["output_tokens"],
+                "iterations": iterations,
+            },
+        }
+    )
+
+
 def _responses_usage(*, input_tokens: int, output_tokens: int, cached: int = 0) -> ResponseUsage:
     return ResponseUsage(
         input_tokens=input_tokens,
@@ -177,13 +197,13 @@ def _responses_usage(*, input_tokens: int, output_tokens: int, cached: int = 0) 
     )
 
 
-def _response(usage: ResponseUsage | None) -> Response:
+def _response(usage: ResponseUsage | None, status: str = "completed") -> Response:
     return Response(
         id="resp_1",
         created_at=0.0,
         model="fake",
         object="response",
-        status=cast(Any, "completed"),
+        status=cast(Any, status),
         output=[],
         parallel_tool_calls=False,
         tool_choice="auto",
@@ -298,6 +318,92 @@ def test_responses_streamed_round_matches_the_non_streamed_round() -> None:
 
     assert _RESPONSES_STRATEGY.stream_usage_snapshot(state) == _RESPONSES_STRATEGY.usage_snapshot(
         _response(usage)
+    )
+
+
+def test_messages_streamed_compaction_round_matches_the_non_streamed_round() -> None:
+    """Only ``message_delta`` carries the iterations, so the input side has to read it.
+
+    Taking the input from ``message_start`` wholesale reports a compaction round's
+    output summed over every iteration and its input from only the first, which
+    understates the cache re-read the estimate is mostly made of, and disagrees with
+    what the same stream is billed.
+    """
+    iterations: list[dict[str, Any]] = [
+        {
+            "type": "compaction",
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 30,
+        },
+        {
+            "type": "message",
+            "input_tokens": 42,
+            "output_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 5,
+        },
+    ]
+    state = _MESSAGES_STRATEGY.new_stream_state()
+    acc = _MESSAGES_STRATEGY.new_stream_accumulator()
+    events: list[MessageStreamEvent] = [
+        _message_start(_message_usage(input_tokens=42, output_tokens=0)),
+        _message_delta_with_iterations(iterations),
+    ]
+    for event in events:
+        _MESSAGES_STRATEGY.observe(state, event, _POOL, acc)
+
+    streamed = _MESSAGES_STRATEGY.stream_usage_snapshot(state)
+    non_streamed = _MESSAGES_STRATEGY.usage_snapshot(
+        _message_response(
+            MessageUsage.model_validate(
+                {"input_tokens": 42, "output_tokens": 7, "iterations": iterations}
+            )
+        )
+    )
+
+    assert streamed == non_streamed
+    assert streamed is not None
+    assert (streamed.prompt_tokens, streamed.completion_tokens) == (142, 27)
+    assert streamed.cache_read_tokens == 35
+
+
+def test_messages_stream_keeps_the_start_input_when_the_delta_reports_none() -> None:
+    """The ordinary round: only ``message_start`` knows the input side."""
+    state = _MESSAGES_STRATEGY.new_stream_state()
+    acc = _MESSAGES_STRATEGY.new_stream_accumulator()
+    events: list[MessageStreamEvent] = [
+        _message_start(_message_usage(input_tokens=100, output_tokens=0, cache_read=40)),
+        _message_delta(output_tokens=20),
+    ]
+    for event in events:
+        _MESSAGES_STRATEGY.observe(state, event, _POOL, acc)
+
+    snapshot = _MESSAGES_STRATEGY.stream_usage_snapshot(state)
+
+    assert snapshot is not None
+    assert (snapshot.prompt_tokens, snapshot.cache_read_tokens, snapshot.completion_tokens) == (100, 40, 20)
+
+
+def test_responses_stream_reports_usage_for_a_round_that_ended_incomplete() -> None:
+    """A truncated round was still billed, so it is not an unknown-usage round."""
+    usage = _responses_usage(input_tokens=8000, output_tokens=512)
+    state = _RESPONSES_STRATEGY.new_stream_state()
+    acc = _RESPONSES_STRATEGY.new_stream_accumulator()
+    _RESPONSES_STRATEGY.observe(
+        state,
+        ResponseIncompleteEvent(
+            type="response.incomplete",
+            response=_response(usage, status="incomplete"),
+            sequence_number=0,
+        ),
+        _POOL,
+        acc,
+    )
+
+    assert _RESPONSES_STRATEGY.stream_usage_snapshot(state) == _RESPONSES_STRATEGY.usage_snapshot(
+        _response(usage, status="incomplete")
     )
 
 

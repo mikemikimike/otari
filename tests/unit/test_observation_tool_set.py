@@ -178,6 +178,34 @@ def test_removing_a_tool_moves_both_hashes() -> None:
     assert tool_definitions_hash(before) != tool_definitions_hash(after)
 
 
+def test_responses_native_tools_stay_distinct_without_a_name_key() -> None:
+    """A Responses server tool carries its identity in ``type``, with no ``name`` at all.
+
+    Reading ``name`` alone collapses every one of them to the empty string, so a
+    workspace swapping web search for file search is fingerprinted as an unchanged
+    tool set and the two automations land in one pile.
+    """
+    native: list[dict[str, Any]] = [
+        {"type": "web_search"},
+        {"type": "file_search", "vector_store_ids": ["vs_1"]},
+        {"type": "mcp", "server_label": "github", "server_url": "https://example.invalid"},
+    ]
+
+    normalized = _RESPONSES_STRATEGY.normalize_tools(native)
+
+    assert [tool.name for tool in normalized] == ["web_search", "file_search", "mcp"]
+    assert len({tool_set_hash([tool]) for tool in normalized}) == 3
+
+
+def test_a_named_tool_is_not_renamed_by_its_type() -> None:
+    """``name`` wins wherever a format supplies both; only its absence falls back."""
+    assert _RESPONSES_STRATEGY.normalize_tools(_responses_tools())[0].name == "list_issues"
+    assert _CHAT_STRATEGY.normalize_tools(_chat_tools())[0].name == "list_issues"
+    assert _MESSAGES_STRATEGY.normalize_tools(
+        [{"type": "web_search_20250305", "name": "web_search"}]
+    ) == [NormalizedTool("web_search", "", {})]
+
+
 def test_a_provider_native_tool_still_counts_by_name() -> None:
     """A server-side tool the gateway never converts is still part of the set."""
     native = [*_messages_tools(), {"type": "web_search_20250305", "name": "web_search"}]

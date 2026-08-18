@@ -58,13 +58,22 @@ def normalized_tool(definition: dict[str, Any], schema_key: str) -> NormalizedTo
 
     ``schema_key`` names where the format keeps the JSON Schema (``parameters``
     for chat completions and Responses, ``input_schema`` for Anthropic Messages).
-    An entry carrying neither a description nor a schema, such as a provider-native
-    server tool the gateway never converts, still contributes its name, which is
-    what :func:`tool_set_hash` counts.
+
+    The name falls back to ``type`` when the entry has none. A provider-native
+    server tool the gateway never converts still has to contribute an identity,
+    which is what :func:`tool_set_hash` counts, and only some of them spell it
+    ``name``: Anthropic's carry one (``{"type": "web_search_20250305", "name":
+    "web_search"}``) while the Responses ones carry none at all (``{"type":
+    "web_search"}``, ``{"type": "file_search", ...}``). Reading ``name`` alone
+    collapses every Responses server tool onto the empty string, so a workspace
+    swapping one for another would fingerprint as an unchanged tool set. What such
+    an entry configures (an ``mcp`` tool's ``server_label``, a ``file_search``
+    tool's vector stores) stays out of both hashes, consistent with a key made of
+    names.
     """
     schema = definition.get(schema_key)
     return NormalizedTool(
-        name=str(definition.get("name") or ""),
+        name=str(definition.get("name") or definition.get("type") or ""),
         description=str(definition.get("description") or ""),
         input_schema=schema if isinstance(schema, dict) else {},
     )

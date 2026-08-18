@@ -636,11 +636,22 @@ class _MessagesToolLoopStrategy:
     def stream_usage_snapshot(self, state: _MessagesStreamState) -> GatewayUsage | None:
         """One round's usage, reassembled from where Anthropic splits it.
 
-        The input side (input tokens, cache reads, cache writes) arrives on
-        ``message_start`` and the final cumulative output count on the last
-        ``message_delta``, so the snapshot takes each from its own event and agrees
-        with what the non-streaming round reports. Both events reach ``observe``
-        even on a continuing round, where they are deferred rather than dropped.
+        The input side (input tokens, cache reads, cache writes) ordinarily arrives
+        on ``message_start`` and the cumulative output on the last ``message_delta``,
+        but the split is not clean enough to take either source wholesale. When the
+        round sampled compaction, only the delta carries the ``iterations`` list
+        whose parts sum to what the round is billed, ``message_start`` having been
+        emitted before the compaction pass happened; newer API versions repeat the
+        input fields on the delta too. Picking ``message_start`` for the whole input
+        side would then report a compaction round's output summed over every
+        iteration and its input from only the first, understating the cache re-read
+        the estimate is mostly made of, and disagreeing with what the same stream is
+        billed.
+
+        So the two are reconciled per field, last non-zero winning, which is the
+        convention ``gateway.streaming._merge_usage`` already applies to this stream
+        for the client-facing totals. Both events reach ``observe`` even on a
+        continuing round, where they are deferred rather than dropped.
         """
         delta_usage = next(
             (
@@ -651,24 +662,20 @@ class _MessagesToolLoopStrategy:
             ),
             None,
         )
-        start = anthropic_billable_usage(state.start_usage) if state.start_usage is not None else None
-        delta = anthropic_billable_usage(delta_usage) if delta_usage is not None else None
-        # A ``message_start`` that reported no input at all is no better a source
-        # than the delta, which newer API versions also populate.
-        reported_input = start is not None and bool(
-            start.prompt_tokens or start.cache_read_tokens or start.cache_write_tokens
-        )
-        input_side = start if reported_input else delta
-        if input_side is None:
+        if state.start_usage is None and delta_usage is None:
             return None
-        completion_tokens = delta.completion_tokens if delta is not None else input_side.completion_tokens
+        empty = GatewayUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        start = anthropic_billable_usage(state.start_usage) if state.start_usage is not None else empty
+        delta = anthropic_billable_usage(delta_usage) if delta_usage is not None else empty
+        prompt_tokens = delta.prompt_tokens or start.prompt_tokens
+        completion_tokens = delta.completion_tokens or start.completion_tokens
         return GatewayUsage(
-            prompt_tokens=input_side.prompt_tokens,
+            prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=input_side.prompt_tokens + completion_tokens,
-            cache_read_tokens=input_side.cache_read_tokens,
-            cache_write_tokens=input_side.cache_write_tokens,
-            cache_write_1h_tokens=input_side.cache_write_1h_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            cache_read_tokens=delta.cache_read_tokens or start.cache_read_tokens,
+            cache_write_tokens=delta.cache_write_tokens or start.cache_write_tokens,
+            cache_write_1h_tokens=delta.cache_write_1h_tokens or start.cache_write_1h_tokens,
             cache_tokens_in_prompt=False,
         )
 
