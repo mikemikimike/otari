@@ -170,6 +170,31 @@ not accepted). Authenticate with a budget-exempt API key via
 here: OTLP events carry no user attribution, so usage always binds to the key's
 user (to import a mixed feed for many users, use `/v1/usage/external-events`).
 
+### HTTP trace context propagation
+
+For request tracing between backend services, Otari accepts the standard W3C
+Trace Context headers on incoming HTTP requests:
+
+- `traceparent` identifies the caller's trace ID, parent span ID, and trace flags.
+- `tracestate` carries vendor-specific state alongside the trace context.
+
+When a valid `traceparent` is present, Otari extracts it with the standard
+OpenTelemetry propagator and makes it the current context for the request. Spans
+created by the request handler therefore join the caller's trace: they retain the
+incoming trace ID and receive their own span IDs. The `tracestate` value is
+preserved for downstream instrumentation.
+
+Missing or invalid trace context does not reject the request. Otari continues
+normally, allowing OpenTelemetry to create a new root trace when instrumentation
+creates a span. Context is detached when the request finishes, so separate HTTP
+requests do not share trace state.
+
+This support is intended for backend and service-to-service callers. Browser
+clients are not supported as trace-context callers, and `traceparent` and
+`tracestate` are not included in the gateway's CORS allow-list. Browser
+instrumentation therefore cannot propagate these headers to cross-origin
+requests through the gateway.
+
 Otari reads only the content-free usage attributes, preferring the
 **OpenTelemetry GenAI semantic conventions**:
 

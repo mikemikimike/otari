@@ -17,7 +17,6 @@ from fastapi import Request, Response
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.context import Context
-from opentelemetry.trace import Span
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from typing_extensions import override

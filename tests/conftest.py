@@ -157,10 +157,7 @@ def _extract_otel_context_from_carrier(carrier: Mapping[str, str]) -> Context | 
         An OpenTelemetry Context with the extracted trace context, or None if
         extraction failed or no valid traceparent is present.
     """
-    try:
-        context = TraceContextTextMapPropagator().extract(carrier=carrier)
-    except Exception:  # noqa: BLE001
-        return None
+    context = TraceContextTextMapPropagator().extract(carrier=carrier)
 
     if trace.get_current_span(context).get_span_context().trace_id == trace.INVALID_TRACE_ID:
         return None
