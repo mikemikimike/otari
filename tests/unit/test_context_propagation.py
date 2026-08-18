@@ -56,7 +56,7 @@ def test_traceparent_header_is_extracted_from_request(client: TestClient) -> Non
     # Unsampled trace
     ("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00", 200),
     # Valid trace with different IDs (but not all zeros)
-    ("00-ffffffffffffffffffffffffffffffff-ffffffffffffffffffffffff-01", 200),
+    ("00-ffffffffffffffffffffffffffffffff-ffffffffffffffff-01", 200),
 ])
 def test_traceparent_header_with_correct_format(client: TestClient, traceparent: str, expected_status: int) -> None:
     """Verify that various valid traceparent formats are accepted."""
