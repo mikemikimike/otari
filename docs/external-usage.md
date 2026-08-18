@@ -189,8 +189,8 @@ normally, allowing OpenTelemetry to create a new root trace when instrumentation
 creates a span. Context is detached when the request finishes, so separate HTTP
 requests do not share trace state.
 
-This support is intended for backend and service-to-service callers. Browser
-clients are not supported as trace-context callers, and `traceparent` and
+This support is intended for backend and service-to-service callers. Cross-origin
+browser clients are not supported as trace-context callers, and `traceparent` and
 `tracestate` are not included in the gateway's CORS allow-list. Browser
 instrumentation therefore cannot propagate these headers to cross-origin
 requests through the gateway.
