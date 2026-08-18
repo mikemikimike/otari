@@ -43,6 +43,7 @@ from gateway.api.routes._platform import (
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
 from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
+from gateway.core.observation import message_text
 from gateway.core.usage import GatewayUsage
 from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
@@ -419,6 +420,17 @@ class _MessagesAdapter:
         header: str | None,
     ) -> dict[str, Any]:
         return inject_purpose_hints_anthropic({**kwargs}, hints, header=header)
+
+    def client_system_prompt(self, kwargs: dict[str, Any]) -> str:
+        # ``system`` is legally a string or a list of content blocks meaning the
+        # same thing; both flatten to the same text.
+        return message_text(kwargs.get("system"))
+
+    def first_user_message(self, kwargs: dict[str, Any]) -> str:
+        for message in kwargs.get("messages") or []:
+            if isinstance(message, dict) and message.get("role") == "user":
+                return message_text(message.get("content"))
+        return ""
 
     def attempt_kwargs(
         self,

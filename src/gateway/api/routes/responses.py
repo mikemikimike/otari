@@ -38,6 +38,7 @@ from gateway.api.routes._platform import ResolvedAttempt, build_attempt_client_a
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
 from gateway.api.routes._tools import _strip_gateway_fields
 from gateway.core.config import GatewayConfig
+from gateway.core.observation import message_text
 from gateway.core.usage import GatewayUsage
 from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
@@ -334,6 +335,21 @@ class _ResponsesAdapter:
         header: str | None,
     ) -> dict[str, Any]:
         return inject_purpose_hints_responses({**kwargs}, hints, header=header)
+
+    def client_system_prompt(self, kwargs: dict[str, Any]) -> str:
+        return message_text(kwargs.get("instructions"))
+
+    def first_user_message(self, kwargs: dict[str, Any]) -> str:
+        # ``input`` is a bare string or a list of items. A bare string is itself
+        # the opening turn; in a list it is the first ``user`` item, which may be
+        # a plain message or a ``{"type": "message"}`` one carrying input_text parts.
+        input_data = kwargs.get("input_data")
+        if isinstance(input_data, str):
+            return input_data
+        for item in input_data or []:
+            if isinstance(item, dict) and item.get("role") == "user":
+                return message_text(item.get("content"))
+        return ""
 
     def attempt_kwargs(
         self,
