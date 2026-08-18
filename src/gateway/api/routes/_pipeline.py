@@ -93,6 +93,7 @@ from gateway.api.routes._tools import (
     declares_native_web_search,
 )
 from gateway.core.config import GatewayConfig
+from gateway.core.database import create_session
 from gateway.core.env import otari_env
 from gateway.core.usage import cache_read_tokens_of, cache_write_1h_tokens_of, cache_write_tokens_of
 from gateway.inflight import track_request
@@ -122,6 +123,7 @@ from gateway.services.mcp_loop import (
 )
 from gateway.services.metered_pricing import calculate_metered_cost
 from gateway.services.model_access import is_model_allowed, model_not_allowed_detail, resolve_request_allowlist
+from gateway.services.platform_identity import ensure_local_user
 from gateway.services.policy_store import resolve_effective_policy
 from gateway.services.pricing_service import (
     GATEWAY_TOOL_PRICING_PROVIDER,
@@ -975,7 +977,9 @@ async def resolve_request_context(
     """Run the shared handler preamble up to (and including) budget pre-debit.
 
     Hybrid mode: extract the caller's bearer token and resolve the routing
-    plan against the platform; no local DB state is touched.
+    plan against the platform. The only local DB write is best-effort:
+    ensuring a shadow ``User`` row exists for the platform's caller identity,
+    when the resolve response carries one (see ``ensure_local_user``).
 
     Standalone mode: validate the API key, resolve the billed user, check the
     rate limit, then reserve the estimated cost. The reservation is taken
@@ -1042,6 +1046,29 @@ async def resolve_request_context(
             route.fallback_enabled,
             resolve_latency_ms,
         )
+        # The resolve response is the only place hybrid mode learns a caller
+        # identity (docs/hybrid-mode-protocol.md's optional user_id). A local
+        # shadow row makes that identity usable by this gateway's own
+        # survival tables (aliases, routing memory, files, batches), which
+        # all FK to users.user_id.
+        #
+        # Deliberately opens its own session via create_session() rather than
+        # using this function's `db` parameter (which stays None in hybrid
+        # mode, unchanged): a couple dozen call sites below key off `ctx.db
+        # is None` as their own implicit "are we in hybrid mode" gate (budget
+        # reservation, usage logging, tool-pricing enforcement), and handing
+        # them a real session here would silently reactivate every one of
+        # them for hybrid traffic. This write is isolated on purpose.
+        #
+        # A peer that omits the field, or a failure creating the shadow row,
+        # both degrade to user_id=None (today's behavior) rather than failing
+        # an otherwise-servable request.
+        if route.user_id is not None:
+            try:
+                async with create_session() as identity_db:
+                    user_id = await ensure_local_user(identity_db, route.user_id)
+            except SQLAlchemyError:
+                logger.warning("Failed to ensure local shadow user for platform identity", exc_info=True)
     else:
         if db is None:
             raise adapter.error(500, DB_UNAVAILABLE_DETAIL, ErrorKind.API)

@@ -118,26 +118,23 @@ def test_available_reflects_the_env_url_for_a_pure_env_deployment(
     assert tools["otari_web_search"]["available"] is True
 
 
-def _hybrid_client(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> TestClient:
-    """A hybrid-mode app: no ``init_db``, so nothing here may touch the local DB."""
+def _hybrid_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> TestClient:
     monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
     config = GatewayConfig(
         mode="hybrid",
+        database_url=f"sqlite:///{tmp_path / 'hybrid-tools.db'}",
         platform={"base_url": "http://platform.test/api/v1"},
         **overrides,
     )
     return TestClient(create_app(config))
 
 
-def test_not_registered_in_hybrid_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Standalone-only, and a 404 rather than a 500.
-
-    Hybrid mode never initializes the local database, so a route whose auth
-    dependency opens a session would 500 before the handler ran. It is also the
-    wrong answer to give there: the platform owns the per-workspace tool policy, so
-    this gateway's own configuration does not decide what the caller can call.
+def test_not_registered_in_hybrid_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Standalone-only: ``tools.router`` is one of the routers ``register_routers``
+    never mounts in hybrid mode. The platform owns the per-workspace tool policy,
+    so this gateway's own configuration does not decide what the caller can call.
     """
-    with _hybrid_client(monkeypatch, web_search_url="http://searxng:8080") as client:
+    with _hybrid_client(tmp_path, monkeypatch, web_search_url="http://searxng:8080") as client:
         response = client.get("/v1/tools", headers={"Authorization": "Bearer platform-user-token"})
 
     assert response.status_code == 404, response.text

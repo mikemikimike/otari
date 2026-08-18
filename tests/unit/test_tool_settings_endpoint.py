@@ -174,6 +174,7 @@ def _hybrid_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_tool_settings_not_mounted_in_hybrid_mode(tmp_path: Path, _hybrid_env: None) -> None:
     config = GatewayConfig(
         mode="hybrid",
+        database_url=f"sqlite:///{tmp_path / 'hybrid-tool-settings.db'}",
         master_key="sk-test-master",
         platform={"base_url": "https://otari.ai"},
     )

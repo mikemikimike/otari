@@ -12,6 +12,7 @@ API, the routing-memory table, the compiler, the attempt walker, and settlement.
 """
 
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -878,13 +879,14 @@ def test_explain_says_the_router_decides_at_request_time(client: TestClient) -> 
     assert body["is_dynamic"] is True
 
 
-def test_a_learned_policy_is_refused_in_hybrid_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_learned_policy_is_refused_in_hybrid_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Hybrid mode resolves models upstream, so a local policy name is not a model
     # the platform knows. Guarded here because the router is the newest reason
     # someone might reach for a policy.
     monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
     config = GatewayConfig(
         mode="hybrid",
+        database_url=f"sqlite:///{tmp_path / 'hybrid-learned-policy.db'}",
         platform={"base_url": "http://platform.test/api/v1"},
         routing=RoutingConfig.model_validate(
             {

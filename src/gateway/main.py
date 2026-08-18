@@ -233,10 +233,20 @@ def _create_lifespan(config: GatewayConfig) -> Callable[[FastAPI], Any]:
         price_refresher: asyncio.Task[None] | None = None
         discovery_refresher: asyncio.Task[None] | None = None
         catalog_refresher: asyncio.Task[None] | None = None
+        # Every mode initializes a database as of #1643's gateway survivals:
+        # aliases, routing memory, router preferences, files, and batches all
+        # need one in hybrid mode too, not just standalone. Hybrid mode's
+        # init is deliberately request-plane-only: it runs migrations against
+        # the same linear Alembic chain (unused management tables stay
+        # empty), but skips every startup step below that belongs to a local
+        # management API hybrid mode does not have (master key, dashboard
+        # sessions, provider/pricing overlays, discovery, alias/policy
+        # loading). Alias loading joins this branch in a later phase, once
+        # hybrid mode actually resolves aliases (see _pipeline.py).
+        init_db(config)
         if config.is_hybrid_mode:
             log_writer = NoopLogWriter()
         else:
-            init_db(config)
             async with create_session() as session:
                 # Persisted dashboard overrides win over config/env; apply them
                 # before pricing init so default-pricing behavior is consistent.

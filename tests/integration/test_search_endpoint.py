@@ -6,6 +6,7 @@ row that makes a search visible in the Activity and Usage views.
 """
 
 import logging
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -464,10 +465,16 @@ def test_search_is_budget_enforced(
     assert resp.status_code == 403
 
 
-def test_search_is_not_registered_in_hybrid_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_is_not_registered_in_hybrid_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Search is a standalone-mode surface: hybrid has no local search config."""
     monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
-    app = create_app(GatewayConfig(mode="hybrid", platform={"base_url": "http://localhost:8100/api/v1"}))
+    app = create_app(
+        GatewayConfig(
+            mode="hybrid",
+            database_url=f"sqlite:///{tmp_path / 'hybrid-search.db'}",
+            platform={"base_url": "http://localhost:8100/api/v1"},
+        )
+    )
     try:
         with TestClient(app) as hybrid_client:
             resp = hybrid_client.post("/v1/search/exa-search", json=SEARCH_PAYLOAD)

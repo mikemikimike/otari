@@ -3,7 +3,8 @@
 The shell fetches this before it renders anything, so it decides whether a
 sign-in screen, a management dashboard, or a data-plane landing page is the
 right thing to show. Unit rather than integration because the route reads
-configuration and nothing else: no database, so no PostgreSQL to stand up.
+configuration and nothing else, and the local SQLite database both modes now
+initialize needs no PostgreSQL to stand up.
 """
 
 from pathlib import Path
@@ -28,9 +29,10 @@ def _standalone(tmp_path: Path) -> GatewayConfig:
     )
 
 
-def _hybrid(**platform: str) -> GatewayConfig:
+def _hybrid(tmp_path: Path, **platform: str) -> GatewayConfig:
     return GatewayConfig(
         mode="hybrid",
+        database_url=f"sqlite:///{tmp_path / 'bootstrap-hybrid.db'}",
         platform={"base_url": "http://localhost:8100/api/v1", **platform},
     )
 
@@ -82,9 +84,11 @@ def test_every_surface_names_a_route_the_gateway_mounts(tmp_path: Path) -> None:
         )
 
 
-def test_hybrid_reports_no_session_no_surfaces_and_the_hosted_url(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hybrid_reports_no_session_no_surfaces_and_the_hosted_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("OTARI_AI_TOKEN", PLATFORM_TOKEN)
-    app = create_app(_hybrid())
+    app = create_app(_hybrid(tmp_path))
 
     with TestClient(app) as client:
         response = client.get("/v1/bootstrap")
@@ -101,10 +105,10 @@ def test_hybrid_reports_no_session_no_surfaces_and_the_hosted_url(monkeypatch: p
     reset_db()
 
 
-def test_hybrid_bootstrap_leaks_no_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hybrid_bootstrap_leaks_no_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The one route a hybrid gateway serves to an unauthenticated browser."""
     monkeypatch.setenv("OTARI_AI_TOKEN", PLATFORM_TOKEN)
-    app = create_app(_hybrid())
+    app = create_app(_hybrid(tmp_path))
 
     with TestClient(app) as client:
         body = client.get("/v1/bootstrap").text
@@ -115,10 +119,10 @@ def test_hybrid_bootstrap_leaks_no_secret(monkeypatch: pytest.MonkeyPatch) -> No
     reset_db()
 
 
-def test_management_url_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_management_url_is_configurable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An operator on a staging platform links at that platform, not otari.ai."""
     monkeypatch.setenv("OTARI_AI_TOKEN", PLATFORM_TOKEN)
-    app = create_app(_hybrid(management_url="https://staging.otari.example/"))
+    app = create_app(_hybrid(tmp_path, management_url="https://staging.otari.example/"))
 
     with TestClient(app) as client:
         response = client.get("/v1/bootstrap")
@@ -131,7 +135,7 @@ def test_management_url_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None
 
 @pytest.mark.parametrize("configured", ["javascript:alert(1)", "otari.ai", ""])
 def test_a_management_url_that_is_not_an_http_link_fails_at_startup(
-    monkeypatch: pytest.MonkeyPatch, configured: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: str
 ) -> None:
     """The browser turns this into an anchor, so a bad scheme is a startup error.
 
@@ -142,9 +146,9 @@ def test_a_management_url_that_is_not_an_http_link_fails_at_startup(
 
     if configured:
         with pytest.raises(ValueError, match="management_url"):
-            create_app(_hybrid(management_url=configured))
+            create_app(_hybrid(tmp_path, management_url=configured))
     else:
-        app = create_app(_hybrid(management_url=configured))
+        app = create_app(_hybrid(tmp_path, management_url=configured))
         with TestClient(app) as client:
             assert client.get("/v1/bootstrap").json()["management_url"] == "https://otari.ai"
 

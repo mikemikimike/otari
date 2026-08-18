@@ -8,6 +8,7 @@ normally fills those tables.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -433,9 +434,15 @@ def test_read_endpoints_require_the_master_key(client: TestClient, path: str) ->
 
 
 @pytest.mark.parametrize("path", [SUMMARY_PATH, COUNT_PATH, SERIES_PATH])
-def test_read_endpoints_are_absent_in_hybrid_mode(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+def test_read_endpoints_are_absent_in_hybrid_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
     monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
-    config = GatewayConfig(mode="hybrid", platform={"base_url": "http://localhost:8100/api/v1"})
+    config = GatewayConfig(
+        mode="hybrid",
+        database_url=f"sqlite:///{tmp_path / 'hybrid-telemetry.db'}",
+        platform={"base_url": "http://localhost:8100/api/v1"},
+    )
     app = create_app(config)
 
     with TestClient(app) as hybrid_client:

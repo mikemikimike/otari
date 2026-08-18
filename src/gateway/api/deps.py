@@ -360,7 +360,19 @@ async def verify_api_key_or_master_key(
 async def get_db_if_needed(
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> AsyncGenerator[AsyncSession | None, None]:
-    """Get a database session in standalone mode, otherwise return None."""
+    """Get a database session in standalone mode, otherwise return None.
+
+    Deliberately still keyed on ``is_hybrid_mode`` rather than whether a
+    database is initialized: hybrid mode does initialize one now (#1643's
+    gateway survivals need it for a shadow identity, see
+    ``platform_identity.ensure_local_user``), but a couple dozen call sites
+    across ``_pipeline.py`` use ``ctx.db is None`` as their own implicit "are
+    we in hybrid mode" gate (budget reservation, usage logging, tool-pricing
+    enforcement). Widening what this yields would silently reactivate every
+    one of them for hybrid traffic. Code that needs the hybrid-mode database
+    opens its own session with ``create_session()`` instead of going through
+    this dependency.
+    """
     if config.is_hybrid_mode:
         yield None
         return

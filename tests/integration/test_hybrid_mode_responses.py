@@ -9,6 +9,7 @@ single-attempt collapsed form; pre-lock-in fallback for tool-loop is gated on
 from __future__ import annotations
 
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -25,11 +26,15 @@ from gateway.main import create_app
 
 
 @pytest.fixture
-def platform_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+def platform_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
     monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
     app = create_app(
         GatewayConfig(
             mode="hybrid",
+            # Hybrid mode initializes a database now (see #1643's gateway
+            # survivals); an isolated per-test file keeps every test in this
+            # module from sharing state through a default ./otari.db.
+            database_url=f"sqlite:///{tmp_path / 'hybrid.db'}",
             platform={"base_url": "http://platform.test/api/v1"},
         )
     )
