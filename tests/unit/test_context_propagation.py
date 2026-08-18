@@ -173,53 +173,53 @@ def test_multiple_requests_maintain_independent_contexts(client: TestClient) -> 
 
 def test_extract_trace_context_from_carrier_valid_format() -> None:
     """Test extracting valid trace context from a carrier dict."""
-    from gateway.context_propagation import _extract_trace_context_from_carrier
+    from conftest import extract_trace_context_from_carrier
     
     carrier = {
         "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     }
     
-    context = _extract_trace_context_from_carrier(carrier)
+    context = extract_trace_context_from_carrier(carrier)
     assert context is not None
 
 
 def test_extract_trace_context_from_carrier_no_header() -> None:
     """Test extracting context when no traceparent header is present."""
-    from gateway.context_propagation import _extract_trace_context_from_carrier
+    from conftest import extract_trace_context_from_carrier
     
     carrier: dict[str, str] = {}
-    context = _extract_trace_context_from_carrier(carrier)
+    context = extract_trace_context_from_carrier(carrier)
     assert context is None
 
 
 def test_extract_trace_context_from_carrier_invalid_format() -> None:
     """Test extracting context with invalid traceparent format."""
-    from gateway.context_propagation import _extract_trace_context_from_carrier
+    from conftest import extract_trace_context_from_carrier
     
     carrier = {"traceparent": "invalid"}
-    context = _extract_trace_context_from_carrier(carrier)
+    context = extract_trace_context_from_carrier(carrier)
     assert context is None
 
 
 def test_extract_trace_context_from_carrier_with_all_zero_trace_id() -> None:
     """Test that all-zero trace IDs are rejected."""
-    from gateway.context_propagation import _extract_trace_context_from_carrier
+    from conftest import extract_trace_context_from_carrier
     
     carrier = {
         "traceparent": "00-00000000000000000000000000000000-00f067aa0ba902b7-01"
     }
-    context = _extract_trace_context_from_carrier(carrier)
+    context = extract_trace_context_from_carrier(carrier)
     assert context is None
 
 
 def test_extract_trace_context_from_carrier_with_all_zero_span_id() -> None:
     """Test that all-zero span IDs are rejected."""
-    from gateway.context_propagation import _extract_trace_context_from_carrier
+    from conftest import extract_trace_context_from_carrier
     
     carrier = {
         "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01"
     }
-    context = _extract_trace_context_from_carrier(carrier)
+    context = extract_trace_context_from_carrier(carrier)
     assert context is None
 
 
@@ -268,7 +268,7 @@ async def test_context_propagation_with_span_generation() -> None:
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     
-    from gateway.context_propagation import _extract_trace_context_from_carrier
+    from conftest import extract_trace_context_from_carrier
     
     trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
     span_id = "00f067aa0ba902b7"
@@ -283,7 +283,7 @@ async def test_context_propagation_with_span_generation() -> None:
         "traceparent": traceparent
     }
 
-    extracted_span = _extract_trace_context_from_carrier(carrier)
+    extracted_span = extract_trace_context_from_carrier(carrier)
     assert extracted_span is not None
     extracted_context = extracted_span.get_span_context()
     assert extracted_context is not None

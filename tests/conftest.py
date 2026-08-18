@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 import sys
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace import Span
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
@@ -115,3 +121,48 @@ def seed_workspace_id(db: Any) -> Any:
     db.add(workspace)
     db.flush()
     return workspace.id
+
+def extract_trace_context_from_carrier(carrier: Mapping[str, str]) -> Span | None:
+    """Extract the W3C Trace Context span from a carrier.
+
+    Convenience function for tests that extracts just the span (not the full
+    context). Delegates to the standard `TraceContextTextMapPropagator` so
+    vendor `tracestate` entries are preserved on the resulting span context.
+
+    Args:
+        carrier: A mapping of request headers (e.g. `request.headers`).
+
+    Returns:
+        The extracted non-recording span, or None if extraction failed or no
+        context is present.
+    """
+    context = _extract_otel_context_from_carrier(carrier)
+    if context is None:
+        return None
+
+    return trace.get_current_span(context)
+
+
+def _extract_otel_context_from_carrier(carrier: Mapping[str, str]) -> Context | None:
+    """Extract the full OpenTelemetry Context from a carrier.
+
+    Internal helper that returns the complete context (not just the span).
+    Delegates to the standard `TraceContextTextMapPropagator` so vendor
+    `tracestate` entries are preserved.
+
+    Args:
+        carrier: A mapping of request headers.
+
+    Returns:
+        An OpenTelemetry Context with the extracted trace context, or None if
+        extraction failed or no valid traceparent is present.
+    """
+    try:
+        context = TraceContextTextMapPropagator().extract(carrier=carrier)
+    except Exception:  # noqa: BLE001
+        return None
+
+    if trace.get_current_span(context).get_span_context().trace_id == trace.INVALID_TRACE_ID:
+        return None
+
+    return context

@@ -83,24 +83,7 @@ def _extract_context_from_carrier(carrier: Any) -> Context | None:
     return context
 
 
-def _extract_trace_context_from_carrier(carrier: Any) -> Span | None:
-    """Extract the W3C Trace Context span from a carrier.
 
-    This is a convenience function for testing that extracts just the span
-    (not the full context).
-
-    Args:
-        carrier: A mapping of request headers.
-
-    Returns:
-        The extracted non-recording span, or None if extraction failed or no
-        context is present.
-    """
-    context = _extract_context_from_carrier(carrier)
-    if context is None:
-        return None
-
-    return trace.get_current_span(context)
 
 
 
