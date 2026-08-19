@@ -60,6 +60,11 @@ Query keys are module constants (`const MODELS = "models"`), never inline litera
 is a build error rather than a cache that silently never invalidates. See
 [data-fetching.md](./data-fetching.md).
 
+A literal table that drives a union carries `as const`, so the values stay literals and the
+derived type is the set rather than `string[]`: `THEME_PREFERENCES` in
+`shared/hooks/useTheme.tsx`, and the nav registry's
+`] as const satisfies readonly NavSection[]`.
+
 ## Vocabulary that carries meaning
 
 Three words mean specific things here and are not interchangeable:

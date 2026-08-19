@@ -27,9 +27,9 @@ TypeScript runs in `strict` mode; `npm --prefix web run typecheck` must pass. Re
 - **A discriminated union beats a bag of optionals** for anything with states. `{ status:
   "error"; message: string } | { status: "success"; data: T }` makes `state.data` on the error
   branch a compile error, where `{ status, message?, data? }` makes it a runtime `undefined`.
-- **`as const` on a literal table** that drives a union (`THEME_PREFERENCES`,
-  `STANDALONE_SURFACES`), so the values stay literals and the derived type is the set rather
-  than `string[]`.
+- **`as const` on a literal table** that drives a union (`THEME_PREFERENCES` in
+  `shared/hooks/useTheme.tsx`, the nav registry's `as const satisfies readonly NavSection[]`),
+  so the values stay literals and the derived type is the set rather than `string[]`.
 
 ## React
 

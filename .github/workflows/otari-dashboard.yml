@@ -175,7 +175,10 @@ jobs:
     # Visual regression: every screenshot spec captured at three viewports in
     # both themes (web/playwright.config.ts). Separate from the e2e job because
     # it is the slower half and fails for a different reason: e2e says a flow
-    # broke, this says a page changed shape.
+    # broke, this says a page changed shape. The cost of the split is that the
+    # screenshot projects depend on `parity`, so this job re-runs the behavioral
+    # specs to reach the database state it captures; keeping the two apart is
+    # worth those 38 tests, because a red screenshot job then means one thing.
     #
     # Baselines are Linux PNGs produced by this runner and committed to
     # web/e2e/screenshots/__snapshots__/. A macOS capture renders fonts

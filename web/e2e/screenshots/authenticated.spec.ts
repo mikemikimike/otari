@@ -37,8 +37,10 @@ async function open(page: Page, route: string, heading: RegExp): Promise<void> {
 }
 
 test.describe("workspace rail", () => {
-  // Serial and sharing one signed-in page: the session exchange is a round trip
-  // per test otherwise, and this file is already the long pole of the suite.
+  // Serial because the whole suite runs single-worker against one gateway
+  // database (see playwright.config.ts). Each test still signs in on its own
+  // page: the fixtures give every test a fresh context, which is also what
+  // makes the theme seeding apply before its first navigation.
   test.describe.configure({ mode: "serial" })
 
   for (const { route, name, heading } of WORKSPACE_ROUTES) {

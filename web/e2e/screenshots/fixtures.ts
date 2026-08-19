@@ -60,7 +60,10 @@ export async function captureScreenshot(
   name: string,
 ): Promise<void> {
   // Fonts are self-hosted and swap in late enough to change metrics mid-capture.
-  await page.evaluate(() => document.fonts.ready)
+  // Resolved to undefined deliberately: `document.fonts.ready` settles with a
+  // FontFaceSet, which Playwright would then have to serialize back out of the
+  // page.
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
   await expect(page).toHaveScreenshot(`${name}.png`, {
     fullPage: true,
     animations: "disabled",

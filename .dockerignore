@@ -61,7 +61,7 @@ ENV/
 # Jupyter
 .ipynb_checkpoints
 
-# Node / web build. The web stage runs `npm ci` from the lockfile, so a host
+# Node / web build. The web stage installs from the lockfile, so a host
 # node_modules would only bloat the context (240MB+, and it can hold
 # platform-specific binaries). A local dashboard build is rebuilt in the web
 # stage, and copying it in would leave orphaned hashed assets that index.html no
@@ -75,6 +75,10 @@ ENV/
 src/gateway/static/dashboard/
 web/test-results/
 web/playwright-report/
+# Screenshot baselines: full-page PNGs at three viewports in both themes, which
+# the web stage never reads and which would otherwise grow the context with
+# every page added to the suite.
+web/e2e/screenshots/__snapshots__/
 **/*.tsbuildinfo
 
 # mypy
