@@ -36,7 +36,15 @@ const getWorkspaceRowKey = (workspace: Workspace): string => workspace.id
 const LAST_WORKSPACE_REASON =
   "An organization keeps at least one workspace; create another first"
 
-function CreateWorkspaceForm({ onClose }: { onClose: () => void }) {
+/**
+ * The one form that creates a workspace, wherever it is offered from.
+ *
+ * Exported because the scope switcher offers the same action (the navigation
+ * design puts "Create workspace" at the foot of that menu), and two forms over
+ * one endpoint drift: one of them grows the description field, or the ownership
+ * note, and the other does not.
+ */
+export function CreateWorkspaceForm({ onClose }: { onClose: () => void }) {
   const create = useCreateWorkspace()
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
