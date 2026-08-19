@@ -9,7 +9,7 @@
  */
 
 import type { LinkProps } from "@tanstack/react-router"
-import type { ReactNode } from "react"
+import type { IconType } from "react-icons"
 
 /**
  * A route the sidebar can link to.
@@ -26,11 +26,12 @@ interface NavItemBase {
   to: NavPath
   label: string
   /**
-   * A decorative glyph. `otari-ai/frontend` passes a `react-icons` `IconType`
-   * here; this dashboard draws its own inline SVGs and has no react-icons
-   * dependency, so this is the one field of the two registries that differs.
+   * A decorative glyph: a `react-icons` component, the same Feather set and the
+   * same `IconType` reference `otari-ai/frontend/src/app/nav/registry.ts`
+   * declares, so a destination that exists in both rails wears the same mark.
+   * The shell renders it; the registry only names it.
    */
-  icon: ReactNode
+  icon: IconType
   /**
    * The management surface this destination needs, from the deployment
    * bootstrap (`GET /v1/bootstrap`). The topology axis: does the process
@@ -62,8 +63,7 @@ export type NavItem = NavItemBase &
      *
      * A child declares no gating of its own and inherits the parent's: the
      * group exists because the pages belong together, and a deployment that
-     * hosts the surface hosts all of them. Children carry no icon either, since
-     * the prototype indents them under the parent's rather than repeating one.
+     * hosts the surface hosts all of them.
      */
     children?: readonly NavChild[]
   }
@@ -72,6 +72,13 @@ export type NavItem = NavItemBase &
 export interface NavChild {
   to: NavPath
   label: string
+  /**
+   * The child's own glyph, as `otari-ai/frontend`'s nested leaves carry one.
+   * The rail does not draw it on an expanded row, where the indent marks the
+   * nesting, but the collapsed flyout does: there the rows hang off an icon in
+   * a menu rather than under a parent, and have no indent to read.
+   */
+  icon: IconType
   /**
    * The surface this destination needs, when it is not the parent's.
    *

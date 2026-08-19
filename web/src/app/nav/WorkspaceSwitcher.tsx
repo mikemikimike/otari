@@ -1,58 +1,43 @@
 import { Button, Modal, Popover } from "@heroui/react"
 import { useState } from "react"
+import { FiCheck, FiChevronDown, FiPlus } from "react-icons/fi"
 import { CreateWorkspaceForm } from "@/features/workspaces/WorkspacesPage"
 import { useOrganizationContext } from "@/shared/api/hooks"
 import { EntitlementGate } from "@/shared/components/EntitlementGate"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
+import { NAV_TRANSITION, navIndicatorClass } from "./rowStyles"
 
 // The menu's own rhythm, which is the rail's: a 44px row and a 32px heading
-// block. The eyebrow above the organization is shorter, because it opens the
-// menu rather than separating two groups inside it.
-const MENU_HEADING = "flex min-h-8 items-center px-2.5 text-overline"
-const MENU_ROW =
-  "flex min-h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-sm font-medium transition-colors"
+// block. The eyebrow above the organization is shorter (28px), because it opens
+// the menu rather than separating two groups inside it.
+const MENU_HEADING = "flex items-center px-2.5 text-overline"
+const MENU_ROW = `flex min-h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-sm font-medium ${NAV_TRANSITION}`
 const MENU_ROW_RESTING = "text-foreground hover:bg-surface-alt"
-// The current scope is a tinted chip here, unlike the rail, where selection is a
-// lifted one. In a menu the tint is the only thing that can carry "this is the
-// one you are in" alongside the check; on the rail the fill is read against the
-// rail's own ground, which a tint fights.
+// The current *workspace* is a tinted chip here, unlike the rail, where
+// selection is a lifted one. In a menu the tint is the only thing that can carry
+// "this is the one you are in" alongside the check; on the rail the fill is read
+// against the rail's own ground, which a tint fights.
 const MENU_ROW_CURRENT = "bg-primary-subtle text-primary-subtle-foreground"
+// The dividers are inset to the rows' own text lane rather than run edge to
+// edge, so they separate the groups without drawing a line across the card.
+const MENU_DIVIDER = "mx-2.5 h-px shrink-0 bg-border"
 
+// The marks `otari-ai/frontend`'s scope switcher uses for the same two rows:
+// a 16px check on the current scope, a 20px plus on the row that creates one.
 function CheckMark() {
   return (
     <>
-      <svg
+      <FiCheck
         aria-hidden="true"
-        viewBox="0 0 20 20"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        className="h-5 w-5 shrink-0 text-accent"
-      >
-        <path
-          d="m5.5 10 3 3 6-6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
+        className="size-4 shrink-0 text-primary-subtle-foreground"
+      />
       <span className="sr-only">Selected</span>
     </>
   )
 }
 
 function PlusMark() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      className="h-5 w-5 shrink-0"
-    >
-      <path d="M10 4.5v11M4.5 10h11" strokeLinecap="round" />
-    </svg>
-  )
+  return <FiPlus aria-hidden="true" className="size-5 shrink-0" />
 }
 
 // The organization and the workspace the shell is looking at, and the control
@@ -109,8 +94,8 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
           // the chrome rather than as the first item in the list.
           className={
             collapsed
-              ? "min-h-14 w-full! items-center justify-center rounded-[0.625rem] border border-border bg-background-alt px-0 transition-colors hover:border-accent"
-              : "min-h-14 w-full! items-center justify-start gap-2.5 rounded-[0.625rem] border border-border bg-background-alt px-2.5 py-2 text-left transition-colors hover:border-accent"
+              ? `min-h-14 w-full! items-center justify-center rounded-[0.625rem] border border-border bg-background-alt px-0 hover:border-accent ${NAV_TRANSITION}`
+              : `min-h-14 w-full! items-center justify-start gap-2.5 rounded-[0.625rem] border border-border bg-background-alt px-2.5 py-2 text-left hover:border-accent ${NAV_TRANSITION}`
           }
         >
           {/* The mark is the switcher's hero, as in the prototype: the product
@@ -130,40 +115,32 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                   {organizationName}
                 </span>
               </span>
-              <svg
+              <FiChevronDown
                 aria-hidden="true"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.75"
-                className="h-5 w-5 shrink-0 text-muted"
-              >
-                <path
-                  d="M8 10l4 4 4-4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+                className={`text-muted ${navIndicatorClass({ open })}`}
+              />
             </>
           )}
         </Button>
         <Popover.Content placement="bottom start">
           <Popover.Dialog className="flex w-[19.75rem] flex-col">
-            <p className={MENU_HEADING}>Organization</p>
+            <p className={`${MENU_HEADING} min-h-7`}>Organization</p>
             {/* Not a control: a standalone gateway provisions one organization at
               first boot and mounts no endpoint to switch or create another, so
               this row states the scope rather than offering to change it. It
               still carries the check, because the design's menu marks the
               current scope at both levels and a check that only ever appears on
               one of them reads as an incomplete list. */}
-            <div className={`${MENU_ROW} ${MENU_ROW_CURRENT}`}>
+            <div className={`${MENU_ROW} text-foreground`}>
               <span className="min-w-0 flex-1 truncate">
                 {organizationName}
               </span>
               <CheckMark />
             </div>
-            <div className="my-1 border-t border-border" />
-            <p className={MENU_HEADING}>Workspaces ({memberships.length})</p>
+            <div className={MENU_DIVIDER} />
+            <p className={`${MENU_HEADING} min-h-8`}>
+              Workspaces ({memberships.length})
+            </p>
             {isLoading ? (
               <p className="px-2.5 py-1 text-xs text-muted">
                 Loading workspaces…
@@ -195,17 +172,24 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                         {/* The check is the only thing distinguishing the current
                           workspace, so it carries text a screen reader reads
                           rather than an attribute the role does not. */}
-                        {isCurrent ? <CheckMark /> : null}
+                        {isCurrent ? (
+                          <CheckMark />
+                        ) : (
+                          <span
+                            aria-hidden="true"
+                            className="size-4 shrink-0"
+                          />
+                        )}
                       </button>
                     </li>
                   )
                 })}
               </ul>
             )}
-            <div className="my-1 border-t border-border" />
+            <div className={`${MENU_DIVIDER} my-1`} />
             <button
               type="button"
-              className={`${MENU_ROW} font-semibold text-accent hover:bg-surface-alt`}
+              className={`${MENU_ROW} font-semibold text-muted hover:bg-surface-alt hover:text-foreground`}
               onClick={() => {
                 setOpen(false)
                 setCreating(true)
@@ -222,7 +206,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
             <EntitlementGate capability="organizations.create">
               <button
                 type="button"
-                className={`${MENU_ROW} ${MENU_ROW_RESTING} text-muted`}
+                className={`${MENU_ROW} text-muted hover:bg-surface-alt hover:text-foreground`}
                 onClick={() => setOpen(false)}
               >
                 <PlusMark />

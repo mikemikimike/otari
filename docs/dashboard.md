@@ -445,6 +445,10 @@ lands: the address they are added by is the handle it will claim them with.
 - **Members & roles**: who belongs to the organization, their role
   (owner, admin, member, viewer), and their status. Adding someone takes an
   email address and optionally the workspaces to put them in straight away.
+- **Users**: the principals that keys and budgets attach to, including the
+  default model access for a user's keys. Distinct from members: a member is a
+  person who signs in, a user is what spend is attributed to, and the two merge
+  once the request plane is re-parented onto tenancy.
 - **Workspaces**: create, rename, and delete workspaces, and manage each
   roster. The last workspace cannot be deleted.
 
@@ -452,10 +456,6 @@ lands: the address they are added by is the handle it will claim them with.
 
 - **Spend & budgets**: spending limits callers are held to, with per-period
   resets.
-- **Users**: the principals that keys and budgets attach to, including the
-  default model access for a user's keys. Distinct from members: a member is a
-  person who signs in, a user is what spend is attributed to, and the two merge
-  once the request plane is re-parented onto tenancy.
 - **Model pricing**: what the gateway meters a request at, which is one rate per
   model for the whole deployment. The page opens with what an *unpriced* model
   costs, because that decides what the table under it means: with default pricing
@@ -468,8 +468,6 @@ lands: the address they are added by is the handle it will claim them with.
 
 ### General
 
-- **Org usage**: the same charts as Usage, across every workspace in the
-  organization rather than the one the scope menu has selected.
 - **Org settings**: rename the organization. There is exactly one.
 - **Settings**: search and toggle runtime settings, and rotate the generated
   master key. Rotating the master key issues a fresh `otari-mk-…` value and keeps

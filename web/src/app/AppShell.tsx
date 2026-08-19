@@ -1,13 +1,17 @@
-import { Button, Popover } from "@heroui/react"
+import { Button, Disclosure, Popover } from "@heroui/react"
 import { Link, Outlet, useLocation } from "@tanstack/react-router"
 import { clsx } from "clsx"
-import type {
-  KeyboardEvent as ReactKeyboardEvent,
-  MouseEvent as ReactMouseEvent,
-  ReactNode,
-  PointerEvent as ReactPointerEvent,
-} from "react"
+import type { MouseEvent as ReactMouseEvent } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import type { IconType } from "react-icons"
+import {
+  FiArrowLeft,
+  FiChevronDown,
+  FiMenu,
+  FiSettings,
+  FiSidebar,
+  FiX,
+} from "react-icons/fi"
 import { ConnectionStatus } from "@/app/ConnectionStatus"
 import { AccountMenu } from "@/app/nav/AccountMenu"
 import { Breadcrumbs } from "@/app/nav/Breadcrumbs"
@@ -20,7 +24,12 @@ import {
   ORG_NAV_SECTIONS,
   visibleNavSections,
 } from "@/app/nav/registry"
-import { NAV_SECTION_HEADING_CLASS, navRowClass } from "@/app/nav/rowStyles"
+import {
+  NAV_ICON_CLASS,
+  NAV_SECTION_HEADING_CLASS,
+  navIndicatorClass,
+  navRowClass,
+} from "@/app/nav/rowStyles"
 import { TopBarActions } from "@/app/nav/TopBarActions"
 import type { NavItem, NavPath } from "@/app/nav/types"
 import { useNavVisibility } from "@/app/nav/useNavVisibility"
@@ -32,39 +41,26 @@ import { useOrganizationContext } from "@/shared/api/hooks"
 import { EmptyState } from "@/shared/components/ui"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 
-const MIN_SIDEBAR = 200
-const MAX_SIDEBAR = 480
-const DEFAULT_SIDEBAR = 264
-const COLLAPSED_SIDEBAR = 72
-const SIDEBAR_WIDTH_KEY = "otari.dashboard.sidebarWidth"
+// One width, not a range. The rail used to be draggable between 200 and 480px
+// and to remember where it was left; it is now the design's 264px, or 72px
+// collapsed, which is also what `otari-ai/frontend`'s shell is fixed at
+// (`w-[16.5rem]` / `w-[4.5rem]`). Collapse is the only size control, and the
+// only one either rail needs: the rows inside are a fixed layout, so the width
+// between those two values buys a longer truncation point and nothing else,
+// while a drag handle on the page's main seam is a thing to catch by accident.
+const SIDEBAR_WIDTH = "w-[16.5rem]"
+const COLLAPSED_SIDEBAR_WIDTH = "w-[4.5rem]"
 const SIDEBAR_COLLAPSED_KEY = "otari.dashboard.sidebarCollapsed"
-const SIDEBAR_STEP = 16
 
 // Below this width the sidebar's fixed footprint squashes page content, so it
 // switches to an off-canvas drawer toggled from the header. Matches Tailwind's
 // `md` breakpoint (the classes that hide the trigger and drawer chrome use `md:`).
 const MOBILE_QUERY = "(max-width: 767px)"
 
-const clampSidebar = (width: number) =>
-  Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, width))
-
 function readIsMobile(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function")
     return false
   return window.matchMedia(MOBILE_QUERY).matches
-}
-
-function readStoredSidebarWidth(): number {
-  if (typeof window === "undefined") return DEFAULT_SIDEBAR
-  try {
-    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY)
-    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN
-    return Number.isNaN(parsed) ? DEFAULT_SIDEBAR : clampSidebar(parsed)
-  } catch {
-    // Storage can throw when disabled (e.g. blocked cookies / private mode);
-    // fall back to the default rather than white-screening the shell.
-    return DEFAULT_SIDEBAR
-  }
 }
 
 function readStoredCollapsed(): boolean {
@@ -90,7 +86,7 @@ function readStoredCollapsed(): boolean {
 function NavRowLink({
   to,
   label,
-  icon,
+  icon: Icon,
   isActive,
   collapsed,
   nested,
@@ -98,7 +94,7 @@ function NavRowLink({
 }: {
   to: NavPath
   label: string
-  icon?: ReactNode
+  icon?: IconType
   isActive: boolean
   collapsed?: boolean
   nested?: boolean
@@ -115,7 +111,13 @@ function NavRowLink({
       aria-label={collapsed ? label : undefined}
       title={collapsed ? label : undefined}
     >
-      {icon}
+      {/* A nested row draws no glyph: the indent is what marks it as one, and
+          repeating the parent's lane would undo that. The flyout a collapsed
+          group opens is the exception, and it is not nested: those rows hang in
+          a menu with no indent to read. */}
+      {Icon && !nested ? (
+        <Icon className={NAV_ICON_CLASS} aria-hidden="true" />
+      ) : null}
       {collapsed ? null : (
         <span className="min-w-0 flex-1 truncate">{label}</span>
       )}
@@ -200,7 +202,7 @@ function NavGroup({
           aria-label={item.label}
           className={`${navRowClass({ isActive: holdsCurrent, collapsed: true })} w-auto!`}
         >
-          {item.icon}
+          <item.icon className={NAV_ICON_CLASS} aria-hidden="true" />
         </Button>
         <Popover.Content placement="right top">
           <Popover.Dialog
@@ -217,6 +219,7 @@ function NavGroup({
                 key={child.to}
                 to={child.to}
                 label={child.label}
+                icon={child.icon}
                 isActive={currentPath === child.to}
                 onNavigate={() => {
                   setFlyoutOpen(false)
@@ -231,48 +234,52 @@ function NavGroup({
   }
 
   return (
-    <div className={clsx("flex flex-col", open && "gap-0.5")}>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className={navRowClass({ isActive: holdsCurrent })}
-      >
-        {item.icon}
-        <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.75"
-          className={clsx(
-            "h-4 w-4 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
-            open && "rotate-180",
-          )}
-        >
-          <path
-            d="M8 10l4 4 4-4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+    // HeroUI's own disclosure, which is what `otari-ai/frontend`'s
+    // `NavigationBranch` opens its branches with, so the two rails expand the
+    // same way. React Aria measures the panel and writes
+    // `--disclosure-panel-height` onto it, which is the variable HeroUI's
+    // `.disclosure__content` transitions (200ms height on `--ease-out-quad`,
+    // 200ms opacity on `--ease-out`), so the rows slide open *and* shut rather
+    // than appearing and vanishing.
+    //
+    // The gap belongs to the expanded state only: the panel stays mounted at
+    // zero height while shut, so an unconditional gap would leave a stray 2px
+    // hanging under every closed group.
+    <Disclosure
+      isExpanded={open}
+      onExpandedChange={setOpen}
+      className={clsx("flex flex-col", open && "gap-0.5")}
+    >
+      <Disclosure.Heading>
+        <Disclosure.Trigger className={navRowClass({ isActive: holdsCurrent })}>
+          <item.icon className={NAV_ICON_CLASS} aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-left">
+            {item.label}
+          </span>
+          <FiChevronDown
+            aria-hidden="true"
+            className={navIndicatorClass({ open })}
           />
-        </svg>
-      </button>
-      {open
-        ? children.map((child) => (
-            <NavRowLink
-              key={child.to}
-              to={child.to}
-              label={child.label}
-              isActive={currentPath === child.to}
-              // Indented past the parent's icon lane rather than repeating a
-              // glyph, which is what marks the row as nested.
-              nested
-              onNavigate={onNavigate}
-            />
-          ))
-        : null}
-    </div>
+        </Disclosure.Trigger>
+      </Disclosure.Heading>
+      {/* The rows sit straight in the panel rather than in a `Disclosure.Body`,
+          which wraps its children in a div carrying 0.5rem of padding that no
+          className can reach: it would inset these rows from the lane their
+          siblings share and clip their fill short at both edges. */}
+      <Disclosure.Content className="flex flex-col">
+        {children.map((child) => (
+          <NavRowLink
+            key={child.to}
+            to={child.to}
+            label={child.label}
+            icon={child.icon}
+            isActive={currentPath === child.to}
+            nested
+            onNavigate={onNavigate}
+          />
+        ))}
+      </Disclosure.Content>
+    </Disclosure>
   )
 }
 
@@ -322,20 +329,20 @@ export function AppShell() {
   }, [pathname])
   const organizationLanding = lastLocation("organization")
   const workspaceLanding = lastLocation("workspace")
+  // Named once: the same string is the row's visible text, its accessible name
+  // when collapsed, and its tooltip, and three copies of it is three chances for
+  // the name a screen reader hears to drift from the one on screen.
+  const backLabel = `Back to ${selectedWorkspace?.name ?? "workspace"}`
 
   const asideRef = useRef<HTMLElement>(null)
   const mainRef = useRef<HTMLElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
-  const [sidebarWidth, setSidebarWidth] = useState<number>(
-    readStoredSidebarWidth,
-  )
   const [collapsed, setCollapsed] = useState<boolean>(readStoredCollapsed)
-  const [resizing, setResizing] = useState(false)
   const [isMobile, setIsMobile] = useState<boolean>(readIsMobile)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   // Track the mobile breakpoint so the sidebar can render as an off-canvas
-  // drawer below it and as the resizable rail above it. Closing the drawer when
+  // drawer below it and as the fixed-width rail above it. Closing the drawer when
   // the viewport grows past the breakpoint keeps a stale open state from leaving
   // a fixed overlay stranded over the desktop layout.
   useEffect(() => {
@@ -385,48 +392,12 @@ export function AppShell() {
   }, [isMobile, mobileNavOpen])
 
   useEffect(() => {
-    const id = window.setTimeout(() => {
-      try {
-        window.localStorage.setItem(
-          SIDEBAR_WIDTH_KEY,
-          String(Math.round(sidebarWidth)),
-        )
-      } catch {
-        // Ignore storage errors; the width still applies for this session.
-      }
-    }, 200)
-    return () => window.clearTimeout(id)
-  }, [sidebarWidth])
-
-  useEffect(() => {
     try {
       window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0")
     } catch {
       // Ignore storage errors; the collapse state still applies for this session.
     }
   }, [collapsed])
-
-  const startResize = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault()
-      event.currentTarget.setPointerCapture(event.pointerId)
-      setResizing(true)
-    },
-    [],
-  )
-
-  const moveResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
-    const left = asideRef.current?.getBoundingClientRect().left ?? 0
-    setSidebarWidth(clampSidebar(event.clientX - left))
-  }, [])
-
-  const endResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    setResizing(false)
-  }, [])
 
   // Move focus (and scroll) to the page's main region, past the header and the
   // whole nav. A plain anchor to `#main-content` can't do this: the router runs
@@ -442,22 +413,8 @@ export function AppShell() {
     [],
   )
 
-  const nudgeResize = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (event.key === "ArrowLeft") {
-        event.preventDefault()
-        setSidebarWidth((width) => clampSidebar(width - SIDEBAR_STEP))
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault()
-        setSidebarWidth((width) => clampSidebar(width + SIDEBAR_STEP))
-      }
-    },
-    [],
-  )
-
-  const width = collapsed ? COLLAPSED_SIDEBAR : sidebarWidth
-  // The collapse rail and resize handle are desktop-only affordances; on mobile
-  // the drawer always shows the full-width, labeled nav.
+  // Collapse is a desktop-only affordance; on mobile the drawer always shows
+  // the full-width, labeled nav.
   const effectiveCollapsed = isMobile ? false : collapsed
   // While the mobile drawer is open, the page behind it is inert: that is what
   // keeps an AT virtual cursor and Tab out of controls nobody can see. The top
@@ -467,12 +424,7 @@ export function AppShell() {
   const backgroundInert = isMobile && mobileNavOpen ? true : undefined
 
   return (
-    <div
-      className={clsx(
-        "relative flex h-full flex-col overflow-hidden",
-        resizing && "cursor-col-resize select-none",
-      )}
-    >
+    <div className="relative flex h-full flex-col overflow-hidden">
       {/* The first tab stop: a keyboard user can jump straight to the page body
           instead of tabbing through the whole nav on every route. Visually hidden
           until focused, then pinned top-left over the header (z above it). Goes
@@ -503,7 +455,6 @@ export function AppShell() {
           aria-label={isMobile ? "Navigation" : undefined}
           tabIndex={isMobile ? -1 : undefined}
           inert={isMobile && !mobileNavOpen ? true : undefined}
-          style={isMobile ? undefined : { width }}
           className={clsx(
             "flex flex-col gap-4 border-r border-border bg-background-alt p-3 focus:outline-none",
             isMobile
@@ -513,12 +464,16 @@ export function AppShell() {
                   // that bar truncates rather than wrapping. The design fills the
                   // viewport this way, which is why there is no backdrop to dim
                   // and no shadow to lift it off a page you cannot see.
-                  "fixed inset-x-0 top-14 bottom-0 z-40 w-full transition-transform duration-200",
+                  // 250ms on `--ease-out-fluid` is what HeroUI slides its
+                  // own Drawer in on, and this is the same gesture.
+                  "fixed inset-x-0 top-14 bottom-0 z-40 w-full transition-transform duration-250 ease-out-fluid motion-reduce:transition-none",
                   mobileNavOpen ? "translate-x-0" : "-translate-x-full",
                 )
               : clsx(
-                  "relative shrink-0",
-                  !resizing && "transition-[width] duration-150",
+                  // 150ms, which is what `otari-ai/frontend`'s shell collapses
+                  // its own rail in.
+                  "relative shrink-0 transition-[width] duration-150 motion-reduce:transition-none",
+                  collapsed ? COLLAPSED_SIDEBAR_WIDTH : SIDEBAR_WIDTH,
                 ),
           )}
         >
@@ -531,35 +486,12 @@ export function AppShell() {
                 to={workspaceLanding?.to ?? "/"}
                 onClick={() => setMobileNavOpen(false)}
                 className={navRowClass({ collapsed: effectiveCollapsed })}
-                aria-label={
-                  effectiveCollapsed
-                    ? `Back to ${selectedWorkspace?.name ?? "workspace"}`
-                    : undefined
-                }
-                title={
-                  effectiveCollapsed
-                    ? `Back to ${selectedWorkspace?.name ?? "workspace"}`
-                    : undefined
-                }
+                aria-label={effectiveCollapsed ? backLabel : undefined}
+                title={effectiveCollapsed ? backLabel : undefined}
               >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className="h-4 w-4 shrink-0"
-                >
-                  <path
-                    d="M19 12H4M10 6l-6 6 6 6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                <FiArrowLeft aria-hidden="true" className={NAV_ICON_CLASS} />
                 {effectiveCollapsed ? null : (
-                  <span className="min-w-0 flex-1 truncate">
-                    {`Back to ${selectedWorkspace?.name ?? "workspace"}`}
-                  </span>
+                  <span className="min-w-0 flex-1 truncate">{backLabel}</span>
                 )}
               </Link>
             </div>
@@ -662,20 +594,7 @@ export function AppShell() {
                     : undefined
                 }
               >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  className="h-4 w-4 shrink-0"
-                >
-                  <circle cx="12" cy="12" r="3" />
-                  <path
-                    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                <FiSettings aria-hidden="true" className={NAV_ICON_CLASS} />
                 {effectiveCollapsed ? null : (
                   <span className="min-w-0 flex-1 truncate">Organization</span>
                 )}
@@ -692,27 +611,6 @@ export function AppShell() {
             ) : null}
             <AccountMenu collapsed={effectiveCollapsed} />
           </div>
-          {collapsed || isMobile ? null : (
-            // biome-ignore lint/a11y/useSemanticElements: <hr> is a thematic break; this is a keyboard-operable resize handle
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize sidebar"
-              aria-valuenow={Math.round(sidebarWidth)}
-              aria-valuemin={MIN_SIDEBAR}
-              aria-valuemax={MAX_SIDEBAR}
-              tabIndex={0}
-              onPointerDown={startResize}
-              onPointerMove={moveResize}
-              onPointerUp={endResize}
-              onKeyDown={nudgeResize}
-              className={clsx(
-                "absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize touch-none transition-colors",
-                "hover:bg-accent focus-visible:bg-accent focus:outline-none",
-                resizing ? "bg-accent" : "bg-transparent",
-              )}
-            />
-          )}
         </aside>
         {/* The right-hand pane: the header sits beside the rail rather than above
             it, which is what lets the sidebar run the full height of the window. */}
@@ -734,24 +632,11 @@ export function AppShell() {
                 aria-controls="app-sidebar"
                 className="-ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-alt hover:text-foreground md:hidden"
               >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  className="h-5 w-5"
-                >
-                  <path
-                    d={
-                      mobileNavOpen
-                        ? "M6 6l12 12M18 6L6 18"
-                        : "M4 6h16M4 12h16M4 18h16"
-                    }
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                {mobileNavOpen ? (
+                  <FiX aria-hidden="true" className="size-5" />
+                ) : (
+                  <FiMenu aria-hidden="true" className="size-5" />
+                )}
               </button>
               {/* Collapse lives here, at the head of the content pane, rather
                   than floating on the rail's edge: the rail now runs the full
@@ -766,17 +651,7 @@ export function AppShell() {
                 title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                 className="-ml-1 hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-alt hover:text-foreground md:flex"
               >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className="h-4 w-4"
-                >
-                  <rect x="3" y="4" width="18" height="16" rx="2" />
-                  <path d="M9 4v16" strokeLinecap="round" />
-                </svg>
+                <FiSidebar aria-hidden="true" className="size-4" />
               </button>
               <Breadcrumbs pathname={pathname} />
             </div>

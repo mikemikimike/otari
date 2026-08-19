@@ -160,14 +160,28 @@ describe("AppShell responsive layout", () => {
     )
   })
 
-  it("renders the resizable rail (not a drawer) on desktop", async () => {
+  it("renders the rail at one fixed width (not a drawer) on desktop", async () => {
     mockMatchMedia(false)
     const { container } = await renderShell()
 
     const aside = container.querySelector("aside")
-    // Desktop keeps the in-flow, inline-width-driven rail rather than a fixed overlay.
+    // Desktop keeps the in-flow rail rather than a fixed overlay, and it is one
+    // width: no inline style, because nothing drags it any more.
     expect(aside?.className).not.toContain("fixed")
-    expect(aside?.getAttribute("style")).toContain("width")
+    expect(aside?.className).toContain("w-[16.5rem]")
+    expect(aside?.getAttribute("style")).toBeNull()
+    expect(
+      screen.queryByRole("separator", { name: "Resize sidebar" }),
+    ).toBeNull()
+  })
+
+  it("collapses to the narrow rail rather than to a remembered width", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    const { container } = await renderShell()
+
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }))
+    expect(container.querySelector("aside")?.className).toContain("w-[4.5rem]")
   })
 
   it("closes the drawer when the viewport grows past the mobile breakpoint", async () => {
@@ -396,11 +410,10 @@ describe("AppShell surface gating", () => {
         .map((link) => link.textContent),
     ).toEqual([
       "Members & roles",
+      "Users",
       "Workspaces",
       "Spend & budgets",
-      "Users",
       "Model pricing",
-      "Org usage",
       "Org settings",
       "Settings",
     ])
@@ -436,9 +449,14 @@ describe("AppShell surface gating", () => {
     // them served, an empty heading over nothing is worse than no heading.
     expect(screen.queryByText("Access")).toBeNull()
     expect(screen.getByText("Gateway")).toBeInTheDocument()
-    // "Observe" survives on the index alone, which is ungated by design: a
-    // deployment with no management surface at all still has a front page.
-    expect(screen.getByText("Observe")).toBeInTheDocument()
+    // "Observe" goes with them. It labels the request log and the usage
+    // rollups, both gated on the usage surface, and the index that used to keep
+    // the heading alive now sits in its own group above it. The front page is
+    // still there, which is the part that matters: a deployment with no
+    // management surface at all is left with a landing row and no headings it
+    // cannot fill.
+    expect(screen.queryByText("Observe")).toBeNull()
+    expect(screen.getByRole("link", { name: "Overview" })).toBeInTheDocument()
   })
 })
 
@@ -603,9 +621,11 @@ describe("AppShell entitlement and flag gating", () => {
     const user = userEvent.setup()
     await renderShell()
 
-    // Collapsed to start: the children are not in the tree at all, so they are
-    // not reachable by tab or by a screen reader while the group is shut.
+    // Shut to start. The panel stays mounted so it has a height to animate from,
+    // but it is `hidden` and `aria-hidden` while shut, so its rows are reachable
+    // by neither tab nor a screen reader until the group opens.
     expect(screen.queryByRole("link", { name: "Web search" })).toBeNull()
+    expect(screen.getByText("Web search").closest("[hidden]")).not.toBeNull()
 
     await user.click(screen.getByRole("button", { name: "Tools" }))
     expect(screen.getByRole("link", { name: "Web search" })).toBeInTheDocument()

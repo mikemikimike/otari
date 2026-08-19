@@ -1,23 +1,23 @@
 import {
-  ActivityIcon,
-  BillingIcon,
-  BudgetsIcon,
-  GatewaysIcon,
-  GuardrailsIcon,
-  KeysIcon,
-  MembersIcon,
-  ModelsIcon,
-  OrganizationIcon,
-  OverviewIcon,
-  PricingIcon,
-  ProvidersIcon,
-  RoutingIcon,
-  SettingsIcon,
-  ToolsIcon,
-  UsageIcon,
-  UsersIcon,
-  WorkspacesIcon,
-} from "./icons"
+  FiActivity,
+  FiBarChart2,
+  FiBox,
+  FiCode,
+  FiCreditCard,
+  FiDollarSign,
+  FiGlobe,
+  FiGrid,
+  FiHome,
+  FiKey,
+  FiLayers,
+  FiRepeat,
+  FiServer,
+  FiShield,
+  FiSliders,
+  FiTag,
+  FiTool,
+  FiUsers,
+} from "react-icons/fi"
 import {
   OVERLAY_NAV_SECTIONS,
   OVERLAY_ORG_NAV_SECTIONS,
@@ -28,12 +28,14 @@ import type { NavItem, NavSection } from "./types"
  * The sidebar the base build ships, and the only place a destination is
  * declared.
  *
- * Sections render in this order, and they are the design's: "Observe" is where
- * you look (the front page, the request log, and the usage rollups over it),
- * "Gateway" is what the gateway serves (models, the policies that route over
- * them, and the tools it can call), and "Access" is who may call it (keys, the
- * upstream credentials those keys spend, and the workspace's roster). Every
- * group carries a heading; there is no unlabeled one.
+ * Sections render in this order. The index leads, alone and unlabeled, because
+ * it is the rail's destination rather than a member of a category: it is where
+ * the sidebar puts you back, not one of the places you go from it. The three
+ * below it are the design's: "Observe" is where you look (the request log and
+ * the usage rollups over it), "Gateway" is what the gateway serves (models, the
+ * policies that route over them, and the tools it can call), and "Access" is who
+ * may call it (keys, the upstream credentials those keys spend, and the
+ * workspace's roster).
  *
  * Each entry declares its own gating, and the three axes are independent:
  * `surface` (does this deployment host it), `capability` (is it entitled), and
@@ -43,31 +45,37 @@ import type { NavItem, NavSection } from "./types"
  */
 const BASE_NAV_SECTIONS = [
   {
+    // Headingless on purpose, and the one section in this rail that is. A label
+    // over a single row would read as a category with one member, and the index
+    // is not a category: it is the row every other row is a departure from. The
+    // gap the shell already puts between sections is what separates it.
+    id: "index",
+    items: [
+      // Ungated on every axis: the index is the deployment's own front page and
+      // reads whatever it is allowed to.
+      { to: "/", label: "Overview", icon: FiHome },
+    ],
+  },
+  {
     id: "observe",
     label: "Observe",
     items: [
-      // Ungated on every axis: the index is the deployment's own front page and
-      // reads whatever it is allowed to. Under the Observe heading rather than in
-      // an unlabeled group of its own, which is where the design puts it: a
-      // heading over one row and no heading over the row above it read as two
-      // sections, and there is only one thing here to observe from.
-      { to: "/", label: "Overview", icon: OverviewIcon },
       // Both read /v1/usage, which is why they name the surface rather than
       // themselves: a deployment that does not host usage loses both.
       {
         to: "/activity",
         label: "Activity",
         surface: "usage",
-        icon: ActivityIcon,
+        icon: FiActivity,
       },
-      { to: "/usage", label: "Usage", surface: "usage", icon: UsageIcon },
+      { to: "/usage", label: "Usage", surface: "usage", icon: FiBarChart2 },
     ],
   },
   {
     id: "gateway",
     label: "Gateway",
     items: [
-      { to: "/models", label: "Models", surface: "models", icon: ModelsIcon },
+      { to: "/models", label: "Models", surface: "models", icon: FiLayers },
       // Deliberately not tagged `capability: "routing"`, though otari.ai's
       // registry tags its own Routing item that way. ARCHITECTURE.md's
       // capability lines mark the routing split (how much is core base, how
@@ -80,7 +88,7 @@ const BASE_NAV_SECTIONS = [
         to: "/routing",
         label: "Routing",
         surface: "routing",
-        icon: RoutingIcon,
+        icon: FiRepeat,
         // Policies and Guardrails as the navigation prototype groups them. The
         // prototype's third entry, Aliases, is deliberately absent: this
         // dashboard lists an alias as the one-target policy it is, in the same
@@ -89,10 +97,11 @@ const BASE_NAV_SECTIONS = [
         // group two entries for one page, and the second could never highlight.
         // It comes back if and when Routing grows a separate alias view.
         children: [
-          { to: "/routing", label: "Policies" },
+          { to: "/routing", label: "Policies", icon: FiRepeat },
           {
             to: "/tools/guardrails",
             label: "Guardrails",
+            icon: FiShield,
             // Grouped with Routing, served by the tools surface.
             surface: "tools",
           },
@@ -102,7 +111,7 @@ const BASE_NAV_SECTIONS = [
         to: "/tools",
         label: "Tools",
         surface: "tools",
-        icon: ToolsIcon,
+        icon: FiTool,
         // Two of the three services the page configures; Guardrails is grouped
         // under Routing, where the prototype puts it. The prototype lists MCP
         // servers here too, and the gateway has no MCP server registry to
@@ -110,8 +119,12 @@ const BASE_NAV_SECTIONS = [
         // toggles on Settings), so it is left out rather than linked to an
         // empty page.
         children: [
-          { to: "/tools/web-search", label: "Web search" },
-          { to: "/tools/code-execution", label: "Code execution" },
+          { to: "/tools/web-search", label: "Web search", icon: FiGlobe },
+          {
+            to: "/tools/code-execution",
+            label: "Code execution",
+            icon: FiCode,
+          },
         ],
       },
     ],
@@ -120,7 +133,7 @@ const BASE_NAV_SECTIONS = [
     id: "access",
     label: "Access",
     items: [
-      { to: "/keys", label: "API keys", surface: "keys", icon: KeysIcon },
+      { to: "/keys", label: "API keys", surface: "keys", icon: FiKey },
       // "Providers", not "Provider credentials": the page manages the
       // credential *and* the instance it belongs to, the rail has one line for
       // it, and a two-word label is what the rest of this group reads like.
@@ -128,7 +141,7 @@ const BASE_NAV_SECTIONS = [
         to: "/providers",
         label: "Providers",
         surface: "providers",
-        icon: ProvidersIcon,
+        icon: FiBox,
       },
       // The selected workspace's roster, not the organization's. The
       // organization roster is "Members & roles" in the other context, and the
@@ -137,7 +150,7 @@ const BASE_NAV_SECTIONS = [
         to: "/members",
         label: "Members",
         surface: "workspaces",
-        icon: MembersIcon,
+        icon: FiUsers,
       },
     ],
   },
@@ -185,8 +198,15 @@ const ORGANIZATION_NAV_SECTIONS = [
         to: "/organization/members",
         label: "Members & roles",
         surface: "organizations",
-        icon: MembersIcon,
+        icon: FiUsers,
       },
+      // Absent from the design, which folds per-user spend into "Spend &
+      // budgets". Kept because a budget names a `users` row, so this is the only
+      // place a budget is attached to anything. It sits beside the members
+      // rather than beside the budgets it feeds, because what the page edits is
+      // an identity: the two identity tables have not merged yet (M4), and this
+      // row stops being a destination when they do.
+      { to: "/users", label: "Users", surface: "users", icon: FiUsers },
       // The organization's own upstream credentials, which is a different table
       // from the workspace rail's `/providers`: over there a credential belongs
       // to the process, here it would belong to the tenant. This gateway has only
@@ -195,7 +215,7 @@ const ORGANIZATION_NAV_SECTIONS = [
         to: "/organization/provider-keys",
         label: "Providers",
         surface: "organization_providers",
-        icon: ProvidersIcon,
+        icon: FiBox,
       },
       // Absent from the design, which switches workspace from the scope menu and
       // has no list page. Kept because this is the only place a workspace is
@@ -205,7 +225,7 @@ const ORGANIZATION_NAV_SECTIONS = [
         to: "/workspaces",
         label: "Workspaces",
         surface: "workspaces",
-        icon: WorkspacesIcon,
+        icon: FiGrid,
       },
     ],
   },
@@ -217,19 +237,13 @@ const ORGANIZATION_NAV_SECTIONS = [
         to: "/budgets",
         label: "Spend & budgets",
         surface: "budgets",
-        icon: BudgetsIcon,
+        icon: FiDollarSign,
       },
-      // Absent from the design, which folds per-user spend into "Spend &
-      // budgets". Kept because it is still the only place a budget is attached
-      // to anything: a budget names a `users` row, and that table has not merged
-      // into the tenancy identity yet (M4). It moves under Spend & budgets, and
-      // stops being a destination, when it does.
-      { to: "/users", label: "Users", surface: "users", icon: UsersIcon },
       {
         to: "/organization/billing",
         label: "Billing",
         surface: "billing",
-        icon: BillingIcon,
+        icon: FiCreditCard,
       },
       // Tenant-scoped in fact as well as in the design: a rate applies to every
       // workspace and every key in the deployment. The catalog had no home
@@ -240,7 +254,7 @@ const ORGANIZATION_NAV_SECTIONS = [
         to: "/organization/pricing",
         label: "Model pricing",
         surface: "settings",
-        icon: PricingIcon,
+        icon: FiTag,
       },
     ],
   },
@@ -255,13 +269,13 @@ const ORGANIZATION_NAV_SECTIONS = [
         to: "/organization/guardrails",
         label: "Guardrails",
         surface: "organization_guardrails",
-        icon: GuardrailsIcon,
+        icon: FiShield,
       },
       {
         to: "/organization/gateways",
         label: "Gateways",
         surface: "gateways",
-        icon: GatewaysIcon,
+        icon: FiServer,
       },
     ],
   },
@@ -269,20 +283,11 @@ const ORGANIZATION_NAV_SECTIONS = [
     id: "org-general",
     label: "General",
     items: [
-      // The workspace rail's Usage asked a wider question: `/v1/usage` is
-      // unscoped without a `workspace_id`, so this is the same page reading
-      // across every workspace in the tenant rather than a second one.
-      {
-        to: "/organization/usage",
-        label: "Org usage",
-        surface: "usage",
-        icon: UsageIcon,
-      },
       {
         to: "/organization",
         label: "Org settings",
         surface: "organizations",
-        icon: OrganizationIcon,
+        icon: FiSliders,
       },
       // No slot in the design, which has no gateway of its own to configure: this
       // is the process's runtime settings (the master key, the safety toggles,
@@ -292,7 +297,7 @@ const ORGANIZATION_NAV_SECTIONS = [
         to: "/settings",
         label: "Settings",
         surface: "settings",
-        icon: SettingsIcon,
+        icon: FiSliders,
       },
     ],
   },

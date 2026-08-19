@@ -63,7 +63,6 @@ test.describe("dashboard core flows", () => {
       ["Users", "Users"],
       ["Spend & budgets", "Budgets"],
       ["Model pricing", "Model pricing"],
-      ["Org usage", "Organization usage"],
       // Exact, because this rail also carries "Org settings" and the default
       // match is a substring one.
       ["Settings", "Settings"],
