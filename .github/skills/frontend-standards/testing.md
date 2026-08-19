@@ -93,9 +93,10 @@ at every size and in both palettes. The theme is seeded into localStorage before
 navigation (`e2e/screenshots/fixtures.ts`) so the pre-paint script in `index.html` applies it
 on the first frame, and `colorScheme` is set to match underneath it.
 
-**Adding a page means adding an entry.** A route in `WORKSPACE_ROUTES` in
-`authenticated.spec.ts` is one line and buys six captures. A page with no entry is a page
-whose mobile and dark rendering nobody checks.
+**Adding a page means adding an entry**, in the registry that matches how it is reached: a
+route in `WORKSPACE_ROUTES` in `authenticated.spec.ts` for anything behind a session, or a
+test in `public.spec.ts` for anything in front of one. Either is one line and buys six
+captures. A page with no entry is a page whose mobile and dark rendering nobody checks.
 
 What the harness already handles, so you do not work around it: `fullPage` captures,
 `animations: "disabled"`, the caret hidden, fonts awaited, and masks over the two things that
