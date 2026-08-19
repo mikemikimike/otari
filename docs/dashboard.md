@@ -448,7 +448,7 @@ lands: the address they are added by is the handle it will claim them with.
 - **Workspaces**: create, rename, and delete workspaces, and manage each
   roster. The last workspace cannot be deleted.
 
-### Money
+### Cost & billing
 
 - **Spend & budgets**: spending limits callers are held to, with per-period
   resets.
@@ -456,13 +456,24 @@ lands: the address they are added by is the handle it will claim them with.
   default model access for a user's keys. Distinct from members: a member is a
   person who signs in, a user is what spend is attributed to, and the two merge
   once the request plane is re-parented onto tenancy.
+- **Model pricing**: what the gateway meters a request at, which is one rate per
+  model for the whole deployment. The page opens with what an *unpriced* model
+  costs, because that decides what the table under it means: with default pricing
+  on, the table is the models you have overridden, and with it off, the table is
+  everything that can be billed and `require_pricing` decides whether anything
+  else is refused (HTTP 402) or served for free. Below that, **Check for price
+  updates** fetches the upstream `genai-prices` catalog and shows what would
+  change before anything is saved; custom prices are never touched by it. A single
+  model's rate is still edited beside the model, on Models.
 
 ### General
 
-- **Organization**: rename the organization. There is exactly one.
-- **Settings**: search and toggle runtime settings, review and apply default
-  pricing updates, and rotate the generated master key. Rotating the master key
-  issues a fresh `otari-mk-…` value and keeps your current session signed in.
+- **Org usage**: the same charts as Usage, across every workspace in the
+  organization rather than the one the scope menu has selected.
+- **Org settings**: rename the organization. There is exactly one.
+- **Settings**: search and toggle runtime settings, and rotate the generated
+  master key. Rotating the master key issues a fresh `otari-mk-…` value and keeps
+  your current session signed in.
 
 ## Install it on your phone
 

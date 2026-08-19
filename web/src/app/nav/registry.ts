@@ -9,6 +9,7 @@ import {
   ModelsIcon,
   OrganizationIcon,
   OverviewIcon,
+  PricingIcon,
   ProvidersIcon,
   RoutingIcon,
   SettingsIcon,
@@ -229,6 +230,17 @@ const ORGANIZATION_NAV_SECTIONS = [
         label: "Billing",
         surface: "billing",
         icon: BillingIcon,
+      },
+      // Tenant-scoped in fact as well as in the design: a rate applies to every
+      // workspace and every key in the deployment. The catalog had no home
+      // before — its refresh flow sat in the gateway's runtime Settings next to
+      // the master key — so this is where it lives, while one model's rate stays
+      // on Models, beside the model it prices.
+      {
+        to: "/organization/pricing",
+        label: "Model pricing",
+        surface: "settings",
+        icon: PricingIcon,
       },
     ],
   },

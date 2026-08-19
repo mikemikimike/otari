@@ -58,6 +58,7 @@ describe("nav registry", () => {
       "Spend & budgets",
       "Users",
       "Billing",
+      "Model pricing",
       "Guardrails",
       "Gateways",
       "Org usage",
