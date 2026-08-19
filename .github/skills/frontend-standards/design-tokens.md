@@ -75,9 +75,14 @@ overlap in meaning with our `-subtle` and `-alt` names without being the same th
 compiler cannot tell you which family a class came from: both spellings work, and only one
 tracks our tokens.
 
-**Use ours.** A HeroUI-named utility bypasses the palette and will not follow a token change.
-The names differ because otari-ai chose `-subtle` and `-alt` before this rehome, and renaming
-here would fork the file the M5 merge depends on.
+**Use ours.** The test is not whether a utility's name came from HeroUI, it is whether the
+value behind it does. `bg-accent`, `text-foreground`, `text-muted`, `border-border` and
+`bg-default` are HeroUI-named and correct, because the theme block above aliases each of
+those variables to a `--color-*` token of ours. The families listed here are the opposite
+case: nothing in this repo declares them, so they resolve to whatever `@heroui/styles` ships
+and will not follow a token change. The `-subtle` and `-alt` names differ from HeroUI's
+because otari-ai chose them before this rehome, and renaming here would fork the file the M5
+merge depends on.
 
 Two traps follow from the same overlap. A class that *looks* like it belongs to one family may
 belong to neither and silently emit nothing, which is what happened to `bg-danger-subtle` and
@@ -124,9 +129,11 @@ text, not its size:
 The scale is the whole set of sizes. `text-[11px]` is `text-overline` spelled in a way the
 system cannot see, `text-2xl font-bold` outside `text-display` means the hierarchy is the bug,
 and a one-off combination (`text-base font-semibold uppercase tracking-tight`) that repeats is
-a role that should be added here instead. One `text-display` per route, and the HTML heading
-level matches the visual one: `<h1>` for the display, `<h2>` for a heading, `<h3>` for a
-title.
+a role that should be added here instead. One `text-display` per route. Heading *level* is a
+separate decision from heading *style*: `<h1>`/`<h2>`/`<h3>` follow the document outline, so a
+card title nested two sections deep may be an `<h3>` or an `<h4>` and still wear
+`text-title`. Pick the level that keeps the outline unbroken, then the role that matches the
+meaning.
 
 Headings and the display/heading roles are set in Zilla Slab; body and UI text in Mozilla
 Text; keys, IDs, and code in Fira Code. The faces are self-hosted in `web/public/fonts/` under

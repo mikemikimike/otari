@@ -21,7 +21,7 @@ Real example from `shared/components/ui.tsx`:
 ```tsx
 import { Button, Card } from "@heroui/react";
 
-<Card className="flex-1 min-w-[180px]">
+<Card className="flex-1 min-w-[11.25rem]">
   <Card.Content className="flex flex-col gap-1 p-5">…</Card.Content>
 </Card>
 
@@ -64,6 +64,8 @@ than duplicating their markup. See [design-tokens.md](./design-tokens.md).
 | Applied filters, each removable | `FilterChips` (`shared/components/FilterChips.tsx`); one chip per value, and pass `clearLabel` so several chips of one dimension stay distinguishable |
 | Form field wrapper | `Field` (`shared/components/Field.tsx`) |
 | Tabular data | `DataTable` (`shared/components/DataTable.tsx`) |
+| Settings page section (header + body) | `SettingsSection` (`shared/components/ui/`, rehomed) |
+| Table row's trailing icon-button cluster | `RowActions` (`shared/components/ui/`, rehomed) |
 
 `errorMessage(error)` centralizes turning an `ApiError`/`Error`/unknown into a display string;
 use it rather than reaching into `error.message` yourself.
@@ -99,7 +101,8 @@ for genuinely external destinations (documentation, otari.ai).
   reader's root font size. A `1px` border is the exception; a `text-[11px]` is not, because
   that size is the `text-overline` role. See [responsiveness.md](./responsiveness.md).
 - Responsive via Tailwind breakpoints (`sm:`, `md:`, `lg:`) and flex/grid; avoid fixed pixel
-  widths for anything that should reflow (`min-w-[180px]` on a wrapping stat card is fine).
+  widths for anything that should reflow (`min-w-[11.25rem]` on a wrapping stat card is fine:
+  it is a floor, not a fixed width).
 - One component per file for pages and standalone components, colocated with its test.
   `shared/components/ui.tsx` is the one place several closely related primitives share a
   file; a new primitive under `shared/components/ui/` gets its own.

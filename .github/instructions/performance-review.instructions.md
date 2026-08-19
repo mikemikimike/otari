@@ -162,7 +162,7 @@ The dashboard is small, but a page an operator leaves open all day compounds eve
   chunk and ships to every visitor, including for routes their deployment never serves. Watch
   the build log for `[tanstack-router] These exports … will not be code-split`; it is a
   regression, not noise.
-- ✅ **Heavy, non-critical UI is lazy.** Modals, charts, and anything that mounts conditionally
+- ✅ **Heavy, non-critical UI is lazy.** Heavy modals, charts, and syntax highlighters
   go through `React.lazy` + `Suspense`, with `fallback={null}` for something just opened and a
   fixed-height placeholder for anything above the fold. Mount a modal when it opens rather than
   leaving it in the DOM behind an `isOpen` prop.

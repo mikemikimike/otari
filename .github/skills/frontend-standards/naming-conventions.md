@@ -56,9 +56,10 @@ const MOBILE_QUERY = "(max-width: 767px)"
 const usageFilters = { model: models, workspace: workspaceId }
 ```
 
-Query keys are module constants (`const MODELS = "models"`), never inline literals, so a typo
-is a build error rather than a cache that silently never invalidates. See
-[data-fetching.md](./data-fetching.md).
+Query keys are module constants (`const MODELS = "models"`), never inline literals, so a
+query and the mutation that invalidates it reference one symbol instead of repeating a string
+that can diverge. A mistyped *identifier* fails to compile; a mistyped *literal* would not,
+which is exactly why the literal is written once. See [data-fetching.md](./data-fetching.md).
 
 A literal table that drives a union carries `as const`, so the values stay literals and the
 derived type is the set rather than `string[]`: `THEME_PREFERENCES` in

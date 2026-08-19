@@ -1,5 +1,5 @@
 ---
-applyTo: "web/src/**/*.{ts,tsx,css},web/e2e/**/*.ts,web/index.html,web/*.ts"
+applyTo: "web/src/**/*.{ts,tsx,css},web/e2e/**/*.{ts,tsx},web/index.html,web/*.ts"
 ---
 
 # Frontend Standards (dashboard)
@@ -61,7 +61,7 @@ full guidance, with worked examples grounded in this dashboard's code, lives in 
    (`components/`, `helpers/`, `api/`); test harnesses go in `web/src/tests/`; only
    `web/src/app/` composes the tree. The layout mirrors `otari-ai/frontend/src`, so
    prefer its names for a new directory. A feature may not
-   import `app/`, and `shared/` may not import `features/` or `app/`. `pnpm run lint` (Biome)
+   import `app/`, and `shared/` may not import `features/` or `app/`. `pnpm --dir web run lint` (Biome)
    rejects both, so flag placement in review rather than leaving it to the lint to reject
    after the fact. Adding a directory directly under `src/` needs a rule to go with it.
 

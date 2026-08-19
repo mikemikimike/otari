@@ -38,7 +38,7 @@ dashboard: web/node_modules/.install-stamp
 # against this lockfile. `--frozen-lockfile` is the `npm ci` of pnpm: it
 # installs exactly the lockfile and fails rather than rewriting it when
 # package.json has moved on.
-web/node_modules/.install-stamp: web/pnpm-lock.yaml web/package.json
+web/node_modules/.install-stamp: web/pnpm-lock.yaml web/package.json web/pnpm-workspace.yaml
 	pnpm --dir web install --frozen-lockfile
 	@touch $@
 

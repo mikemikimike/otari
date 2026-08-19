@@ -36,7 +36,7 @@ operator. See [testing.md](./testing.md).
 
 ## Rules
 
-- **Flex and grid, never a fixed width**, for anything that should reflow. `min-w-[180px]` on
+- **Flex and grid, never a fixed width**, for anything that should reflow. `min-w-[11.25rem]` on
   a wrapping stat card is fine; a fixed-width container that decides the page is not.
 - **`min-w-0` on flex children that can overflow** (long model ids, keys, code, tables).
   Without it a flex child's `min-content` width wins and the child pushes the layout wider
