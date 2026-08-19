@@ -70,8 +70,9 @@ can link Vite's esbuild binary at all.
   [web/AGENTS.md](../../../web/AGENTS.md) for how the gates compose and where a capability
   the base build ships has to be declared.
 - Add a Vitest test for any component or helper whose behavior you change (`Foo.tsx` →
-  `Foo.test.tsx`, colocated), and a screenshot entry for any new page. See
-  [testing.md](./testing.md).
+  `Foo.test.tsx`, colocated), and a screenshot entry for any new page. The screenshot suite
+  runs on demand rather than as a PR gate while the migration lands, so the entry is owed
+  even though nothing fails without it. See [testing.md](./testing.md).
 
 **Never:**
 

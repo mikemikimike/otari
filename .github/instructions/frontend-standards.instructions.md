@@ -94,5 +94,6 @@ full guidance, with worked examples grounded in this dashboard's code, lives in 
     query the way a user would (`getByRole`/`getByLabelText`/`getByText`, not `getByTestId`),
     render real providers, and mock only the network boundary (`apiFetch`), not the hooks. Each
     file restores the globals it overrode and carries no per-assertion timeout override. A new
-    page also needs a screenshot entry in `web/e2e/screenshots/`, which covers it at three
-    viewports in both themes. See [testing.md](../skills/frontend-standards/testing.md).
+    page also needs a screenshot entry in `web/e2e/screenshots/`, which is what will cover it
+    at three viewports in both themes; that suite runs on demand today rather than as a PR
+    gate, so the entry is owed even though nothing fails without it. See [testing.md](../skills/frontend-standards/testing.md).

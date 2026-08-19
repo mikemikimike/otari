@@ -89,14 +89,13 @@ The per-request flow (auth → budget → dispatch → reconciliation) spans sev
   enforces a conventional title. Visibility rules live in `RELEASE.md`
   ("Changelog visibility"). Do not hand-edit `CHANGELOG.md`; the release
   workflows regenerate it.
-- The dashboard has four more, and [web/AGENTS.md](web/AGENTS.md) owns them: its API client
-  (`web/src/client/schema.ts`), route tree (`web/src/routeTree.gen.ts`), and screenshot
-  baselines (`web/e2e/screenshots/__snapshots__/`) are generated **and committed**, each with
-  a CI drift check, while the bundle (`src/gateway/static/dashboard/`) is generated and
-  **not** committed. A change under `web/src` therefore sometimes leaves a file to commit and
-  never leaves a bundle to commit. The baselines are the one artifact a laptop cannot
-  regenerate: they are Linux PNGs, and CI attaches the new ones to the run that fails for
-  their absence.
+- The dashboard has three more, and [web/AGENTS.md](web/AGENTS.md) owns them: its API client
+  (`web/src/client/schema.ts`) and route tree (`web/src/routeTree.gen.ts`) are generated **and
+  committed**, each with a CI drift check, while the bundle (`src/gateway/static/dashboard/`)
+  is generated and **not** committed. A change under `web/src` therefore sometimes leaves a
+  file to commit and never leaves a bundle to commit. Screenshot baselines are a fourth
+  artifact that is deliberately neither: the suite runs on demand and its PNGs are gitignored
+  while the dashboard is mid-migration.
 
 ## Repository Conventions
 - Prefer minimal, targeted edits over broad refactors, and match the import order and typing style of the file you are in (`TYPE_CHECKING` for type-only imports where it helps, as in `routes/_helpers.py`).

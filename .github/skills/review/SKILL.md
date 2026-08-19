@@ -39,11 +39,12 @@ Check these on every review; each has broken a PR here before.
   `make postman`). The one `openapi-spec` CI job runs `make openapi-check` and
   `make postman-check`, so a PR that regenerates only the spec still fails.
 - **Dashboard generated files.** The bundle (`src/gateway/static/dashboard/`) is *not*
-  committed, so a `web/src` change leaves nothing to commit there. Three things under `web/`
+  committed, so a `web/src` change leaves nothing to commit there. Two things under `web/`
   are committed and drift-checked, and a PR that changes them and not the artifact fails CI:
-  the API client (`web/src/client/schema.ts`), the route tree (`web/src/routeTree.gen.ts`),
-  and the screenshot baselines (`web/e2e/screenshots/__snapshots__/`). Baselines can only be
-  produced on Linux; CI attaches the new ones to the run that fails for their absence.
+  the API client (`web/src/client/schema.ts`) and the route tree
+  (`web/src/routeTree.gen.ts`). Screenshot baselines are neither committed nor checked yet,
+  so a PR that moves a page owes no PNGs; what it does owe is a screenshot entry for a page
+  it adds, so the page is covered when the suite becomes a gate.
 - **Dashboard toolchain.** `web/` is pnpm. A PR that adds a dependency carries the
   `pnpm-lock.yaml` change; one that adds a dependency with an install script also needs an
   `allowBuilds` entry in `web/pnpm-workspace.yaml`; and a dependency HeroUI also depends on

@@ -173,18 +173,22 @@ jobs:
 
   screenshots:
     # Visual regression: every screenshot spec captured at three viewports in
-    # both themes (web/playwright.config.ts). Separate from the e2e job because
-    # it is the slower half and fails for a different reason: e2e says a flow
-    # broke, this says a page changed shape. The cost of the split is that the
-    # screenshot projects depend on `parity`, so this job re-runs the behavioral
-    # specs to reach the database state it captures; keeping the two apart is
-    # worth those 38 tests, because a red screenshot job then means one thing.
+    # both themes (web/playwright.config.ts).
     #
-    # Baselines are Linux PNGs produced by this runner and committed to
-    # web/e2e/screenshots/__snapshots__/. A macOS capture renders fonts
-    # differently, so a laptop cannot produce a comparable one; the update step
-    # below writes any that are missing and the diff check then fails the job
-    # with them attached, which is how a new page's baselines are obtained.
+    # Deliberately **not** a PR gate yet, which is what `workflow_dispatch`
+    # limits it to. The dashboard is mid-migration onto the rehomed design
+    # foundation, so pages still move for good reasons; a suite comparing them
+    # against committed baselines would fail on most PRs and the baselines
+    # themselves would churn in every diff. The harness is here so it can be
+    # switched on later by adding `pull_request` back to this job's condition
+    # and committing the set it captures.
+    #
+    # Run it from the Actions tab (or `gh workflow run otari-dashboard.yml`)
+    # when you want to see how the pages render: it captures everything and
+    # attaches the PNGs as the `screenshot-baselines` artifact, which is also
+    # how a Linux baseline set is obtained, since a macOS run renders fonts
+    # differently.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -220,33 +224,16 @@ jobs:
       run: pnpm exec playwright install --with-deps chromium
 
     # `--update-snapshots=missing` writes a baseline that does not exist yet
-    # rather than only reporting it, and compares every one that does. Playwright
-    # still marks a test whose baseline it had to write as failed, so this step
-    # goes red on a branch that adds a page; that is the intended way to obtain
-    # its baselines, and the step below says so.
+    # rather than only reporting it. With no baselines committed, that is every
+    # one of them, and Playwright still marks a test whose baseline it had to
+    # write as failed, so this step is red by construction today. It is the
+    # capture that matters; `continue-on-error` keeps the run from reporting a
+    # failure that means nothing until this becomes a gate.
     - name: Capture screenshots
+      continue-on-error: true
       working-directory: web
       run: pnpm run e2e:screenshots -- --update-snapshots=missing
 
-    # Same contract as the route tree and the API client above: what CI produced
-    # has to be what the branch committed. A newly written baseline shows up
-    # here as an untracked file, so the message names the artifact to download.
-    # `always()` because the step above has already failed in exactly the case
-    # this message is for.
-    - name: Check the committed baselines are up to date
-      if: always()
-      working-directory: web
-      run: |
-        if [ -n "$(git status --porcelain -- e2e/screenshots/__snapshots__)" ]; then
-          echo "::error::Screenshot baselines are missing or stale. Download the"
-          echo "::error::screenshot-baselines artifact from this run and commit it."
-          git status --short -- e2e/screenshots/__snapshots__
-          exit 1
-        fi
-
-    # Uploaded whatever the outcome, because both are useful: on a failure it
-    # carries the new baselines and the actual/diff PNGs, and on a pass it is
-    # the record of what the app looked like at this commit.
     - name: Upload screenshots
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

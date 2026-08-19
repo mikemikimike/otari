@@ -103,14 +103,22 @@ are not reproducible (recharts, which animates on mount with no way to disable i
 and any relative timestamp). If you find a third source of noise, mask it in `fixtures.ts`
 with a comment, rather than loosening the pixel threshold for everything.
 
-**Baselines are Linux PNGs produced by CI**, committed under
-`e2e/screenshots/__snapshots__/<project>/`. A macOS capture renders fonts differently, so a
-local run reports diffs that mean nothing: use it to check a page renders, not to judge a
-diff, and do not commit what it writes. To obtain baselines for a new page, push the branch
-and let the `screenshots` job run: it captures with `--update-snapshots=missing`, then fails
-the "committed baselines are up to date" check with the new files attached as the
-`screenshot-baselines` artifact. Download it, commit the PNGs, push again.
+**No baselines are committed yet, and the suite is not a gate.** The dashboard is
+mid-migration onto the rehomed design foundation, so pages still move for good reasons: a
+committed set would fail most PRs and churn in every diff. So the `screenshots` job runs only
+on `workflow_dispatch`, `e2e/screenshots/__snapshots__/` is gitignored, and a PR that changes
+how a page looks owes no PNGs.
 
-An intended visual change is the same loop with the changed files replaced rather than added.
-Review the diff images in the artifact before committing: a baseline updated without looking
-is a regression that has been made official.
+What a PR does owe is the entry above, because that is what makes the page covered the day
+this becomes a gate rather than the day someone remembers it.
+
+Running it is still worth doing when you have changed a layout: `pnpm --dir web run
+e2e:screenshots` captures every page at every size locally and leaves the PNGs where you can
+look at them. Treat them as a rendering check, not a diff: a macOS capture renders fonts
+differently from CI's Linux, so the two sets are not comparable. To get a Linux set (which is
+also what a future baseline commit needs), run the workflow from the Actions tab or with
+`gh workflow run otari-dashboard.yml --ref <branch>` and download the `screenshot-baselines`
+artifact.
+
+Turning it into a gate later is three edits: add `pull_request` back to the job's condition,
+drop the `.gitignore` entry, and commit the Linux set that run captures.

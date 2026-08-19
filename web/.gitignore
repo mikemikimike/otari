@@ -18,3 +18,10 @@ e2e/e2e.db-shm
 # prove Biome rejects it, and removes it in the same test. Ignored so a run killed
 # mid-test cannot leave one staged.
 src/**/__boundary_probe__/
+
+# Screenshot baselines. Not committed while the dashboard is mid-migration: the
+# suite runs on demand (see .github/workflows/otari-dashboard.yml), and a
+# committed set would churn in every PR that moves a page. Remove this entry in
+# the change that turns the suite into a gate, together with the Linux set CI
+# captures.
+e2e/screenshots/__snapshots__/
