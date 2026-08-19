@@ -464,11 +464,17 @@ class GatewayConfig(BaseSettings):
         description="Enable Prometheus metrics endpoint at /metrics",
     )
     accept_incoming_trace_context: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "When True (default), honor incoming W3C Trace Context headers "
-            "(traceparent/tracestate). Set to False to ignore caller-supplied "
-            "trace context and always start request traces locally."
+            "Honor incoming OpenTelemetry context propagation headers. The default "
+            "propagator uses W3C Trace Context (traceparent/tracestate); the "
+            "OTEL_PROPAGATORS environment variable controls the configured set. "
+            "Disabled by default: the headers are unauthenticated (the middleware "
+            "runs before route auth) and, once enabled, let any caller pick the "
+            "trace id, parent span id, and sampling flag that reach the operator's "
+            "collector. Enable only for backend/service-to-service deployments "
+            "where callers are trusted, ideally behind a proxy that strips these "
+            "headers from untrusted edges."
         ),
     )
     enable_docs: bool = Field(

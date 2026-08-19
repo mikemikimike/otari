@@ -62,8 +62,8 @@ def test_cors_with_specific_origins(postgres_url: str, test_db: Session) -> None
         dispose_override()
 
 
-def test_cors_allows_trace_context_headers(postgres_url: str, test_db: Session) -> None:
-    """Test that preflight accepts traceparent and tracestate headers."""
+def test_cors_rejects_trace_context_headers(postgres_url: str, test_db: Session) -> None:
+    """Test that trace-context headers are not enabled for cross-origin requests."""
     config = GatewayConfig(
         database_url=postgres_url,
         master_key="test-master-key",
@@ -86,10 +86,10 @@ def test_cors_allows_trace_context_headers(postgres_url: str, test_db: Session) 
                     "Access-Control-Request-Headers": "traceparent,tracestate",
                 },
             )
-            assert response.status_code == 200
+            assert response.status_code == 400
             allow_headers = response.headers.get("access-control-allow-headers", "").lower()
-            assert "traceparent" in allow_headers
-            assert "tracestate" in allow_headers
+            assert "traceparent" not in allow_headers
+            assert "tracestate" not in allow_headers
     finally:
         dispose_override()
 

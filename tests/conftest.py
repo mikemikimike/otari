@@ -84,8 +84,6 @@ def _reset_default_pricing() -> Generator[None, None, None]:
     configure_default_pricing(False)
     configure_provider_types(None)
     reset_price_refresh_state()
-<<<<<<< HEAD
-
 
 def seed_workspace_id(db: Any) -> Any:
     """The workspace a directly-built request-plane row belongs to.
@@ -160,5 +158,12 @@ def _extract_otel_context_from_carrier(carrier: Mapping[str, str]) -> Context | 
         return None
 
     return context
-=======
->>>>>>> 7bb82e1 (fix(otel): address review feedback for trace propagation)
+
+@pytest.fixture(autouse=True)
+def _reset_db_state() -> Generator[None, None, None]:
+    from gateway.core.database import reset_db
+
+    try:
+        yield
+    finally:
+        reset_db()

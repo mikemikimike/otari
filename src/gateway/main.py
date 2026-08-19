@@ -551,8 +551,6 @@ def create_app(config: GatewayConfig) -> FastAPI:
                 "Authorization",
                 API_KEY_HEADER,
                 X_API_KEY_HEADER,
-                "traceparent",
-                "tracestate",
             ],
         )
 

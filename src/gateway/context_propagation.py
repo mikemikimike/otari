@@ -1,12 +1,22 @@
-"""OpenTelemetry context propagation middleware for W3C Trace Context.
+"""OpenTelemetry context propagation middleware.
 
-This middleware extracts the traceparent (and tracestate) headers from incoming
-requests using the standard `TraceContextTextMapPropagator`, and sets up the
-OpenTelemetry context so that subsequent spans created in the request are
-properly linked to the parent trace, with any vendor `tracestate` preserved.
+This middleware extracts incoming context using the propagator configured by
+OpenTelemetry, and sets up the context so that subsequent spans created in the
+request are properly linked to the parent trace. OpenTelemetry's default
+propagator set includes W3C Trace Context (`traceparent` and `tracestate`), but
+the `OTEL_PROPAGATORS` environment variable may select another configured set.
 
 If the header is not present, the middleware allows normal OpenTelemetry behavior
 (new traces are created as needed).
+
+Threat model: incoming propagation headers are unauthenticated, since this
+middleware runs before any route's auth dependency. Honoring them lets any caller
+(with no credential at all) choose the trace context that reaches the operator's
+collector. That is standard OpenTelemetry instrumentation behavior, not a
+vulnerability in itself, but it is a trust decision: this middleware is only
+installed when `accept_incoming_trace_context` is set (default off). Enable it
+only for backend/service-to-service deployments where callers are trusted,
+ideally behind a proxy that strips propagation headers at the edge.
 """
 
 from __future__ import annotations
@@ -15,12 +25,9 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from opentelemetry import context as otel_context
-from opentelemetry import trace
+from opentelemetry import propagate, trace
 from opentelemetry.context import Context
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from starlette.datastructures import Headers
-
-from gateway.log_config import logger
 
 if TYPE_CHECKING:
     from starlette.types import ASGIApp, Receive, Scope, Send
@@ -29,12 +36,18 @@ if TYPE_CHECKING:
 class TraceContextPropagationMiddleware:
     """Pure ASGI middleware that extracts W3C Trace Context from incoming requests.
 
-    When a request contains a traceparent header, this middleware extracts the
-    trace context and sets it in the OpenTelemetry context, so subsequent spans
-    are linked to the parent trace. Implemented as raw ASGI (like
+    When a request contains supported propagation headers, this middleware
+    extracts the context and sets it in the OpenTelemetry context, so subsequent
+    spans are linked to the parent trace. Implemented as raw ASGI (like
     `MetricsMiddleware`) rather than `BaseHTTPMiddleware`, whose `call_next`
     returns before a streaming response body finishes sending, which would
     detach the context before streaming spans are done.
+
+    Note: This middleware assumes incoming HTTP requests are the starting point
+    for traces, and that any relevant baggage comes from the caller's headers
+    (via the propagator's extraction logic). Existing context is preserved, so
+    if an outer layer (e.g., auto-instrumentation) has already set up a context
+    and spans, the incoming trace context becomes the new parent.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -43,10 +56,10 @@ class TraceContextPropagationMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Process incoming request and extract trace context.
 
-        Extracts the traceparent header if present and sets the OpenTelemetry
-        context before passing the request to the next middleware/handler.
-        Uses pure ASGI so context detachment happens after streaming responses
-        are fully sent.
+        Extracts incoming context if supported headers are present and sets the
+        OpenTelemetry context before passing the request to the next
+        middleware/handler. Uses pure ASGI so context detachment happens after
+        streaming responses are fully sent.
         """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -68,24 +81,26 @@ class TraceContextPropagationMiddleware:
 
 
 def extract_trace_context(carrier: Mapping[str, str]) -> Context | None:
-    """Extract W3C Trace Context (traceparent + tracestate) from a carrier.
+    """Extract incoming context using OpenTelemetry's configured propagators.
 
-    Delegates to the standard `TraceContextTextMapPropagator` instead of
-    hand-parsing the headers, so vendor `tracestate` entries are preserved
-    on the resulting span context.
+    The default OpenTelemetry configuration includes W3C Trace Context
+    (`traceparent` and `tracestate`). The `OTEL_PROPAGATORS` environment
+    variable controls the global propagator set used here, which may use
+    different carriers.
 
     Args:
         carrier: A mapping of request headers (e.g. `request.headers`).
 
     Returns:
-        An OpenTelemetry Context with the extracted trace context, or None if
-        extraction failed or no valid traceparent is present.
+        An OpenTelemetry Context with the extracted context, or None if
+        extraction failed or no valid context is present.
     """
-    try:
-        context = TraceContextTextMapPropagator().extract(carrier=carrier)
-    except Exception as exc:
-        logger.warning("Failed to extract trace context: %s", exc)
-        return None
+    # Extract into the current context so we preserve any existing baggage,
+    # suppress-instrumentation flags, or enclosing spans that may already
+    # be set (e.g., by an outer instrumentation layer).
+    context = propagate.extract(
+        carrier=carrier, context=otel_context.get_current()
+    )
 
     if trace.get_current_span(context).get_span_context().trace_id == trace.INVALID_TRACE_ID:
         return None
