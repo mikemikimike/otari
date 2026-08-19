@@ -48,10 +48,15 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
         // the popover itself is what names the current workspace (it marks it
         // with a check), and this label is what assistive tech reads.
         aria-label={`Switch workspace, currently ${workspaceName} in ${organizationName}`}
+        // 56px tall in both states, so the rail's first block is the same height
+        // whichever context it is in: the organization rail's "Back to" row sits
+        // in a box of exactly this height. The fill is the rail's own ground with
+        // a border, not a white card, which is what keeps it reading as part of
+        // the chrome rather than as the first item in the list.
         className={
           collapsed
-            ? "mx-2 mb-2 h-10 w-[calc(100%-1rem)]! items-center justify-center rounded-lg border border-border bg-surface px-0 transition-colors hover:border-accent"
-            : "mx-3 mb-2 h-auto w-[calc(100%-1.5rem)]! items-center justify-start gap-2.5 rounded-lg border border-border bg-surface px-2.5 py-2 text-left transition-colors hover:border-accent"
+            ? "min-h-14 w-full! items-center justify-center rounded-[0.625rem] border border-border bg-background-alt px-0 transition-colors hover:border-accent"
+            : "min-h-14 w-full! items-center justify-start gap-2.5 rounded-[0.625rem] border border-border bg-background-alt px-2.5 py-2 text-left transition-colors hover:border-accent"
         }
       >
         {/* The mark is the switcher's hero, as in the prototype: the product
@@ -59,15 +64,15 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
         <img
           src="/favicon.svg"
           alt=""
-          className={collapsed ? "h-6 w-6 shrink-0" : "h-7 w-7 shrink-0"}
+          className="h-[1.875rem] w-[1.875rem] shrink-0"
         />
         {collapsed ? null : (
           <>
-            <span className="flex min-w-0 flex-col">
-              <span className="truncate text-sm font-semibold text-foreground">
+            <span className="flex min-w-0 flex-1 flex-col gap-px">
+              <span className="truncate text-sm leading-[1.125rem] font-semibold tracking-[-0.01em] text-foreground">
                 {workspaceName}
               </span>
-              <span className="truncate text-xs text-muted">
+              <span className="truncate text-[0.6875rem] leading-[0.875rem] font-medium text-muted">
                 {organizationName}
               </span>
             </span>
@@ -76,8 +81,8 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
-              className="ml-auto h-4 w-4 shrink-0 text-muted"
+              strokeWidth="1.75"
+              className="h-5 w-5 shrink-0 text-muted"
             >
               <path
                 d="M8 10l4 4 4-4"
