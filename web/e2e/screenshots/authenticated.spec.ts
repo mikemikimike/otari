@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test"
 
-import { gotoRoute, login, openOrganization } from "../helpers"
+import { gotoRoute, login } from "../helpers"
 import { captureScreenshot, test } from "./fixtures"
 
 // One entry per destination the nav registry can reach. The matrix in
@@ -55,7 +55,14 @@ test.describe("workspace rail", () => {
 test.describe("organization rail", () => {
   test("organization general", async ({ page }) => {
     await login(page)
-    await openOrganization(page)
+    // Reached by URL like everything else in this file, not through the
+    // sidebar's footer link: on the mobile viewport that link lives inside the
+    // closed drawer, so clicking it times out and the page is never captured at
+    // the size most worth looking at.
+    await gotoRoute(page, "/organization")
+    await expect(
+      page.getByRole("heading", { name: /organization/i }).first(),
+    ).toBeVisible()
     await captureScreenshot(page, "organization-general")
   })
 
