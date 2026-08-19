@@ -536,7 +536,8 @@ def create_app(config: GatewayConfig) -> FastAPI:
 
     # Middleware stack is registered in reverse order (last-added runs first)
     app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(TraceContextPropagationMiddleware)
+    if config.accept_incoming_trace_context:
+        app.add_middleware(TraceContextPropagationMiddleware)
 
     if config.cors_allow_origins:
         allow_credentials = "*" not in config.cors_allow_origins
@@ -550,6 +551,8 @@ def create_app(config: GatewayConfig) -> FastAPI:
                 "Authorization",
                 API_KEY_HEADER,
                 X_API_KEY_HEADER,
+                "traceparent",
+                "tracestate",
             ],
         )
 

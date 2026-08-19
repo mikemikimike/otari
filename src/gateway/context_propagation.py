@@ -11,16 +11,14 @@ If the header is not present, the middleware allows normal OpenTelemetry behavio
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from starlette.datastructures import Headers
-from starlette.types import ASGIApp, Receive, Scope, Send
-
-from gateway.log_config import logger
 
 if TYPE_CHECKING:
     from starlette.types import ASGIApp, Receive, Scope, Send
@@ -52,7 +50,7 @@ class TraceContextPropagationMiddleware:
             await self.app(scope, receive, send)
             return
 
-        extracted_context = _extract_context_from_carrier(Headers(scope=scope))
+        extracted_context = extract_trace_context(Headers(scope=scope))
 
         if extracted_context is None:
             await self.app(scope, receive, send)
@@ -67,7 +65,7 @@ class TraceContextPropagationMiddleware:
             otel_context.detach(token)
 
 
-def _extract_context_from_carrier(carrier: Any) -> Context | None:
+def extract_trace_context(carrier: Mapping[str, str]) -> Context | None:
     """Extract W3C Trace Context (traceparent + tracestate) from a carrier.
 
     Delegates to the standard `TraceContextTextMapPropagator` instead of
@@ -81,11 +79,7 @@ def _extract_context_from_carrier(carrier: Any) -> Context | None:
         An OpenTelemetry Context with the extracted trace context, or None if
         extraction failed or no valid traceparent is present.
     """
-    try:
-        context = TraceContextTextMapPropagator().extract(carrier=carrier)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to extract trace context: %s", exc)
-        return None
+    context = TraceContextTextMapPropagator().extract(carrier=carrier)
 
     if trace.get_current_span(context).get_span_context().trace_id == trace.INVALID_TRACE_ID:
         return None

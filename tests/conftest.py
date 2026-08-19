@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Generator, Mapping
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
-from opentelemetry import trace
-from opentelemetry.context import Context
-from opentelemetry.trace import Span
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
@@ -88,6 +84,7 @@ def _reset_default_pricing() -> Generator[None, None, None]:
     configure_default_pricing(False)
     configure_provider_types(None)
     reset_price_refresh_state()
+<<<<<<< HEAD
 
 
 def seed_workspace_id(db: Any) -> Any:
@@ -163,3 +160,5 @@ def _extract_otel_context_from_carrier(carrier: Mapping[str, str]) -> Context | 
         return None
 
     return context
+=======
+>>>>>>> 7bb82e1 (fix(otel): address review feedback for trace propagation)

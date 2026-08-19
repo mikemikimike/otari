@@ -463,6 +463,14 @@ class GatewayConfig(BaseSettings):
         default=False,
         description="Enable Prometheus metrics endpoint at /metrics",
     )
+    accept_incoming_trace_context: bool = Field(
+        default=True,
+        description=(
+            "When True (default), honor incoming W3C Trace Context headers "
+            "(traceparent/tracestate). Set to False to ignore caller-supplied "
+            "trace context and always start request traces locally."
+        ),
+    )
     enable_docs: bool = Field(
         default=True,
         description="Enable FastAPI docs endpoints (/docs, /redoc, /openapi.json). Enabled by default.",
