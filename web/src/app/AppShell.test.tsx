@@ -484,8 +484,13 @@ describe("AppShell entitlement and flag gating", () => {
 
     const members = await screen.findByRole("link", { name: "Members & roles" })
     const parent = screen.getByRole("link", { name: "Organization" })
-    expect(members.className).toContain("bg-primary-subtle")
-    expect(parent.className).not.toContain("bg-primary-subtle")
+    // The selected fill, which the navigation design draws as a lifted chip
+    // (`--color-surface-muted`, reached through `bg-surface-alt`) rather than the
+    // tinted `bg-primary-subtle` this rail used to wear. Asserted as the class
+    // because it is what a reader of the rail actually sees; `aria-current` is
+    // covered separately.
+    expect(members.className).toContain("bg-surface-alt")
+    expect(parent.className).not.toContain("bg-surface-alt")
   })
 
   it("names a gated-off child route after the child, not its parent", async () => {

@@ -11,7 +11,13 @@
  * `aria-label` when the rail is collapsed), so the icon must not be announced a
  * second time. Hence `aria-hidden` on all of them, which `AppShell.test.tsx`
  * asserts across the whole shell.
+ *
+ * Size and stroke come from `rowStyles`, so a glyph cannot drift from the row it
+ * sits in: the navigation design draws these at 16px with a 1.75 stroke on a 24
+ * viewBox, and the 2 that suited a 20px glyph reads heavy at this size.
  */
+
+import { NAV_ICON_CLASS } from "./rowStyles"
 
 // A house: the deployment's front page, and what the navigation prototype
 // uses for Overview.
@@ -21,8 +27,8 @@ export const OverviewIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <path
       d="M3.5 10.5 12 3.5l8.5 7"
@@ -41,8 +47,8 @@ export const ActivityIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <path
       d="M3 12h4l2.5-6 4 12 2.5-6H21"
@@ -59,8 +65,8 @@ export const UsageIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <path
       d="M4 20V10M10 20V4M16 20v-7M22 20H2"
@@ -78,8 +84,8 @@ export const ProvidersIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <path
       d="M12 3.5 19 6v6c0 4-2.9 6.9-7 8.5-4.1-1.6-7-4.5-7-8.5V6z"
@@ -95,8 +101,8 @@ export const ModelsIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <path d="M12 3.5 20 8l-8 4.5L4 8z" strokeLinejoin="round" />
     <path d="m4 12 8 4.5L20 12" strokeLinejoin="round" strokeLinecap="round" />
@@ -111,8 +117,8 @@ export const RoutingIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <path d="M4 5h4l4 7 4-7h4" strokeLinejoin="round" />
     <path d="M4 19h4l4-7" strokeLinejoin="round" />
@@ -129,8 +135,8 @@ export const OrganizationIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <circle cx="12" cy="12" r="3" />
     <path
@@ -147,8 +153,8 @@ export const MembersIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <circle cx="9.5" cy="8.5" r="3" />
     <path d="M3.5 19.5a6 6 0 0 1 12 0" strokeLinecap="round" />
@@ -164,8 +170,8 @@ export const WorkspacesIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <rect x="3" y="4" width="12" height="9" rx="1.5" strokeLinejoin="round" />
     <path
@@ -188,8 +194,8 @@ export const UsersIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <circle cx="9" cy="8" r="3.2" strokeLinejoin="round" />
     <path
@@ -212,8 +218,8 @@ export const KeysIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <g transform="translate(12 12) scale(0.86) translate(-12 -12)">
       <circle cx="7.5" cy="15.5" r="4.5" />
@@ -231,8 +237,8 @@ export const BudgetsIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <path
       d="M3 7.5A1.5 1.5 0 0 1 4.5 6H18a1.5 1.5 0 0 1 1.5 1.5V9"
@@ -258,8 +264,8 @@ export const ToolsIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <g transform="translate(12 12) scale(0.86) translate(-12 -12)">
       <path
@@ -279,8 +285,8 @@ export const SettingsIcon = (
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth="2"
-    className="h-5 w-5 shrink-0"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
   >
     <path d="M4 7h9M17 7h3M4 17h3M11 17h9" strokeLinecap="round" />
     <circle cx="15" cy="7" r="2" />

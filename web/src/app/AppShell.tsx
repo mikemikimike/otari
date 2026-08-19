@@ -17,6 +17,7 @@ import {
   ORG_NAV_SECTIONS,
   visibleNavSections,
 } from "@/app/nav/registry"
+import { NAV_SECTION_HEADING_CLASS, navRowClass } from "@/app/nav/rowStyles"
 import type { NavItem } from "@/app/nav/types"
 import { useNavVisibility } from "@/app/nav/useNavVisibility"
 import { WorkspaceSwitcher } from "@/app/nav/WorkspaceSwitcher"
@@ -29,8 +30,8 @@ import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 
 const MIN_SIDEBAR = 200
 const MAX_SIDEBAR = 480
-const DEFAULT_SIDEBAR = 240
-const COLLAPSED_SIDEBAR = 60
+const DEFAULT_SIDEBAR = 264
+const COLLAPSED_SIDEBAR = 72
 const SIDEBAR_WIDTH_KEY = "otari.dashboard.sidebarWidth"
 const SIDEBAR_COLLAPSED_KEY = "otari.dashboard.sidebarCollapsed"
 const SIDEBAR_STEP = 16
@@ -85,16 +86,6 @@ function readStoredCollapsed(): boolean {
   }
 }
 
-// Shared by the nav links and the user-guide link below them, so the two agree
-// on shape and only differ in what marks the current page.
-const navLinkClass = (collapsed: boolean) =>
-  clsx(
-    "flex items-center rounded-lg py-2 text-sm font-medium transition-colors",
-    collapsed ? "justify-center px-0" : "gap-3 px-3",
-  )
-const NAV_ACTIVE = "bg-primary-subtle text-primary-subtle-foreground"
-const NAV_INACTIVE = "text-muted hover:bg-surface-alt hover:text-foreground"
-
 /**
  * A sidebar entry with destinations nested under it, drawn the way the
  * navigation prototype draws Routing and Tools: a row that expands rather than
@@ -136,21 +127,15 @@ function NavGroup({
   }
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className={clsx("flex flex-col", open && "gap-0.5")}>
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className={clsx(
-          navLinkClass(false),
-          "justify-between",
-          holdsCurrent ? NAV_ACTIVE : NAV_INACTIVE,
-        )}
+        className={navRowClass({ isActive: holdsCurrent })}
       >
-        <span className="flex items-center gap-3">
-          {item.icon}
-          {item.label}
-        </span>
+        {item.icon}
+        <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
         <svg
           aria-hidden="true"
           viewBox="0 0 24 24"
@@ -158,11 +143,15 @@ function NavGroup({
           stroke="currentColor"
           strokeWidth="2"
           className={clsx(
-            "h-4 w-4 shrink-0 transition-transform motion-reduce:transition-none",
-            open && "rotate-90",
+            "h-4 w-4 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+            open && "rotate-180",
           )}
         >
-          <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="M8 10l4 4 4-4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
       </button>
       {open
@@ -172,15 +161,14 @@ function NavGroup({
               to={child.to}
               activeOptions={{ exact: true }}
               onClick={onNavigate}
-              className={clsx(
-                navLinkClass(false),
-                // Indented to the parent's label rather than its icon, which is
-                // what marks it as nested without repeating a glyph.
-                "pl-11",
-                currentPath === child.to ? NAV_ACTIVE : NAV_INACTIVE,
-              )}
+              // Indented past the parent's icon lane rather than repeating a
+              // glyph, which is what marks the row as nested.
+              className={navRowClass({
+                isActive: currentPath === child.to,
+                nested: true,
+              })}
             >
-              {child.label}
+              <span className="min-w-0 flex-1 truncate">{child.label}</span>
             </Link>
           ))
         : null}
@@ -437,7 +425,7 @@ export function AppShell() {
           onKeyDown={isMobile && mobileNavOpen ? trapFocus : undefined}
           style={isMobile ? undefined : { width }}
           className={clsx(
-            "flex flex-col border-r border-border bg-background-alt focus:outline-none",
+            "flex flex-col gap-4 border-r border-border bg-background-alt p-3 focus:outline-none",
             isMobile
               ? clsx(
                   "fixed inset-y-0 left-0 z-40 w-[17rem] shadow-xl transition-transform duration-200",
@@ -453,78 +441,75 @@ export function AppShell() {
               is the switcher; in the organization context it is the way back
               out, which is how the prototype leaves that rail. */}
           {inOrganization ? (
-            <Link
-              to="/"
-              onClick={() => setMobileNavOpen(false)}
-              className={clsx(
-                navLinkClass(effectiveCollapsed),
-                NAV_INACTIVE,
-                effectiveCollapsed ? "mx-2 mt-3" : "mx-3 mt-3",
-              )}
-              aria-label={
-                effectiveCollapsed
-                  ? `Back to ${selectedWorkspace?.name ?? "workspace"}`
-                  : undefined
-              }
-              title={
-                effectiveCollapsed
-                  ? `Back to ${selectedWorkspace?.name ?? "workspace"}`
-                  : undefined
-              }
-            >
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                className="h-5 w-5 shrink-0"
+            <div className="flex min-h-14 items-center">
+              <Link
+                to="/"
+                onClick={() => setMobileNavOpen(false)}
+                className={navRowClass({ collapsed: effectiveCollapsed })}
+                aria-label={
+                  effectiveCollapsed
+                    ? `Back to ${selectedWorkspace?.name ?? "workspace"}`
+                    : undefined
+                }
+                title={
+                  effectiveCollapsed
+                    ? `Back to ${selectedWorkspace?.name ?? "workspace"}`
+                    : undefined
+                }
               >
-                <path
-                  d="M15 6l-6 6 6 6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              {effectiveCollapsed
-                ? null
-                : `Back to ${selectedWorkspace?.name ?? "workspace"}`}
-            </Link>
-          ) : (
-            <div className="pt-3">
-              <WorkspaceSwitcher collapsed={effectiveCollapsed} />
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="h-4 w-4 shrink-0"
+                >
+                  <path
+                    d="M19 12H4M10 6l-6 6 6 6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                {effectiveCollapsed ? null : (
+                  <span className="min-w-0 flex-1 truncate">
+                    {`Back to ${selectedWorkspace?.name ?? "workspace"}`}
+                  </span>
+                )}
+              </Link>
             </div>
+          ) : (
+            <WorkspaceSwitcher collapsed={effectiveCollapsed} />
           )}
           <nav
             // Named because the header's breadcrumb is a navigation landmark
             // too, and two unnamed ones give a screen-reader user no way to tell
             // the rail from the trail.
             aria-label="Sidebar"
+            // Expanded, one 2px rhythm runs through rows *and* between groups:
+            // the 32px heading block is what separates one group from the next.
+            // Collapsed there are no headings, so the gap has to do that work.
             className={clsx(
-              "flex flex-col py-4",
-              effectiveCollapsed ? "px-2" : "px-3",
+              "flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden",
+              effectiveCollapsed ? "gap-3" : "gap-0.5",
             )}
           >
-            {visibleSections.map(({ section, items }, sectionIndex) => {
+            {visibleSections.map(({ section, items }) => {
               return (
-                <div
+                <section
                   key={section.id}
-                  className={sectionIndex > 0 ? "mt-4" : undefined}
+                  aria-label={section.label}
+                  className="flex flex-col gap-0.5"
                 >
-                  {/* A header labels each group when expanded; a thin divider stands
-                      in for it when the sidebar is collapsed, or when a group has no
-                      header of its own (e.g. Settings) to set it off from the group
-                      above. */}
+                  {/* A heading labels each group when expanded. Collapsed there is
+                      no width for one, and an unlabeled group never had one, so in
+                      both cases the rhythm above does the separating instead of a
+                      rule: a divider between every pair of groups reads as five
+                      lists rather than one rail. */}
                   {!effectiveCollapsed && section.label ? (
-                    <div className="px-3 pb-1 text-[11px] font-semibold tracking-wider text-muted uppercase">
-                      {section.label}
-                    </div>
+                    <p className={NAV_SECTION_HEADING_CLASS}>{section.label}</p>
                   ) : null}
-                  {sectionIndex > 0 &&
-                  (effectiveCollapsed || !section.label) ? (
-                    <div className="mx-1 mb-2 border-t border-border" />
-                  ) : null}
-                  <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-0.5">
                     {items.map((item) =>
                       item.children && !effectiveCollapsed ? (
                         <NavGroup
@@ -551,12 +536,10 @@ export function AppShell() {
                           // route. `navItemForPath` prefers the exact entry, and a
                           // future child route (`/routing/new`) still resolves to
                           // its parent, which is the highlight that route wants.
-                          className={clsx(
-                            navLinkClass(effectiveCollapsed),
-                            currentItem?.to === item.to
-                              ? NAV_ACTIVE
-                              : NAV_INACTIVE,
-                          )}
+                          className={navRowClass({
+                            isActive: currentItem?.to === item.to,
+                            collapsed: effectiveCollapsed,
+                          })}
                           // Tapping a destination dismisses the mobile drawer so the
                           // page it navigated to is visible, not hidden behind it.
                           onClick={() => setMobileNavOpen(false)}
@@ -566,19 +549,23 @@ export function AppShell() {
                           title={effectiveCollapsed ? item.label : undefined}
                         >
                           {item.icon}
-                          {effectiveCollapsed ? null : item.label}
+                          {effectiveCollapsed ? null : (
+                            <span className="min-w-0 flex-1 truncate">
+                              {item.label}
+                            </span>
+                          )}
                         </Link>
                       ),
                     )}
                   </div>
-                </div>
+                </section>
               )
             })}
           </nav>
           {/* The account block, set off by a rule as in the navigation prototype:
               the way onto the organization rail, the bundled guide, and the
               account control whose menu carries appearance and sign-out. */}
-          <div className="mt-auto flex flex-col gap-1 border-t border-border pt-2 pb-3">
+          <div className="flex flex-col gap-1 border-t border-border pt-1 pb-[env(safe-area-inset-bottom)]">
             {/* The way into the organization rail. Only in the workspace
                 context, since the organization one has its own way back, and
                 only for someone who manages the organization: it is the single
@@ -595,9 +582,8 @@ export function AppShell() {
                 to="/organization/members"
                 onClick={() => setMobileNavOpen(false)}
                 className={clsx(
-                  navLinkClass(effectiveCollapsed),
-                  "border border-border bg-surface text-foreground transition-colors hover:border-accent hover:bg-surface-alt",
-                  effectiveCollapsed ? "mx-2" : "mx-3",
+                  navRowClass({ collapsed: effectiveCollapsed }),
+                  "border border-border bg-surface text-foreground hover:border-accent",
                 )}
                 aria-label={effectiveCollapsed ? "Organization" : undefined}
                 title={
