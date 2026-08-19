@@ -1,6 +1,6 @@
 # TypeScript & React conventions: `web/`
 
-TypeScript runs in `strict` mode; `npm --prefix web run typecheck` must pass. React 19.
+TypeScript runs in `strict` mode; `pnpm --dir web run typecheck` must pass. React 19.
 
 ## TypeScript
 
