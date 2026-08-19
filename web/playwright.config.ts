@@ -4,14 +4,33 @@ import { defineConfig, devices } from "@playwright/test"
 // built bundle (booted by `webServer` below). Component behavior is covered by
 // Vitest; this exercises the multi-page flows a browser actually walks.
 
-// The visual-regression matrix: every screenshot spec is captured at three
-// viewports in both themes. Widths are the ones otari-ai/frontend shoots, so a
-// page that moves between the two repos is compared at the same sizes.
-const SCREENSHOT_VIEWPORTS = [
-  { name: "desktop-large", viewport: { width: 1920, height: 1080 } },
-  { name: "desktop-small", viewport: { width: 1280, height: 800 } },
-  { name: "mobile", viewport: { width: 390, height: 844 } },
-] as const
+// The visual-regression matrix, ported from otari-ai/frontend's screenshot
+// suite so the two produce comparable captures and neither has to rediscover
+// what makes them stable. Widths are theirs, and so is the mobile descriptor:
+// `isMobile`/`hasTouch`/`deviceScaleFactor` layered on Desktop Chrome renders
+// the page as a real phone does (touch guards, viewport meta interpretation,
+// `:hover` rules) rather than as a desktop browser resized down.
+// `devices["iPhone N"]` is deliberately not used: those default to webkit, and
+// one engine across all six projects is what keeps baselines comparable.
+const SCREENSHOT_VIEWPORTS = {
+  "desktop-large": {
+    ...devices["Desktop Chrome"],
+    viewport: { width: 1920, height: 1080 },
+  },
+  "desktop-small": {
+    ...devices["Desktop Chrome"],
+    viewport: { width: 1280, height: 800 },
+  },
+  mobile: {
+    ...devices["Desktop Chrome"],
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 3,
+    userAgent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  },
+} as const
 
 const SCREENSHOT_THEMES = ["light", "dark"] as const
 
@@ -19,31 +38,68 @@ const SCREENSHOT_THEMES = ["light", "dark"] as const
 // e2e/screenshots/fixtures.ts, which reads it back off the project name);
 // `colorScheme` here is the OS-level preference underneath it, set to match so
 // the two never disagree and native controls are painted the same way.
-const screenshotProjects = SCREENSHOT_VIEWPORTS.flatMap(({ name, viewport }) =>
-  SCREENSHOT_THEMES.map((theme) => ({
-    name: `screenshots-${name}-${theme}`,
-    testDir: "./e2e/screenshots",
-    // Captured against the state the parity specs leave behind, so the
-    // dependency is on that project rather than on the seed alone: what a page
-    // renders depends on the rows in the database, and "whichever project
-    // happened to run first" is not a fixture.
-    dependencies: ["parity"],
-    use: {
-      ...devices["Desktop Chrome"],
-      viewport,
-      colorScheme: theme,
-    },
-  })),
+//
+// `locale`, `timezoneId` and `reducedMotion` are pinned per project rather than
+// globally: identical date and number formatting is something a capture needs
+// and the behavioral specs have never depended on, so they keep running under
+// whatever the machine has.
+const screenshotProjects = Object.entries(SCREENSHOT_VIEWPORTS).flatMap(
+  ([viewportName, viewportUse]) =>
+    SCREENSHOT_THEMES.map((theme) => ({
+      // Prefixed, unlike otari-ai's bare `<viewport>-<theme>`, because this
+      // config also holds the behavioral projects and a bare `mobile-dark`
+      // would not say which suite it belongs to.
+      name: `screenshots-${viewportName}-${theme}`,
+      testDir: "./e2e/screenshots",
+      // The seed, and deliberately not the parity project on top of it. What a
+      // page renders depends on the rows in the database, so some dependency is
+      // required, but each parity flow creates and removes what it acts on, so
+      // the state they leave behind is the seed's. Depending on them instead
+      // buys nothing and costs everything: a single flaky behavioral test takes
+      // all 108 captures down with it, which is exactly what happened before
+      // this was narrowed. otari-ai needs no dependency at all, because its
+      // screenshots run against mocked endpoints.
+      dependencies: ["seed"],
+      // A capture reads pages and writes nothing, so unlike the behavioral
+      // projects (which share one gateway database and must not re-run) a
+      // single retry is safe, and absorbs CI contention.
+      retries: process.env.CI ? 1 : 0,
+      use: {
+        ...viewportUse,
+        colorScheme: theme,
+        locale: "en-US",
+        timezoneId: "UTC",
+        reducedMotion: "reduce" as const,
+      },
+    })),
 )
 
 export default defineConfig({
   testDir: "./e2e",
-  // Baselines are per project and platform-independent by name: CI captures on
-  // Linux and that is the only set committed, so a macOS run comparing against
-  // them reports font-rendering diffs. That is expected; see
-  // .github/skills/frontend-standards/testing.md before regenerating anything.
+  // otari-ai's layout: snapshots sit beside the spec that takes them, scoped
+  // per project. `{platform}` is deliberately absent, so there is one canonical
+  // set rather than one per developer OS; CI captures it on Linux, and a macOS
+  // run comparing against it reports font-rendering diffs that mean nothing.
+  // See .github/skills/frontend-standards/testing.md before regenerating.
   snapshotPathTemplate:
-    "e2e/screenshots/__snapshots__/{projectName}/{arg}{ext}",
+    "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}{ext}",
+  // Comparison budgets, values and reasoning from otari-ai. Playwright takes
+  // `Math.min` of `maxDiffPixels` and `width * height * maxDiffPixelRatio`, so
+  // the flat cap governs any capture whose ratio budget is looser than it,
+  // which is every tall one: a ratio alone scales with page height, so a long
+  // page earns a proportionally huge allowance and can absorb a whole changed
+  // paragraph without going red. `threshold` is the per-pixel color distance
+  // that counts as a difference at all, set high enough that antialiasing does
+  // not register as change.
+  expect: {
+    toHaveScreenshot: {
+      maxDiffPixels: 2_000,
+      maxDiffPixelRatio: 0.002,
+      threshold: 0.12,
+      animations: "disabled",
+      caret: "hide",
+    },
+  },
   // The flows mutate one shared gateway DB, so they run in order, not parallel.
   fullyParallel: false,
   workers: 1,

@@ -78,7 +78,7 @@ web/playwright-report/
 # Screenshot baselines: full-page PNGs at three viewports in both themes, which
 # the web stage never reads and which would otherwise grow the context with
 # every page added to the suite.
-web/e2e/screenshots/__snapshots__/
+web/e2e/screenshots/*-snapshots/
 **/*.tsbuildinfo
 
 # mypy

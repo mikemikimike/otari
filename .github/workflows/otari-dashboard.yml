@@ -229,10 +229,29 @@ jobs:
     # write as failed, so this step is red by construction today. It is the
     # capture that matters; `continue-on-error` keeps the run from reporting a
     # failure that means nothing until this becomes a gate.
+    #
+    # No `--` before the flag: pnpm forwards the separator and Playwright's CLI
+    # discards everything after it, so the flag would silently never arrive.
     - name: Capture screenshots
       continue-on-error: true
       working-directory: web
-      run: pnpm run e2e:screenshots -- --update-snapshots=missing
+      run: pnpm run e2e:screenshots --update-snapshots=missing
+
+    # `continue-on-error` above buys the "missing baselines are not a failure"
+    # behavior at the cost of the step's own signal: a gateway that never boots,
+    # or a browser that cannot launch, would otherwise leave a green run and an
+    # empty artifact. Counting what landed puts that signal back, without
+    # asserting the exact number, which changes every time a page is added.
+    - name: Check the capture produced something
+      working-directory: web
+      run: |
+        captured=$(find e2e/screenshots -name '*.png' | wc -l | tr -d ' ')
+        echo "captured $captured screenshots"
+        if [ "$captured" -lt 60 ]; then
+          echo "::error::Only $captured screenshots were captured, so the run"
+          echo "::error::failed for a reason other than absent baselines."
+          exit 1
+        fi
 
     - name: Upload screenshots
       if: always()

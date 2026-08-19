@@ -24,4 +24,4 @@ src/**/__boundary_probe__/
 # committed set would churn in every PR that moves a page. Remove this entry in
 # the change that turns the suite into a gate, together with the Linux set CI
 # captures.
-e2e/screenshots/__snapshots__/
+e2e/screenshots/*-snapshots/
