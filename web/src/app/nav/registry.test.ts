@@ -31,6 +31,7 @@ describe("nav registry", () => {
     expect(ORG_NAV_SECTIONS.map((section) => section.id)).toEqual([
       "org-people",
       "org-money",
+      "org-gateway",
       "org-general",
     ])
   })
@@ -52,10 +53,14 @@ describe("nav registry", () => {
       "Providers",
       "Members",
       "Members & roles",
+      "Providers",
       "Workspaces",
       "Spend & budgets",
       "Users",
-      "Organization",
+      "Billing",
+      "Guardrails",
+      "Gateways",
+      "Org settings",
       "Settings",
     ])
   })
@@ -88,6 +93,7 @@ describe("nav registry", () => {
     )
     expect(tenancy?.items.map((item) => [item.label, item.surface])).toEqual([
       ["Members & roles", "organizations"],
+      ["Providers", "organization_providers"],
       ["Workspaces", "workspaces"],
     ])
   })
@@ -101,7 +107,7 @@ describe("nav registry", () => {
     expect(navItemForPath("/organization/members")?.label).toBe(
       "Members & roles",
     )
-    expect(navItemForPath("/organization")?.label).toBe("Organization")
+    expect(navItemForPath("/organization")?.label).toBe("Org settings")
   })
 
   it("resolves a deeper path to the deepest entry above it", () => {
@@ -177,6 +183,43 @@ describe("nav registry", () => {
     for (const item of NAV_ITEMS) {
       if (item.capability === undefined) continue
       expect(BASE_CAPABILITIES).toContain(item.capability)
+    }
+  })
+
+  it("gates every declared-but-unserved destination on a surface", () => {
+    // The design's organization rail draws four rows this gateway has no endpoint
+    // for. Each is declared so the rail matches on a deployment that does serve
+    // them, and gated on a surface `STANDALONE_SURFACES` does not report so the
+    // row is absent here. Pinned as the whole set, because the failure mode is
+    // silent in both directions: a missing gate ships a link to a page that
+    // cannot work, and a gate on a surface the bootstrap *does* report hides a
+    // page that can.
+    const unserved = new Map([
+      ["/organization/provider-keys", "organization_providers"],
+      ["/organization/billing", "billing"],
+      ["/organization/guardrails", "organization_guardrails"],
+      ["/organization/gateways", "gateways"],
+    ])
+    for (const [to, surface] of unserved) {
+      expect(navItemForPath(to)?.surface).toBe(surface)
+    }
+    // And none of those surface names is one a standalone gateway reports, or the
+    // gate would be decoration.
+    const standalone = [
+      "budgets",
+      "keys",
+      "models",
+      "organizations",
+      "providers",
+      "routing",
+      "settings",
+      "tools",
+      "usage",
+      "users",
+      "workspaces",
+    ]
+    for (const surface of unserved.values()) {
+      expect(standalone).not.toContain(surface)
     }
   })
 

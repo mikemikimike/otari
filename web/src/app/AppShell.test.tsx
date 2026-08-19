@@ -399,9 +399,15 @@ describe("AppShell surface gating", () => {
       "Workspaces",
       "Spend & budgets",
       "Users",
-      "Organization",
+      "Org settings",
       "Settings",
     ])
+    // The design's rail has four more rows — the organization's own Providers,
+    // Billing, Guardrails and Gateways — and each is gated on a surface a
+    // standalone gateway does not report, so none of them is here. The Gateway
+    // group is all four's worst case: both its rows are gated, so the heading
+    // goes with them.
+    expect(screen.queryByText("Gateway")).toBeNull()
   })
 
   it("hides a destination whose surface the deployment does not host", async () => {
@@ -483,7 +489,7 @@ describe("AppShell entitlement and flag gating", () => {
     await renderShell(bootstrap(), { url: "/organization/members" })
 
     const members = await screen.findByRole("link", { name: "Members & roles" })
-    const parent = screen.getByRole("link", { name: "Organization" })
+    const parent = screen.getByRole("link", { name: "Org settings" })
     // The selected fill, which the navigation design draws as a lifted chip
     // (`--color-surface-muted`, reached through `bg-surface-alt`) rather than the
     // tinted `bg-primary-subtle` this rail used to wear. Asserted as the class

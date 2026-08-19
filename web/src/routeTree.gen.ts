@@ -27,7 +27,11 @@ import { Route as UsageRouteImport } from './routes/usage'
 import { Route as UsersRouteImport } from './routes/users'
 import { Route as WorkspacesRouteImport } from './routes/workspaces'
 import { Route as OrganizationIndexRouteImport } from './routes/organization.index'
+import { Route as OrganizationBillingRouteImport } from './routes/organization.billing'
+import { Route as OrganizationGatewaysRouteImport } from './routes/organization.gateways'
+import { Route as OrganizationGuardrailsRouteImport } from './routes/organization.guardrails'
 import { Route as OrganizationMembersRouteImport } from './routes/organization.members'
+import { Route as OrganizationProviderKeysRouteImport } from './routes/organization.provider-keys'
 import { Route as ToolsIndexRouteImport } from './routes/tools.index'
 import { Route as ToolsCodeExecutionRouteImport } from './routes/tools.code-execution'
 import { Route as ToolsGuardrailsRouteImport } from './routes/tools.guardrails'
@@ -123,11 +127,32 @@ const OrganizationIndexRoute = OrganizationIndexRouteImport.update({
   path: '/',
   getParentRoute: () => OrganizationRoute,
 } as any)
+const OrganizationBillingRoute = OrganizationBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => OrganizationRoute,
+} as any)
+const OrganizationGatewaysRoute = OrganizationGatewaysRouteImport.update({
+  id: '/gateways',
+  path: '/gateways',
+  getParentRoute: () => OrganizationRoute,
+} as any)
+const OrganizationGuardrailsRoute = OrganizationGuardrailsRouteImport.update({
+  id: '/guardrails',
+  path: '/guardrails',
+  getParentRoute: () => OrganizationRoute,
+} as any)
 const OrganizationMembersRoute = OrganizationMembersRouteImport.update({
   id: '/members',
   path: '/members',
   getParentRoute: () => OrganizationRoute,
 } as any)
+const OrganizationProviderKeysRoute =
+  OrganizationProviderKeysRouteImport.update({
+    id: '/provider-keys',
+    path: '/provider-keys',
+    getParentRoute: () => OrganizationRoute,
+  } as any)
 const ToolsIndexRoute = ToolsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -167,7 +192,11 @@ export interface FileRoutesByFullPath {
   '/usage': typeof UsageRoute
   '/users': typeof UsersRoute
   '/workspaces': typeof WorkspacesRoute
+  '/organization/billing': typeof OrganizationBillingRoute
+  '/organization/gateways': typeof OrganizationGatewaysRoute
+  '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
+  '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
@@ -190,7 +219,11 @@ export interface FileRoutesByTo {
   '/usage': typeof UsageRoute
   '/users': typeof UsersRoute
   '/workspaces': typeof WorkspacesRoute
+  '/organization/billing': typeof OrganizationBillingRoute
+  '/organization/gateways': typeof OrganizationGatewaysRoute
+  '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
+  '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
@@ -216,7 +249,11 @@ export interface FileRoutesById {
   '/usage': typeof UsageRoute
   '/users': typeof UsersRoute
   '/workspaces': typeof WorkspacesRoute
+  '/organization/billing': typeof OrganizationBillingRoute
+  '/organization/gateways': typeof OrganizationGatewaysRoute
+  '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
+  '/organization/provider-keys': typeof OrganizationProviderKeysRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
@@ -243,7 +280,11 @@ export interface FileRouteTypes {
     | '/usage'
     | '/users'
     | '/workspaces'
+    | '/organization/billing'
+    | '/organization/gateways'
+    | '/organization/guardrails'
     | '/organization/members'
+    | '/organization/provider-keys'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/web-search'
@@ -266,7 +307,11 @@ export interface FileRouteTypes {
     | '/usage'
     | '/users'
     | '/workspaces'
+    | '/organization/billing'
+    | '/organization/gateways'
+    | '/organization/guardrails'
     | '/organization/members'
+    | '/organization/provider-keys'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/web-search'
@@ -291,7 +336,11 @@ export interface FileRouteTypes {
     | '/usage'
     | '/users'
     | '/workspaces'
+    | '/organization/billing'
+    | '/organization/gateways'
+    | '/organization/guardrails'
     | '/organization/members'
+    | '/organization/provider-keys'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/web-search'
@@ -447,11 +496,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrganizationIndexRouteImport
       parentRoute: typeof OrganizationRoute
     }
+    '/organization/billing': {
+      id: '/organization/billing'
+      path: '/billing'
+      fullPath: '/organization/billing'
+      preLoaderRoute: typeof OrganizationBillingRouteImport
+      parentRoute: typeof OrganizationRoute
+    }
+    '/organization/gateways': {
+      id: '/organization/gateways'
+      path: '/gateways'
+      fullPath: '/organization/gateways'
+      preLoaderRoute: typeof OrganizationGatewaysRouteImport
+      parentRoute: typeof OrganizationRoute
+    }
+    '/organization/guardrails': {
+      id: '/organization/guardrails'
+      path: '/guardrails'
+      fullPath: '/organization/guardrails'
+      preLoaderRoute: typeof OrganizationGuardrailsRouteImport
+      parentRoute: typeof OrganizationRoute
+    }
     '/organization/members': {
       id: '/organization/members'
       path: '/members'
       fullPath: '/organization/members'
       preLoaderRoute: typeof OrganizationMembersRouteImport
+      parentRoute: typeof OrganizationRoute
+    }
+    '/organization/provider-keys': {
+      id: '/organization/provider-keys'
+      path: '/provider-keys'
+      fullPath: '/organization/provider-keys'
+      preLoaderRoute: typeof OrganizationProviderKeysRouteImport
       parentRoute: typeof OrganizationRoute
     }
     '/tools/': {
@@ -486,12 +563,20 @@ declare module '@tanstack/react-router' {
 }
 
 interface OrganizationRouteChildren {
+  OrganizationBillingRoute: typeof OrganizationBillingRoute
+  OrganizationGatewaysRoute: typeof OrganizationGatewaysRoute
+  OrganizationGuardrailsRoute: typeof OrganizationGuardrailsRoute
   OrganizationMembersRoute: typeof OrganizationMembersRoute
+  OrganizationProviderKeysRoute: typeof OrganizationProviderKeysRoute
   OrganizationIndexRoute: typeof OrganizationIndexRoute
 }
 
 const OrganizationRouteChildren: OrganizationRouteChildren = {
+  OrganizationBillingRoute: OrganizationBillingRoute,
+  OrganizationGatewaysRoute: OrganizationGatewaysRoute,
+  OrganizationGuardrailsRoute: OrganizationGuardrailsRoute,
   OrganizationMembersRoute: OrganizationMembersRoute,
+  OrganizationProviderKeysRoute: OrganizationProviderKeysRoute,
   OrganizationIndexRoute: OrganizationIndexRoute,
 }
 

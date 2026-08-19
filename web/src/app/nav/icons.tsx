@@ -76,9 +76,26 @@ export const UsageIcon = (
   </svg>
 )
 
-// A shield: these are stored credentials, which is what the prototype's
-// Provider credentials entry draws, rather than the hardware serving them.
+// A cube, as the design draws Providers: a credential belongs to a provider
+// instance, and the box is that instance. The shield this used to be now belongs
+// to Guardrails, which is the one entry in either rail that is about refusing
+// something.
 export const ProvidersIcon = (
+  <svg
+    aria-hidden="true"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
+  >
+    <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" strokeLinejoin="round" />
+    <path d="m4 7.5 8 4.5 8-4.5M12 12v9" strokeLinejoin="round" />
+  </svg>
+)
+
+// A shield: the guardrails are what the gateway refuses on.
+export const GuardrailsIcon = (
   <svg
     aria-hidden="true"
     viewBox="0 0 24 24"
@@ -91,6 +108,53 @@ export const ProvidersIcon = (
       d="M12 3.5 19 6v6c0 4-2.9 6.9-7 8.5-4.1-1.6-7-4.5-7-8.5V6z"
       strokeLinejoin="round"
     />
+    <path d="m9 11.5 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+// A credit card: what an invoice is settled with.
+export const BillingIcon = (
+  <svg
+    aria-hidden="true"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
+  >
+    <rect x="3" y="5.5" width="18" height="13" rx="2" />
+    <path d="M3 10h18" strokeLinecap="round" />
+  </svg>
+)
+
+// Stacked racks: the gateways themselves, rather than what they serve.
+export const GatewaysIcon = (
+  <svg
+    aria-hidden="true"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
+  >
+    <rect x="3" y="4" width="18" height="7" rx="1.5" />
+    <rect x="3" y="13" width="18" height="7" rx="1.5" />
+    <path d="M7 7.5h.01M7 16.5h.01" strokeLinecap="round" />
+  </svg>
+)
+
+// A price tag: a rate attached to a model.
+export const PricingIcon = (
+  <svg
+    aria-hidden="true"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.75"
+    className={NAV_ICON_CLASS}
+  >
+    <path d="M20.5 12.5 12.5 20.5 3.5 11.5V3.5h8z" strokeLinejoin="round" />
+    <path d="M7.5 7.5h.01" strokeLinecap="round" />
   </svg>
 )
 
