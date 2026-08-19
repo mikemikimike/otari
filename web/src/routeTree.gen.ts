@@ -32,6 +32,7 @@ import { Route as OrganizationGatewaysRouteImport } from './routes/organization.
 import { Route as OrganizationGuardrailsRouteImport } from './routes/organization.guardrails'
 import { Route as OrganizationMembersRouteImport } from './routes/organization.members'
 import { Route as OrganizationProviderKeysRouteImport } from './routes/organization.provider-keys'
+import { Route as OrganizationUsageRouteImport } from './routes/organization.usage'
 import { Route as ToolsIndexRouteImport } from './routes/tools.index'
 import { Route as ToolsCodeExecutionRouteImport } from './routes/tools.code-execution'
 import { Route as ToolsGuardrailsRouteImport } from './routes/tools.guardrails'
@@ -153,6 +154,11 @@ const OrganizationProviderKeysRoute =
     path: '/provider-keys',
     getParentRoute: () => OrganizationRoute,
   } as any)
+const OrganizationUsageRoute = OrganizationUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => OrganizationRoute,
+} as any)
 const ToolsIndexRoute = ToolsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -197,6 +203,7 @@ export interface FileRoutesByFullPath {
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
+  '/organization/usage': typeof OrganizationUsageRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
@@ -224,6 +231,7 @@ export interface FileRoutesByTo {
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
+  '/organization/usage': typeof OrganizationUsageRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
@@ -254,6 +262,7 @@ export interface FileRoutesById {
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/provider-keys': typeof OrganizationProviderKeysRoute
+  '/organization/usage': typeof OrganizationUsageRoute
   '/tools/code-execution': typeof ToolsCodeExecutionRoute
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
@@ -285,6 +294,7 @@ export interface FileRouteTypes {
     | '/organization/guardrails'
     | '/organization/members'
     | '/organization/provider-keys'
+    | '/organization/usage'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/web-search'
@@ -312,6 +322,7 @@ export interface FileRouteTypes {
     | '/organization/guardrails'
     | '/organization/members'
     | '/organization/provider-keys'
+    | '/organization/usage'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/web-search'
@@ -341,6 +352,7 @@ export interface FileRouteTypes {
     | '/organization/guardrails'
     | '/organization/members'
     | '/organization/provider-keys'
+    | '/organization/usage'
     | '/tools/code-execution'
     | '/tools/guardrails'
     | '/tools/web-search'
@@ -531,6 +543,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrganizationProviderKeysRouteImport
       parentRoute: typeof OrganizationRoute
     }
+    '/organization/usage': {
+      id: '/organization/usage'
+      path: '/usage'
+      fullPath: '/organization/usage'
+      preLoaderRoute: typeof OrganizationUsageRouteImport
+      parentRoute: typeof OrganizationRoute
+    }
     '/tools/': {
       id: '/tools/'
       path: '/'
@@ -568,6 +587,7 @@ interface OrganizationRouteChildren {
   OrganizationGuardrailsRoute: typeof OrganizationGuardrailsRoute
   OrganizationMembersRoute: typeof OrganizationMembersRoute
   OrganizationProviderKeysRoute: typeof OrganizationProviderKeysRoute
+  OrganizationUsageRoute: typeof OrganizationUsageRoute
   OrganizationIndexRoute: typeof OrganizationIndexRoute
 }
 
@@ -577,6 +597,7 @@ const OrganizationRouteChildren: OrganizationRouteChildren = {
   OrganizationGuardrailsRoute: OrganizationGuardrailsRoute,
   OrganizationMembersRoute: OrganizationMembersRoute,
   OrganizationProviderKeysRoute: OrganizationProviderKeysRoute,
+  OrganizationUsageRoute: OrganizationUsageRoute,
   OrganizationIndexRoute: OrganizationIndexRoute,
 }
 

@@ -60,6 +60,7 @@ describe("nav registry", () => {
       "Billing",
       "Guardrails",
       "Gateways",
+      "Org usage",
       "Org settings",
       "Settings",
     ])

@@ -257,6 +257,15 @@ const ORGANIZATION_NAV_SECTIONS = [
     id: "org-general",
     label: "General",
     items: [
+      // The workspace rail's Usage asked a wider question: `/v1/usage` is
+      // unscoped without a `workspace_id`, so this is the same page reading
+      // across every workspace in the tenant rather than a second one.
+      {
+        to: "/organization/usage",
+        label: "Org usage",
+        surface: "usage",
+        icon: UsageIcon,
+      },
       {
         to: "/organization",
         label: "Org settings",

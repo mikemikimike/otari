@@ -427,7 +427,18 @@ interface BreakdownDimensionDef {
 
 // ---------- page ----------
 
-export function UsagePage() {
+/**
+ * @param scope Which rail this page is rendered on. `"workspace"` is the default
+ * and reads the switcher's selection, as the sidebar's other observability pages
+ * do. `"organization"` drops that filter, which is the whole difference between
+ * the two: `/v1/usage` is unscoped without a `workspace_id`, so the same page,
+ * the same filters, and the same charts answer for the tenant.
+ */
+export function UsagePage({
+  scope = "workspace",
+}: {
+  scope?: "workspace" | "organization"
+} = {}) {
   const navigate = useNavigate()
 
   // The share panel curates presentation only; the data it renders is whatever
@@ -466,12 +477,17 @@ export function UsagePage() {
       : "day"
     : preset.bucket
 
-  const { selected: workspace } = useSelectedWorkspace()
+  const { selected: selectedWorkspace } = useSelectedWorkspace()
+  // The organization rail is not inside a workspace, so it does not filter by
+  // one. Read unconditionally, because a hook cannot be skipped and the
+  // switcher's selection is chrome the shell shows either way.
+  const workspace = scope === "organization" ? null : selectedWorkspace
   const filters: UsageFilters = useMemo(
     () => ({
-      // From the sidebar's switcher, like the request log's. `previousFilters`
-      // spreads this, so the period-over-period comparison is scoped to the
-      // same workspace as the window it is compared against.
+      // From the sidebar's switcher, like the request log's, unless this is the
+      // organization-wide view. `previousFilters` spreads this, so the
+      // period-over-period comparison is scoped to the same workspace as the
+      // window it is compared against.
       workspace_id: workspace?.workspace_id,
       start_date: winStart,
       end_date: winEnd,
@@ -966,8 +982,14 @@ export function UsagePage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title="Usage & analytics"
-        description="Spend, tokens, cache use, and request volume over time. Group the chart by model, user, key, or source, and click a breakdown row to drill into the request log."
+        title={
+          scope === "organization" ? "Organization usage" : "Usage & analytics"
+        }
+        description={
+          scope === "organization"
+            ? "Spend, tokens, cache use, and request volume across every workspace in this organization. Group the chart by model, user, key, or source, and click a breakdown row to drill into the request log."
+            : "Spend, tokens, cache use, and request volume over time. Group the chart by model, user, key, or source, and click a breakdown row to drill into the request log."
+        }
       />
 
       <ErrorBanner
