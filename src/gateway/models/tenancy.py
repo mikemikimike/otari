@@ -39,12 +39,17 @@ Three deliberate departures from the platform's models, applied on arrival:
   never tables), so a column the hosted edition needs has to live here or
   nowhere. ``workspace.activation_classification`` and
   ``user.default_organization_id`` therefore stay, neither of them read by
-  anything in this edition. The columns
-  that do *not* come are the ones gated on the still-open identity decision
-  (otari-ai#1716): password hashes, OAuth provider, verification tokens. They
-  arrive with the flow that reads them, rather than being invented ahead of it.
-  Purely hosted CRM and onboarding columns are the third case and are simply
-  not part of the reconciled schema.
+  anything in this edition. Purely hosted CRM and onboarding columns are the
+  other case and are simply not part of the reconciled schema.
+- **Credential columns are nullable and unread, ahead of the flow that fills
+  them.** ``hashed_password``, ``oauth_provider``, ``email_verification_token``,
+  ``email_verified_at`` and ``terms_accepted_at`` (otari#645) exist so the
+  schema is ready for the authentication track; no route or service reads or
+  writes them yet. That inverts the usual rule for this file (a column arrives
+  with the flow that reads it), because the still-open identity decision
+  (otari-ai#1716) is about *how* those flows populate the columns, not whether
+  the columns exist. ``hashed_password`` is deliberately absent from
+  ``UserBase``/``UserCreate``: it must never round-trip through a wire schema.
 
 No ORM ``relationship()`` is declared on purpose. Lazy loading on an
 ``AsyncSession`` raises ``MissingGreenlet`` at the point of attribute access
@@ -263,6 +268,20 @@ class User(UserBase, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, table=True
         ondelete="SET NULL",
         index=True,
     )
+    # Nullable and unread by anything in this edition, see the module
+    # docstring: the schema is ready ahead of the authentication track, not a
+    # sign that these flows exist yet.
+    hashed_password: str | None = Field(default=None)
+    # A plain string, not a DB-level enum: the chain must stay dialect-neutral
+    # for SQLite, and there is no reader yet to justify committing to a
+    # closed set of values at the schema level.
+    oauth_provider: str | None = Field(default=None, max_length=50)
+    # Unique like ``email``: nullable so most rows carry no pending
+    # verification, unique so the verification flow can look an identity up
+    # by the token it was issued.
+    email_verification_token: str | None = Field(default=None, unique=True, index=True)
+    email_verified_at: datetime | None = _timestamp_field(default=None, column_kwargs={})
+    terms_accepted_at: datetime | None = _timestamp_field(default=None, column_kwargs={})
 
 
 # =============================================================================
