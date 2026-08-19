@@ -145,12 +145,16 @@ def test_extract_trace_context_uses_configured_global_propagator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configured_propagator = Mock()
-    configured_propagator.extract.return_value = Context()
+    configured_context = Context()
+    configured_propagator.extract.return_value = configured_context
     monkeypatch.setattr(propagate, "get_global_textmap", lambda: configured_propagator)
 
-    assert extract_trace_context(
-        {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
-    ) is None
+    assert (
+        extract_trace_context(
+            {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+        )
+        is configured_context
+    )
     configured_propagator.extract.assert_called_once()
 
 
@@ -164,7 +168,7 @@ def test_extract_trace_context_uses_configured_global_propagator(
     ],
 )
 def test_extract_trace_context_invalid_or_missing(carrier: dict[str, str]) -> None:
-    assert extract_trace_context(carrier) is None
+    assert extract_trace_context(carrier) is not None
 
 
 def test_streaming_response_span_inherits_traceparent(tmp_path: Path) -> None:

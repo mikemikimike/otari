@@ -25,7 +25,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from opentelemetry import context as otel_context
-from opentelemetry import propagate, trace
+from opentelemetry import propagate
 from opentelemetry.context import Context
 from starlette.datastructures import Headers
 
@@ -67,10 +67,6 @@ class TraceContextPropagationMiddleware:
 
         extracted_context = extract_trace_context(Headers(scope=scope))
 
-        if extracted_context is None:
-            await self.app(scope, receive, send)
-            return
-
         token = otel_context.attach(extracted_context)
         try:
             # Awaiting here spans the full response, including a streamed body,
@@ -80,7 +76,7 @@ class TraceContextPropagationMiddleware:
             otel_context.detach(token)
 
 
-def extract_trace_context(carrier: Mapping[str, str]) -> Context | None:
+def extract_trace_context(carrier: Mapping[str, str]) -> Context:
     """Extract incoming context using OpenTelemetry's configured propagators.
 
     The default OpenTelemetry configuration includes W3C Trace Context
@@ -92,8 +88,8 @@ def extract_trace_context(carrier: Mapping[str, str]) -> Context | None:
         carrier: A mapping of request headers (e.g. `request.headers`).
 
     Returns:
-        An OpenTelemetry Context with the extracted context, or None if
-        extraction failed or no valid context is present.
+        An OpenTelemetry Context with whatever the configured propagator could
+        extract from the carrier.
     """
     # Extract into the current context so we preserve any existing baggage,
     # suppress-instrumentation flags, or enclosing spans that may already
@@ -101,8 +97,5 @@ def extract_trace_context(carrier: Mapping[str, str]) -> Context | None:
     context = propagate.extract(
         carrier=carrier, context=otel_context.get_current()
     )
-
-    if trace.get_current_span(context).get_span_context().trace_id == trace.INVALID_TRACE_ID:
-        return None
 
     return context
