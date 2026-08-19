@@ -213,20 +213,20 @@ describe("AppShell responsive layout", () => {
     ).toHaveFocus()
   })
 
-  it("closes the drawer when the backdrop is clicked", async () => {
+  it("fills the viewport below the top bar rather than floating over the page", async () => {
     mockMatchMedia(true)
     const user = userEvent.setup()
     const { container } = await renderShell()
 
+    // The design's drawer is the width of the phone, starting under the top bar.
+    // There is therefore nothing behind it to dim, which is why the backdrop that
+    // used to dismiss it is gone: the control in that bar is what closes it.
     await user.click(screen.getByRole("button", { name: "Open navigation" }))
-    const backdrop = container.querySelector(".fixed.inset-0")!
-    expect(backdrop).toBeInTheDocument()
 
-    await user.click(backdrop)
-
-    expect(
-      screen.getByRole("button", { name: "Open navigation" }),
-    ).toHaveAttribute("aria-expanded", "false")
+    const aside = container.querySelector("aside")!
+    expect(aside.className).toContain("w-full")
+    expect(aside.className).toContain("top-14")
+    expect(container.querySelector(".fixed.inset-0")).toBeNull()
   })
 
   it("marks the drawer inert while closed so its links leave the tab order", async () => {
@@ -241,23 +241,23 @@ describe("AppShell responsive layout", () => {
     )
   })
 
-  it("makes the background (header + main) inert while the drawer is open", async () => {
+  it("makes the page inert while the drawer is open, and leaves the top bar live", async () => {
     mockMatchMedia(true)
     const user = userEvent.setup()
     const { container } = await renderShell()
 
     const header = container.querySelector("header")!
     const main = container.querySelector("main")!
-    // Background is interactive until the modal drawer opens.
-    expect(header).not.toHaveAttribute("inert")
     expect(main).not.toHaveAttribute("inert")
 
     await user.click(screen.getByRole("button", { name: "Open navigation" }))
 
-    // aria-modal isn't universally honored, so inert is what actually keeps the
-    // obscured page out of the tab order and the accessibility tree.
-    expect(header).toHaveAttribute("inert")
+    // The page behind the drawer goes inert, which is what keeps controls nobody
+    // can see out of the tab order and the accessibility tree. The top bar does
+    // not: the control that closes the drawer is in it, and inerting it would
+    // strand a keyboard user with only Escape.
     expect(main).toHaveAttribute("inert")
+    expect(header).not.toHaveAttribute("inert")
   })
 
   it("moves focus to the main region via the skip link without changing the route", async () => {

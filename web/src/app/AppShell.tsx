@@ -51,20 +51,6 @@ function readIsMobile(): boolean {
   return window.matchMedia(MOBILE_QUERY).matches
 }
 
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
-// Visible, focusable descendants of a container, in DOM order. offsetParent is
-// null for display:none nodes (e.g. the desktop-only collapse chevron on mobile),
-// so filtering on it keeps the focus trap's first/last from landing on a hidden
-// control that can't actually take focus.
-function getFocusable(container: HTMLElement | null): HTMLElement[] {
-  if (!container) return []
-  return Array.from(
-    container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-  ).filter((el) => el.offsetParent !== null || el === document.activeElement)
-}
-
 function readStoredSidebarWidth(): number {
   if (typeof window === "undefined") return DEFAULT_SIDEBAR
   try {
@@ -275,25 +261,6 @@ export function AppShell() {
     }
   }, [isMobile, mobileNavOpen])
 
-  // Keep Tab within the open drawer so focus cannot wander to the page behind the
-  // backdrop. Paired with the aside being inert while closed, this bounds keyboard
-  // focus to whichever surface is actually interactive.
-  const trapFocus = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
-    if (event.key !== "Tab") return
-    const focusables = getFocusable(asideRef.current)
-    if (focusables.length === 0) return
-    const first = focusables[0]
-    const last = focusables[focusables.length - 1]
-    const active = document.activeElement
-    if (event.shiftKey && (active === first || active === asideRef.current)) {
-      event.preventDefault()
-      last.focus()
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault()
-      first.focus()
-    }
-  }, [])
-
   useEffect(() => {
     const id = window.setTimeout(() => {
       try {
@@ -369,10 +336,11 @@ export function AppShell() {
   // The collapse rail and resize handle are desktop-only affordances; on mobile
   // the drawer always shows the full-width, labeled nav.
   const effectiveCollapsed = isMobile ? false : collapsed
-  // While the mobile drawer is open, make everything behind it (header + page)
-  // inert so a modal really is modal: aria-modal alone isn't universally honored,
-  // so this is what keeps an AT virtual cursor and Tab out of the obscured
-  // controls, not just the aside's own focus trap.
+  // While the mobile drawer is open, the page behind it is inert: that is what
+  // keeps an AT virtual cursor and Tab out of controls nobody can see. The top
+  // bar is deliberately not included, because the control that closes the drawer
+  // is in it, and the trail beside that control is the one thing worth reading
+  // while the drawer is open.
   const backgroundInert = isMobile && mobileNavOpen ? true : undefined
 
   return (
@@ -400,36 +368,29 @@ export function AppShell() {
       <ConnectionStatus />
       <PricingWarning />
       <div className="flex min-h-0 flex-1">
-        {/* On mobile the drawer floats over the page; a backdrop dims the content
-            behind it and dismisses it on tap. A non-interactive div (not a
-            button): dismissal by pointer is a convenience, keyboard users close
-            with Escape, and an aria-hidden interactive element is a contradiction. */}
-        {isMobile && mobileNavOpen ? (
-          <div
-            aria-hidden="true"
-            onClick={() => setMobileNavOpen(false)}
-            className="fixed inset-0 z-30 bg-backdrop/40 md:hidden"
-          />
-        ) : null}
-        {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: the role is conditional (dialog on mobile), which the rule cannot evaluate */}
         <aside
           ref={asideRef}
           id="app-sidebar"
-          // On mobile the drawer is a modal dialog; give it a name and mark it
-          // modal while open. While closed it is off-canvas, so inert takes its
+          // Named on mobile, where it is a panel that slides over the page
+          // rather than the page's own rail. Not a dialog and not modal: the
+          // design fills the viewport below the top bar, so nothing is left
+          // behind it to trap focus away from, and the control that dismisses it
+          // lives in that bar. While closed it is off-canvas, so inert takes its
           // links out of the tab order and the accessibility tree until opened.
-          role={isMobile ? "dialog" : undefined}
-          aria-modal={isMobile && mobileNavOpen ? true : undefined}
           aria-label={isMobile ? "Navigation" : undefined}
           tabIndex={isMobile ? -1 : undefined}
           inert={isMobile && !mobileNavOpen ? true : undefined}
-          onKeyDown={isMobile && mobileNavOpen ? trapFocus : undefined}
           style={isMobile ? undefined : { width }}
           className={clsx(
             "flex flex-col gap-4 border-r border-border bg-background-alt p-3 focus:outline-none",
             isMobile
               ? clsx(
-                  "fixed inset-y-0 left-0 z-40 w-[17rem] shadow-xl transition-transform duration-200",
+                  // Full width, starting below the top bar: `top-14` pairs with
+                  // the header's `min-h-14`, which is exact because everything in
+                  // that bar truncates rather than wrapping. The design fills the
+                  // viewport this way, which is why there is no backdrop to dim
+                  // and no shadow to lift it off a page you cannot see.
+                  "fixed inset-x-0 top-14 bottom-0 z-40 w-full transition-transform duration-200",
                   mobileNavOpen ? "translate-x-0" : "-translate-x-full",
                 )
               : clsx(
@@ -650,7 +611,6 @@ export function AppShell() {
             it, which is what lets the sidebar run the full height of the window. */}
         <div className="flex min-w-0 flex-1 flex-col">
           <header
-            inert={backgroundInert}
             // The design's top bar sits on the page ground rather than on a
             // card fill, so the rail is the only chrome that reads as a surface.
             className="flex min-h-14 shrink-0 items-center gap-4 border-b border-border bg-background pr-5 pl-4"
@@ -672,11 +632,15 @@ export function AppShell() {
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="2"
+                  strokeWidth="1.75"
                   className="h-5 w-5"
                 >
                   <path
-                    d="M4 6h16M4 12h16M4 18h16"
+                    d={
+                      mobileNavOpen
+                        ? "M6 6l12 12M18 6L6 18"
+                        : "M4 6h16M4 12h16M4 18h16"
+                    }
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
