@@ -569,22 +569,23 @@ export function AppShell() {
             {/* The way into the organization rail. Only in the workspace
                 context, since the organization one has its own way back, and
                 only for someone who manages the organization: it is the single
-                destination the prototype hides outright rather than degrading
-                to read-only.
+                destination the design hides outright rather than degrading to
+                read-only (artboard A2 is the member variant, and this row is
+                what it drops).
 
-                Drawn as a bordered row with a trailing chevron rather than as
-                another muted link, because it is the only control here that
-                changes context rather than opening a page, and because Users,
-                Budgets and Settings all moved behind it: an operator upgrading
-                from a sidebar that listed them needs to find this. */}
+                Drawn as an ordinary nav row, which is how the design draws it.
+                It used to be a bordered box with a trailing chevron, on the
+                argument that a context switch should not look like a page and
+                that an operator whose sidebar used to list Users, Budgets and
+                Settings needed to find where they went. Both were true and
+                neither survives the design: the box makes the footer read as a
+                button bar under the rail rather than as the end of it, and the
+                chevron promises a submenu that never opens. */}
             {!inOrganization && managesOrganization ? (
               <Link
                 to="/organization/members"
                 onClick={() => setMobileNavOpen(false)}
-                className={clsx(
-                  navRowClass({ collapsed: effectiveCollapsed }),
-                  "border border-border bg-surface text-foreground hover:border-accent",
-                )}
+                className={navRowClass({ collapsed: effectiveCollapsed })}
                 aria-label={effectiveCollapsed ? "Organization" : undefined}
                 title={
                   effectiveCollapsed
@@ -597,8 +598,8 @@ export function AppShell() {
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="2"
-                  className="h-5 w-5 shrink-0"
+                  strokeWidth="1.75"
+                  className="h-4 w-4 shrink-0"
                 >
                   <circle cx="12" cy="12" r="3" />
                   <path
@@ -607,29 +608,19 @@ export function AppShell() {
                   />
                 </svg>
                 {effectiveCollapsed ? null : (
-                  <>
-                    Organization
-                    <svg
-                      aria-hidden="true"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      className="ml-auto h-4 w-4 shrink-0 text-muted"
-                    >
-                      <path
-                        d="M9 6l6 6-6 6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </>
+                  <span className="min-w-0 flex-1 truncate">Organization</span>
                 )}
               </Link>
             ) : null}
             {/* One control, not a stack of links: the guide, appearance, and
                 sign-out all live in its menu, which is how the prototype ends
                 the rail. Sign-out used to sit in the page header. */}
+            {/* The design rules the account row off from the row above it, so
+                the control that ends the rail is not read as one more
+                destination in the group that changes context. */}
+            {!inOrganization && managesOrganization ? (
+              <div aria-hidden="true" className="h-px shrink-0 bg-border" />
+            ) : null}
             <AccountMenu collapsed={effectiveCollapsed} />
           </div>
           {collapsed || isMobile ? null : (
