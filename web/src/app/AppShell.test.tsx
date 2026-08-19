@@ -310,15 +310,13 @@ describe("AppShell responsive layout", () => {
     })
   })
 
-  it("links to the bundled user guide from the sidebar footer", async () => {
+  it("links to the bundled user guide from the top bar", async () => {
     mockMatchMedia(false)
-    const user = userEvent.setup()
     await renderShell()
 
-    // Still reachable, now from the account menu rather than as its own row:
-    // the footer is one control, and the guide is one of the things it opens.
-    await user.click(screen.getByRole("button", { name: "Account" }))
-    const guideLink = await screen.findByRole("link", { name: "User guide" })
+    // In the top bar, where the design puts it, rather than inside the account
+    // menu: the guide is read alongside a page rather than instead of one.
+    const guideLink = await screen.findByRole("link", { name: "Documentation" })
     expect(guideLink).toHaveAttribute("href", "/docs")
   })
 
@@ -597,10 +595,10 @@ describe("AppShell entitlement and flag gating", () => {
     await renderShell()
 
     // The header carried this until the sidebar grew an account block.
-    expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Log out" })).toBeNull()
     await user.click(screen.getByRole("button", { name: "Account" }))
     expect(
-      await screen.findByRole("button", { name: "Sign out" }),
+      await screen.findByRole("button", { name: "Log out" }),
     ).toBeInTheDocument()
   })
 

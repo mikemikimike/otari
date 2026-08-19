@@ -18,6 +18,7 @@ import {
   visibleNavSections,
 } from "@/app/nav/registry"
 import { NAV_SECTION_HEADING_CLASS, navRowClass } from "@/app/nav/rowStyles"
+import { TopBarActions } from "@/app/nav/TopBarActions"
 import type { NavItem } from "@/app/nav/types"
 import { useNavVisibility } from "@/app/nav/useNavVisibility"
 import { WorkspaceSwitcher } from "@/app/nav/WorkspaceSwitcher"
@@ -650,9 +651,11 @@ export function AppShell() {
         <div className="flex min-w-0 flex-1 flex-col">
           <header
             inert={backgroundInert}
-            className="flex shrink-0 items-center justify-between border-b border-border bg-surface px-5 py-3"
+            // The design's top bar sits on the page ground rather than on a
+            // card fill, so the rail is the only chrome that reads as a surface.
+            className="flex min-h-14 shrink-0 items-center gap-4 border-b border-border bg-background pr-5 pl-4"
           >
-            <div className="flex items-center gap-2.5">
+            <div className="flex min-w-0 flex-1 items-center gap-4">
               <button
                 type="button"
                 ref={toggleRef}
@@ -662,7 +665,7 @@ export function AppShell() {
                 }
                 aria-expanded={mobileNavOpen}
                 aria-controls="app-sidebar"
-                className="-ml-1 flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-alt hover:text-foreground md:hidden"
+                className="-ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-alt hover:text-foreground md:hidden"
               >
                 <svg
                   aria-hidden="true"
@@ -690,7 +693,7 @@ export function AppShell() {
                 aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                 aria-pressed={collapsed}
                 title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                className="-ml-1 hidden h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-alt hover:text-foreground md:flex"
+                className="-ml-1 hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-alt hover:text-foreground md:flex"
               >
                 <svg
                   aria-hidden="true"
@@ -706,6 +709,7 @@ export function AppShell() {
               </button>
               <Breadcrumbs pathname={pathname} />
             </div>
+            <TopBarActions />
           </header>
           <main
             ref={mainRef}
