@@ -219,9 +219,11 @@ jobs:
       working-directory: web
       run: pnpm exec playwright install --with-deps chromium
 
-    # `--update-snapshots=missing` writes a baseline that does not exist yet and
-    # compares every one that does, so a new page does not fail the run for
-    # having no baseline while a changed page still does.
+    # `--update-snapshots=missing` writes a baseline that does not exist yet
+    # rather than only reporting it, and compares every one that does. Playwright
+    # still marks a test whose baseline it had to write as failed, so this step
+    # goes red on a branch that adds a page; that is the intended way to obtain
+    # its baselines, and the step below says so.
     - name: Capture screenshots
       working-directory: web
       run: pnpm run e2e:screenshots -- --update-snapshots=missing
@@ -229,7 +231,10 @@ jobs:
     # Same contract as the route tree and the API client above: what CI produced
     # has to be what the branch committed. A newly written baseline shows up
     # here as an untracked file, so the message names the artifact to download.
+    # `always()` because the step above has already failed in exactly the case
+    # this message is for.
     - name: Check the committed baselines are up to date
+      if: always()
       working-directory: web
       run: |
         if [ -n "$(git status --porcelain -- e2e/screenshots/__snapshots__)" ]; then

@@ -36,13 +36,13 @@ async function open(page: Page, route: string, heading: RegExp): Promise<void> {
   ).toBeVisible()
 }
 
+// Deliberately not `mode: "serial"`, though the ordering it provides is already
+// there: playwright.config.ts runs the whole suite with one worker, so these run
+// in declaration order regardless. What serial would add is the part this suite
+// cannot afford, that a failing test skips every test after it in the file. One
+// page whose look changed would then take every page below it out of the run,
+// and a review would see one diff where there are five.
 test.describe("workspace rail", () => {
-  // Serial because the whole suite runs single-worker against one gateway
-  // database (see playwright.config.ts). Each test still signs in on its own
-  // page: the fixtures give every test a fresh context, which is also what
-  // makes the theme seeding apply before its first navigation.
-  test.describe.configure({ mode: "serial" })
-
   for (const { route, name, heading } of WORKSPACE_ROUTES) {
     test(name, async ({ page }) => {
       await login(page)
@@ -53,8 +53,6 @@ test.describe("workspace rail", () => {
 })
 
 test.describe("organization rail", () => {
-  test.describe.configure({ mode: "serial" })
-
   test("organization general", async ({ page }) => {
     await login(page)
     await openOrganization(page)
