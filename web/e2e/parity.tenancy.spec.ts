@@ -45,7 +45,7 @@ test.describe("standalone tenancy", () => {
   }) => {
     await login(page)
     await openOrganization(page)
-    await openPage(page, "Organization", "Organization")
+    await openPage(page, "Org settings", "Organization")
 
     // The master key names no user, so the first authenticated request
     // provisions this: one organization, one owner identity, one workspace.
@@ -181,7 +181,7 @@ test.describe("standalone tenancy", () => {
   }) => {
     await login(page)
     await openOrganization(page)
-    await openPage(page, "Organization", "Organization")
+    await openPage(page, "Org settings", "Organization")
 
     // A self-hosted gateway is one tenant with several people in it, so the
     // gateway mounts no endpoint to create, switch between, or delete an

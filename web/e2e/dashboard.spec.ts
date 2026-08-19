@@ -38,7 +38,7 @@ test.describe("dashboard core flows", () => {
     // page heading are no longer always the same word, so both are named.
     for (const [link, heading] of [
       ["Models", "Models"],
-      ["Provider credentials", "Providers"],
+      ["Providers", "Providers"],
     ]) {
       await nav(page).getByRole("link", { name: link }).click()
       // Exact match: the Budgets onboarding heading ("No budgets yet") would
@@ -62,9 +62,13 @@ test.describe("dashboard core flows", () => {
     for (const [link, heading] of [
       ["Users", "Users"],
       ["Spend & budgets", "Budgets"],
+      ["Model pricing", "Model pricing"],
+      ["Org usage", "Organization usage"],
+      // Exact, because this rail also carries "Org settings" and the default
+      // match is a substring one.
       ["Settings", "Settings"],
     ]) {
-      await nav(page).getByRole("link", { name: link }).click()
+      await nav(page).getByRole("link", { name: link, exact: true }).click()
       await expect(
         page.getByRole("heading", { name: heading, exact: true }),
       ).toBeVisible()
