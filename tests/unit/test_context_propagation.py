@@ -168,7 +168,7 @@ def test_extract_trace_context_uses_configured_global_propagator(
     ],
 )
 def test_extract_trace_context_invalid_or_missing(carrier: dict[str, str]) -> None:
-    assert extract_trace_context(carrier) is not None
+    assert isinstance(extract_trace_context(carrier), Context)
 
 
 def test_streaming_response_span_inherits_traceparent(tmp_path: Path) -> None:
