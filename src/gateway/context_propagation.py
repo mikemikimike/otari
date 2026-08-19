@@ -20,6 +20,8 @@ from opentelemetry.context import Context
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from starlette.datastructures import Headers
 
+from gateway.log_config import logger
+
 if TYPE_CHECKING:
     from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -79,7 +81,11 @@ def extract_trace_context(carrier: Mapping[str, str]) -> Context | None:
         An OpenTelemetry Context with the extracted trace context, or None if
         extraction failed or no valid traceparent is present.
     """
-    context = TraceContextTextMapPropagator().extract(carrier=carrier)
+    try:
+        context = TraceContextTextMapPropagator().extract(carrier=carrier)
+    except Exception as exc:
+        logger.warning("Failed to extract trace context: %s", exc)
+        return None
 
     if trace.get_current_span(context).get_span_context().trace_id == trace.INVALID_TRACE_ID:
         return None

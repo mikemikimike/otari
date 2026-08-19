@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -14,16 +13,6 @@ from starlette.responses import StreamingResponse
 from gateway.context_propagation import extract_trace_context
 from gateway.core.config import GatewayConfig
 from gateway.main import create_app
-
-
-@pytest.fixture
-def app() -> FastAPI:
-    return create_app(GatewayConfig())
-
-
-@pytest.fixture
-def client(app: FastAPI) -> TestClient:
-    return TestClient(app)
 
 
 @pytest.mark.parametrize(
@@ -35,11 +24,10 @@ def client(app: FastAPI) -> TestClient:
     ],
 )
 def test_http_request_span_inherits_traceparent(
-    app: FastAPI,
-    client: TestClient,
     traceparent: str,
     expected_trace_id: str,
 ) -> None:
+    app = create_app(GatewayConfig())
     provider = TracerProvider()
     tracer = provider.get_tracer(__name__)
 
@@ -52,13 +40,14 @@ def test_http_request_span_inherits_traceparent(
                 "vendor_tracestate": span_context.trace_state.get("vendor") or "",
             }
 
-    response = client.get(
-        "/test-trace-span",
-        headers={
-            "traceparent": traceparent,
-            "tracestate": "vendor=value",
-        },
-    )
+    with TestClient(app) as client:
+        response = client.get(
+            "/test-trace-span",
+            headers={
+                "traceparent": traceparent,
+                "tracestate": "vendor=value",
+            },
+        )
 
     assert response.status_code == 200
     assert response.json()["trace_id"] == expected_trace_id
@@ -66,20 +55,20 @@ def test_http_request_span_inherits_traceparent(
 
 
 @pytest.mark.parametrize(
-    "invalid_traceparent",
+    ("invalid_traceparent", "forbidden_trace_id"),
     [
-        "invalid",
-        "00",
-        "00-short-parts",
-        "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
-        "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+        ("invalid", None),
+        ("00", None),
+        ("00-short-parts", None),
+        ("00-00000000000000000000000000000000-00f067aa0ba902b7-01", "00000000000000000000000000000000"),
+        ("00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01", "4bf92f3577b34da6a3ce929d0e0e4736"),
     ],
 )
 def test_invalid_traceparent_creates_new_root_span(
-    app: FastAPI,
-    client: TestClient,
     invalid_traceparent: str,
+    forbidden_trace_id: str | None,
 ) -> None:
+    app = create_app(GatewayConfig())
     provider = TracerProvider()
     tracer = provider.get_tracer(__name__)
 
@@ -88,19 +77,23 @@ def test_invalid_traceparent_creates_new_root_span(
         with tracer.start_as_current_span("request_span") as span:
             return {"trace_id": format(span.get_span_context().trace_id, "032x")}
 
-    response = client.get(
-        "/test-invalid-traceparent",
-        headers={
-            "traceparent": invalid_traceparent,
-        },
-    )
+    with TestClient(app) as client:
+        response = client.get(
+            "/test-invalid-traceparent",
+            headers={
+                "traceparent": invalid_traceparent,
+            },
+        )
 
     assert response.status_code == 200
     trace_id = response.json()["trace_id"]
     assert trace_id != "00000000000000000000000000000000"
+    if forbidden_trace_id is not None:
+        assert trace_id != forbidden_trace_id
 
 
-def test_missing_traceparent_creates_new_root_span(app: FastAPI, client: TestClient) -> None:
+def test_missing_traceparent_creates_new_root_span() -> None:
+    app = create_app(GatewayConfig())
     provider = TracerProvider()
     tracer = provider.get_tracer(__name__)
 
@@ -109,7 +102,8 @@ def test_missing_traceparent_creates_new_root_span(app: FastAPI, client: TestCli
         with tracer.start_as_current_span("request_span") as span:
             return {"trace_id": format(span.get_span_context().trace_id, "032x")}
 
-    response = client.get("/test-missing-traceparent")
+    with TestClient(app) as client:
+        response = client.get("/test-missing-traceparent")
 
     assert response.status_code == 200
     assert response.json()["trace_id"] != "00000000000000000000000000000000"
