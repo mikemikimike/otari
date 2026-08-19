@@ -16,11 +16,13 @@ import type { NavItem, NavSection } from "./types"
 describe("nav registry", () => {
   it("exposes the base sections in display order", () => {
     expect(NAV_SECTIONS.map((section) => section.id)).toEqual([
-      "home",
       "observe",
       "gateway",
       "access",
     ])
+    // No unlabeled group: the index sits under Observe, which is where the
+    // navigation design puts it, so every section in this rail has a heading.
+    expect(NAV_SECTIONS.every((section) => section.label)).toBe(true)
   })
 
   it("exposes the organization sections in display order", () => {
@@ -47,7 +49,7 @@ describe("nav registry", () => {
       "Routing",
       "Tools",
       "API keys",
-      "Provider credentials",
+      "Providers",
       "Members",
       "Members & roles",
       "Workspaces",
@@ -147,10 +149,13 @@ describe("nav registry", () => {
     const observability = NAV_SECTIONS.find(
       (section) => section.id === "observe",
     )
-    expect(observability?.items.map((item) => item.surface)).toEqual([
-      "usage",
-      "usage",
-    ])
+    // The index leads the group and is deliberately ungated, so it is skipped:
+    // the pair below it is what shares the surface.
+    expect(
+      observability?.items
+        .filter((item) => item.label !== "Overview")
+        .map((item) => item.surface),
+    ).toEqual(["usage", "usage"])
   })
 
   it("gates no base entry on a capability or a flag", () => {

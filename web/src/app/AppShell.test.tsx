@@ -124,7 +124,7 @@ describe("AppShell responsive layout", () => {
     await renderShell()
 
     await user.click(screen.getByRole("button", { name: "Open navigation" }))
-    await user.click(screen.getByRole("link", { name: "Provider credentials" }))
+    await user.click(screen.getByRole("link", { name: "Providers" }))
 
     expect(await screen.findByText("PROVIDERS PAGE")).toBeInTheDocument()
     // Navigating closes the drawer so the page it landed on is not hidden behind it.
@@ -144,16 +144,17 @@ describe("AppShell responsive layout", () => {
     await renderShell()
 
     const overview = screen.getByRole("link", { name: "Overview" })
-    const providers = screen.getByRole("link", { name: "Provider credentials" })
+    const providers = screen.getByRole("link", { name: "Providers" })
     expect(overview).toHaveAttribute("aria-current", "page")
     expect(providers).not.toHaveAttribute("aria-current")
 
     await user.click(providers)
 
     expect(await screen.findByText("PROVIDERS PAGE")).toBeInTheDocument()
-    expect(
-      screen.getByRole("link", { name: "Provider credentials" }),
-    ).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("link", { name: "Providers" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    )
     expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute(
       "aria-current",
     )
@@ -371,7 +372,7 @@ describe("AppShell surface gating", () => {
       "Usage",
       "Models",
       "API keys",
-      "Provider credentials",
+      "Providers",
       "Members",
     ])
     // Routing and Tools nest destinations, so they expand rather than
@@ -416,19 +417,20 @@ describe("AppShell surface gating", () => {
     expect(screen.queryByRole("link", { name: "API keys" })).toBeNull()
     // Ungated and still present: the index is the deployment's front page.
     expect(screen.getByRole("link", { name: "Overview" })).toBeInTheDocument()
-    expect(
-      screen.getByRole("link", { name: "Provider credentials" }),
-    ).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Providers" })).toBeInTheDocument()
   })
 
   it("drops a section header once its whole group is gated away", async () => {
     mockMatchMedia(false)
     await renderShell(bootstrap({ surfaces: ["models"] }))
 
-    // "Observe" labels Activity and Usage; with neither served, an empty
-    // heading over nothing is worse than no heading.
-    expect(screen.queryByText("Observe")).toBeNull()
+    // "Access" labels keys, providers and the workspace roster; with none of
+    // them served, an empty heading over nothing is worse than no heading.
+    expect(screen.queryByText("Access")).toBeNull()
     expect(screen.getByText("Gateway")).toBeInTheDocument()
+    // "Observe" survives on the index alone, which is ungated by design: a
+    // deployment with no management surface at all still has a front page.
+    expect(screen.getByText("Observe")).toBeInTheDocument()
   })
 })
 
@@ -466,7 +468,7 @@ describe("AppShell entitlement and flag gating", () => {
     })
 
     expect(
-      await screen.findByText("Provider credentials is not available here"),
+      await screen.findByText("Providers is not available here"),
     ).toBeInTheDocument()
     expect(screen.queryByText("PAGE CONTENT")).toBeNull()
   })

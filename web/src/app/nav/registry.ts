@@ -24,14 +24,12 @@ import type { NavItem, NavSection } from "./types"
  * The sidebar the base build ships, and the only place a destination is
  * declared.
  *
- * Sections render in this order. "Observability" is what the gateway did (the
- * request log and the usage rollups over it); "Catalog" is what the gateway
- * serves (providers, their models, and the policies that route over them);
- * "Organization" is the tenant the deployment belongs to (itself, its roster,
- * and the workspaces it is divided into); "Access" is who may call it (users,
- * keys, budgets); the unlabeled first and last groups hold the index and the
- * standalone config, set off by a divider rather than a heading. Grouping keeps
- * the list legible as the dashboard grows.
+ * Sections render in this order, and they are the design's: "Observe" is where
+ * you look (the front page, the request log, and the usage rollups over it),
+ * "Gateway" is what the gateway serves (models, the policies that route over
+ * them, and the tools it can call), and "Access" is who may call it (keys, the
+ * upstream credentials those keys spend, and the workspace's roster). Every
+ * group carries a heading; there is no unlabeled one.
  *
  * Each entry declares its own gating, and the three axes are independent:
  * `surface` (does this deployment host it), `capability` (is it entitled), and
@@ -41,17 +39,15 @@ import type { NavItem, NavSection } from "./types"
  */
 const BASE_NAV_SECTIONS = [
   {
-    id: "home",
-    items: [
-      // Ungated on every axis: the index is the deployment's own front page and
-      // reads whatever it is allowed to.
-      { to: "/", label: "Overview", icon: OverviewIcon },
-    ],
-  },
-  {
     id: "observe",
     label: "Observe",
     items: [
+      // Ungated on every axis: the index is the deployment's own front page and
+      // reads whatever it is allowed to. Under the Observe heading rather than in
+      // an unlabeled group of its own, which is where the design puts it: a
+      // heading over one row and no heading over the row above it read as two
+      // sections, and there is only one thing here to observe from.
+      { to: "/", label: "Overview", icon: OverviewIcon },
       // Both read /v1/usage, which is why they name the surface rather than
       // themselves: a deployment that does not host usage loses both.
       {
@@ -121,9 +117,12 @@ const BASE_NAV_SECTIONS = [
     label: "Access",
     items: [
       { to: "/keys", label: "API keys", surface: "keys", icon: KeysIcon },
+      // "Providers", not "Provider credentials": the page manages the
+      // credential *and* the instance it belongs to, the rail has one line for
+      // it, and a two-word label is what the rest of this group reads like.
       {
         to: "/providers",
-        label: "Provider credentials",
+        label: "Providers",
         surface: "providers",
         icon: ProvidersIcon,
       },

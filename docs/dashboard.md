@@ -301,7 +301,7 @@ hand.
 
 ### Gateway
 
-- **Provider credentials**: add, edit, test, and delete provider credentials at runtime
+- **Providers**: add, edit, test, and delete provider credentials at runtime
   (standalone only). Stored keys are encrypted with `OTARI_SECRET_KEY`; config
   providers appear read-only. See the first-run walkthrough above. The add and
   edit forms also take **Client options (JSON)**, the `client_args` passed to the
@@ -379,8 +379,8 @@ hand.
   models a key may call and setting an expiry (leave blank for a key that never
   expires). A key belongs to one workspace, the one selected above, and every
   request on it is billed there.
-- **Provider credentials**: see Gateway above; the same page is reached from
-  either group.
+- **Providers**: the page described under Gateway above. It is listed here
+  because a provider credential is what a key spends upstream.
 - **Members**: who is assigned to the selected workspace and their role in it.
   A workspace's members are always a subset of the organization's, so someone
   joins the organization first, on the organization rail.
@@ -500,9 +500,9 @@ put it behind HTTPS, as the security notes below describe.
   server, expires the cookie, and clears any cached admin data. Rotating the
   master key revokes every session and re-mints the one you are using, so other
   signed-in browsers are logged out.
-- **Sign out on a machine you share.** A session runs for its full
+- **Log out on a machine you share.** A session runs for its full
   `dashboard_session_ttl_hours` with no idle timeout, so an unattended browser
-  stays signed in until the cookie expires. Use **Sign out** when you are done on
+  stays signed in until the cookie expires. Use **Log out** when you are done on
   a shared or public machine, or shorten `dashboard_session_ttl_hours`. Rotating
   the master key is the way to revoke a session you can no longer reach.
 - **Provider keys are write-only over the API.** Once stored, the plaintext is
