@@ -569,6 +569,33 @@ describe("AppShell entitlement and flag gating", () => {
     ).toBeNull()
   })
 
+  it("returns you to where you were on each rail rather than to its landing", async () => {
+    mockMatchMedia(false)
+    // The design's A ⇄ B note: crossing a rail should resume it, not reset it.
+    // Seeded through the memory rather than by navigating twice, because the
+    // controls under test are what read it.
+    window.localStorage.setItem(
+      "otari.dashboard.lastOrganizationLocation",
+      "/budgets",
+    )
+    await renderShell()
+
+    expect(
+      await screen.findByRole("link", { name: "Organization" }),
+    ).toHaveAttribute("href", "/budgets")
+  })
+
+  it("lands on the rail's own first page when there is nothing to resume", async () => {
+    mockMatchMedia(false)
+    // The solo-operator path: nothing remembered, so the way in must still be one
+    // click to somewhere useful rather than a dead control.
+    await renderShell()
+
+    expect(
+      await screen.findByRole("link", { name: "Organization" }),
+    ).toHaveAttribute("href", "/organization/members")
+  })
+
   it("expands a nav group to reveal its nested destinations", async () => {
     mockMatchMedia(false)
     const user = userEvent.setup()

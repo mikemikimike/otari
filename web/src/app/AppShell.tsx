@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { ConnectionStatus } from "@/app/ConnectionStatus"
 import { AccountMenu } from "@/app/nav/AccountMenu"
 import { Breadcrumbs } from "@/app/nav/Breadcrumbs"
+import { lastLocation, rememberLocation } from "@/app/nav/navigationHistory"
 import {
   NAV_SECTIONS,
   navContextForPath,
@@ -312,6 +313,16 @@ export function AppShell() {
   const managesOrganization =
     canManage(organization.data) || organization.isError
 
+  // Both rails remember where you were, so the controls that cross between them
+  // return you rather than resetting you. Recorded here rather than on those
+  // controls' clicks, so leaving a rail by a link on a page or by a bookmark
+  // updates the memory too.
+  useEffect(() => {
+    rememberLocation(pathname)
+  }, [pathname])
+  const organizationLanding = lastLocation("organization")
+  const workspaceLanding = lastLocation("workspace")
+
   const asideRef = useRef<HTMLElement>(null)
   const mainRef = useRef<HTMLElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
@@ -517,7 +528,7 @@ export function AppShell() {
           {inOrganization ? (
             <div className="flex min-h-14 items-center">
               <Link
-                to="/"
+                to={workspaceLanding?.to ?? "/"}
                 onClick={() => setMobileNavOpen(false)}
                 className={navRowClass({ collapsed: effectiveCollapsed })}
                 aria-label={
@@ -641,7 +652,7 @@ export function AppShell() {
                 chevron promises a submenu that never opens. */}
             {!inOrganization && managesOrganization ? (
               <Link
-                to="/organization/members"
+                to={organizationLanding?.to ?? "/organization/members"}
                 onClick={() => setMobileNavOpen(false)}
                 className={navRowClass({ collapsed: effectiveCollapsed })}
                 aria-label={effectiveCollapsed ? "Organization" : undefined}
