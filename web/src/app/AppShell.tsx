@@ -1,8 +1,10 @@
+import { Button, Popover } from "@heroui/react"
 import { Link, Outlet, useLocation } from "@tanstack/react-router"
 import { clsx } from "clsx"
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactNode,
   PointerEvent as ReactPointerEvent,
 } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -19,7 +21,7 @@ import {
 } from "@/app/nav/registry"
 import { NAV_SECTION_HEADING_CLASS, navRowClass } from "@/app/nav/rowStyles"
 import { TopBarActions } from "@/app/nav/TopBarActions"
-import type { NavItem } from "@/app/nav/types"
+import type { NavItem, NavPath } from "@/app/nav/types"
 import { useNavVisibility } from "@/app/nav/useNavVisibility"
 import { WorkspaceSwitcher } from "@/app/nav/WorkspaceSwitcher"
 import { UpdatePrompt } from "@/app/UpdatePrompt"
@@ -74,27 +76,86 @@ function readStoredCollapsed(): boolean {
 }
 
 /**
- * A sidebar entry with destinations nested under it, drawn the way the
- * navigation prototype draws Routing and Tools: a row that expands rather than
- * navigates, and indented children below it.
+ * One row of the rail, pointing at one destination.
+ *
+ * Shared by the leaves, a group's children, and a group that has collapsed to a
+ * single child, so the three cannot drift: they are the same row with a
+ * different indent and a different label.
+ *
+ * Collapsed, the label survives as the accessible name and as the tooltip,
+ * because the visible text is what a sighted reader loses and the only thing an
+ * assistive one had.
+ */
+function NavRowLink({
+  to,
+  label,
+  icon,
+  isActive,
+  collapsed,
+  nested,
+  onNavigate,
+}: {
+  to: NavPath
+  label: string
+  icon?: ReactNode
+  isActive: boolean
+  collapsed?: boolean
+  nested?: boolean
+  onNavigate: () => void
+}) {
+  return (
+    <Link
+      to={to}
+      // Exact, because the default is a prefix match: on /organization/members
+      // that leaves `aria-current` on "Organization" as well as on the child.
+      activeOptions={{ exact: true }}
+      onClick={onNavigate}
+      className={navRowClass({ isActive, collapsed, nested })}
+      aria-label={collapsed ? label : undefined}
+      title={collapsed ? label : undefined}
+    >
+      {icon}
+      {collapsed ? null : (
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+      )}
+    </Link>
+  )
+}
+
+/**
+ * A sidebar entry with destinations nested under it, drawn the way the design
+ * draws Routing and Tools: a row that expands rather than navigates, and
+ * indented children below it.
  *
  * Open when the current route is one of its children, so arriving by URL shows
  * where you are rather than a collapsed group. Held in state after that, so
  * closing it stays closed while you read the page it opened.
  *
- * Not rendered when the rail is collapsed: there is no width for the labels, and
- * the parent's icon links straight to its own page instead.
+ * Three shapes, and which one it takes is decided by how many children survive
+ * gating and whether the rail is collapsed:
+ *
+ * **One child** and it is not a group at all, but that child wearing the
+ * parent's name and glyph. A disclosure that opens onto a single row asks for a
+ * click to tell you nothing, and this is reachable: a deployment without the
+ * tools surface leaves Routing holding only Policies.
+ *
+ * **Collapsed** and it is an icon that opens a flyout of the children. This is
+ * the case the rail used to lose: the parent linked straight to its own page, so
+ * Guardrails, Web search and Code execution had no collapsed affordance at all
+ * and a bookmark was the only way back to them.
  */
 function NavGroup({
   item,
   currentPath,
   onNavigate,
   isVisible,
+  collapsed,
 }: {
   item: NavItem
   currentPath: string
   onNavigate: () => void
   isVisible: (item: NavItem) => boolean
+  collapsed: boolean
 }) {
   // A child declaring its own surface is gated on it. Without this the field
   // was decoration: Guardrails is grouped under Routing but served by the tools
@@ -105,12 +166,67 @@ function NavGroup({
   )
   const holdsCurrent = children.some((child) => child.to === currentPath)
   const [open, setOpen] = useState(holdsCurrent)
+  const [flyoutOpen, setFlyoutOpen] = useState(false)
   // Follows the route when navigation lands inside the group from elsewhere
   // (a link on a page, a bookmark), without fighting a manual close.
   const [lastHeld, setLastHeld] = useState(holdsCurrent)
   if (holdsCurrent !== lastHeld) {
     setLastHeld(holdsCurrent)
     if (holdsCurrent) setOpen(true)
+  }
+
+  const only = children.length === 1 ? children[0] : undefined
+  if (only) {
+    return (
+      <NavRowLink
+        to={only.to}
+        label={item.label}
+        icon={item.icon}
+        isActive={currentPath === only.to}
+        collapsed={collapsed}
+        onNavigate={onNavigate}
+      />
+    )
+  }
+
+  if (collapsed) {
+    return (
+      <Popover isOpen={flyoutOpen} onOpenChange={setFlyoutOpen}>
+        {/* HeroUI's Button, not a plain one: the popover wires its trigger
+            through react-aria, and a bare <button> leaves it unopenable. */}
+        <Button
+          variant="ghost"
+          aria-label={item.label}
+          className={`${navRowClass({ isActive: holdsCurrent, collapsed: true })} w-auto!`}
+        >
+          {item.icon}
+        </Button>
+        <Popover.Content placement="right top">
+          <Popover.Dialog
+            aria-label={item.label}
+            className="flex w-56 flex-col gap-0.5"
+          >
+            {/* Named, because the icon that opened this is the only other thing
+                saying which group these belong to, and it is off to the side. */}
+            <p className="flex min-h-8 items-center px-3 text-overline">
+              {item.label}
+            </p>
+            {children.map((child) => (
+              <NavRowLink
+                key={child.to}
+                to={child.to}
+                label={child.label}
+                isActive={currentPath === child.to}
+                onNavigate={() => {
+                  setFlyoutOpen(false)
+                  onNavigate()
+                }}
+              />
+            ))}
+          </Popover.Dialog>
+        </Popover.Content>
+      </Popover>
+    )
   }
 
   return (
@@ -128,7 +244,7 @@ function NavGroup({
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth="2"
+          strokeWidth="1.75"
           className={clsx(
             "h-4 w-4 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
             open && "rotate-180",
@@ -143,20 +259,16 @@ function NavGroup({
       </button>
       {open
         ? children.map((child) => (
-            <Link
+            <NavRowLink
               key={child.to}
               to={child.to}
-              activeOptions={{ exact: true }}
-              onClick={onNavigate}
+              label={child.label}
+              isActive={currentPath === child.to}
               // Indented past the parent's icon lane rather than repeating a
               // glyph, which is what marks the row as nested.
-              className={navRowClass({
-                isActive: currentPath === child.to,
-                nested: true,
-              })}
-            >
-              <span className="min-w-0 flex-1 truncate">{child.label}</span>
-            </Link>
+              nested
+              onNavigate={onNavigate}
+            />
           ))
         : null}
     </div>
@@ -473,50 +585,34 @@ export function AppShell() {
                   ) : null}
                   <div className="flex flex-col gap-0.5">
                     {items.map((item) =>
-                      item.children && !effectiveCollapsed ? (
+                      item.children ? (
                         <NavGroup
                           key={item.to}
                           item={item}
                           currentPath={pathname}
                           onNavigate={() => setMobileNavOpen(false)}
                           isVisible={isVisible}
+                          collapsed={effectiveCollapsed}
                         />
                       ) : (
-                        <Link
+                        // Highlighted from the registry's own answer rather than
+                        // from `activeProps`, whose default match is a prefix
+                        // one: on `/organization/members` that lights up
+                        // "General" as well, since `/organization` is its parent
+                        // route. `navItemForPath` prefers the exact entry, and a
+                        // future child route (`/routing/new`) still resolves to
+                        // its parent, which is the highlight that route wants.
+                        <NavRowLink
                           key={item.to}
                           to={item.to}
-                          // Exact, because the default is a prefix match: on
-                          // /organization/members that leaves `aria-current` on
-                          // "Organization" as well as on the child. The class
-                          // below was already driven from the registry; this is
-                          // the half a screen reader reads.
-                          activeOptions={{ exact: true }}
-                          // Highlighted from the registry's own answer rather than
-                          // from `activeProps`, whose default match is a prefix
-                          // one: on `/organization/members` that lights up
-                          // "General" as well, since `/organization` is its parent
-                          // route. `navItemForPath` prefers the exact entry, and a
-                          // future child route (`/routing/new`) still resolves to
-                          // its parent, which is the highlight that route wants.
-                          className={navRowClass({
-                            isActive: currentItem?.to === item.to,
-                            collapsed: effectiveCollapsed,
-                          })}
-                          // Tapping a destination dismisses the mobile drawer so the
-                          // page it navigated to is visible, not hidden behind it.
-                          onClick={() => setMobileNavOpen(false)}
-                          aria-label={
-                            effectiveCollapsed ? item.label : undefined
-                          }
-                          title={effectiveCollapsed ? item.label : undefined}
-                        >
-                          {item.icon}
-                          {effectiveCollapsed ? null : (
-                            <span className="min-w-0 flex-1 truncate">
-                              {item.label}
-                            </span>
-                          )}
-                        </Link>
+                          label={item.label}
+                          icon={item.icon}
+                          isActive={currentItem?.to === item.to}
+                          collapsed={effectiveCollapsed}
+                          // Tapping a destination dismisses the mobile drawer so
+                          // the page it landed on is visible, not behind it.
+                          onNavigate={() => setMobileNavOpen(false)}
+                        />
                       ),
                     )}
                   </div>

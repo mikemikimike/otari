@@ -640,14 +640,38 @@ describe("AppShell entitlement and flag gating", () => {
 
   it("drops a nested destination whose own surface the deployment lacks", async () => {
     mockMatchMedia(false)
-    const user = userEvent.setup()
     // Guardrails is grouped under Routing but served by the tools surface. The
     // link used to render anyway and land on the "not available here" panel.
     await renderShell(bootstrap({ surfaces: ["routing"] }))
 
-    await user.click(screen.getByRole("button", { name: "Routing" }))
-    expect(screen.getByRole("link", { name: "Policies" })).toBeInTheDocument()
     expect(screen.queryByRole("link", { name: "Guardrails" })).toBeNull()
+    // And with Guardrails gone, Routing holds one child, so it stops being a
+    // group: a disclosure that opens onto a single row asks for a click to tell
+    // you nothing. The row wears the parent's name and goes straight to it.
+    expect(screen.queryByRole("button", { name: "Routing" })).toBeNull()
+    const routing = await screen.findByRole("link", { name: "Routing" })
+    expect(routing).toHaveAttribute("href", "/routing")
+    expect(screen.queryByRole("link", { name: "Policies" })).toBeNull()
+  })
+
+  it("reaches a group's nested destinations from the collapsed rail", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    // The gap this closes: collapsed, the group used to link straight to its own
+    // page, so Web search and Code execution had no affordance at all and a
+    // bookmark was the only way back to them.
+    window.localStorage.setItem("otari.dashboard.sidebarCollapsed", "1")
+    await renderShell()
+
+    expect(screen.queryByRole("link", { name: "Tools" })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Tools" }))
+
+    expect(
+      await screen.findByRole("link", { name: "Web search" }),
+    ).toHaveAttribute("href", "/tools/web-search")
+    expect(
+      screen.getByRole("link", { name: "Code execution" }),
+    ).toBeInTheDocument()
   })
 
   it("marks one link as the current page on a nested route", async () => {
