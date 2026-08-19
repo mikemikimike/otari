@@ -144,7 +144,7 @@ for a in list_a:                        seen = set(list_b)
 
 ## Frontend (`web/`)
 
-The dashboard is small, but the same principles apply:
+The dashboard is small, but a page an operator leaves open all day compounds every mistake.
 
 - ✅ **Server does the shaping.** No client-side filtering/sorting/pagination of large server
   datasets when the endpoint can do it. Don't assemble a view from several requests and join in
@@ -152,12 +152,31 @@ The dashboard is small, but the same principles apply:
 - ✅ **TanStack Query owns server-state caching**, never duplicate it in `useState`. Pick
   `staleTime` per how fast the data moves; invalidate only the keys a mutation actually changes
   (see the frontend `data-fetching` guide).
+- ✅ **Loading guards are `isPending && !data`**, and a filtered or paginated query carries
+  `placeholderData: (prev) => prev`. A bare `isPending` re-renders a skeleton over data the
+  cache already has, which is a perceived-performance bug and a layout shift at once.
 - ✅ **Bounded "fetch all" loops** (`fetchAllPricing` caps pages) so a misbehaving backend can't
   spin an unbounded request loop.
-- ✅ **Effect cleanup**: remove listeners/intervals/subscriptions on unmount; correct
-  dependency arrays.
-- ✅ Memoize (`useMemo`/`useCallback`) only when a re-render is a measured problem, not by
-  reflex.
+- ✅ **Route files export `Route` and nothing else.** A second export defeats the router
+  plugin's `autoCodeSplitting`, so that page's whole component graph moves into the entry
+  chunk and ships to every visitor, including for routes their deployment never serves. Watch
+  the build log for `[tanstack-router] These exports … will not be code-split`; it is a
+  regression, not noise.
+- ✅ **Heavy, non-critical UI is lazy.** Modals, charts, and anything that mounts conditionally
+  go through `React.lazy` + `Suspense`, with `fallback={null}` for something just opened and a
+  fixed-height placeholder for anything above the fold. Mount a modal when it opens rather than
+  leaving it in the DOM behind an `isOpen` prop.
+- ✅ **Bundle watch.** `pnpm --dir web run build` prints every chunk; a new dependency landing
+  in the entry chunk, or a route chunk that jumps, is a finding. Import from subpaths, not
+  package barrels.
+- ✅ **Effect cleanup**: remove listeners/intervals/subscriptions/observers on unmount; correct
+  dependency arrays. In a long-lived dashboard these leak per navigation.
+- ✅ **Memoization needs a reason.** The React Compiler is enabled (`vite.config.ts`), so
+  hand-written `useMemo`/`useCallback`/`React.memo` should point at a profiler result or a
+  reference the compiler cannot prove stable. Flag reflexive memoization and flag hand-rolled
+  polling (`setInterval`) that should be `refetchInterval`.
+- ✅ **Long lists** past a few hundred rows paginate at the endpoint. Virtualization is a
+  deliberate decision, not a quiet addition.
 
 ## Severity guidelines
 

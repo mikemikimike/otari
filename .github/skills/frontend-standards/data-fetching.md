@@ -46,6 +46,35 @@ request after sign-in goes through `apiFetch`.
   key would fire a live provider call on every save. Think about invalidation blast radius when
   you pick a key.
 
+## Loading and error guards carry `&& !data`
+
+`isPending` is true again every time the key changes, so a guard on the flag alone blanks a
+populated page whenever a filter moves:
+
+```tsx
+if (isPending && !data) return <Skeleton />
+if (isError && !data) return <ErrorBanner error={error} />
+return <Table rows={data} />
+```
+
+`isLoading` (`isPending && isFetching`) is worse: it is false for a disabled or
+cache-restoring query, so it flashes an empty state at exactly the wrong moment. And for a
+query whose key carries filters or pagination, add `placeholderData: (previous) => previous`
+so the last result stays on screen through the refetch. [layout-stability.md](./layout-stability.md)
+has the rest of the flicker rules.
+
+## Independent requests run together
+
+Two awaits that do not depend on each other should not be sequential:
+
+```ts
+const [models, pricing] = await Promise.all([fetchModels(), fetchPricing()])
+```
+
+Inside a component this is usually not a question, because two `useQuery` calls already run in
+parallel. It comes up in a `queryFn` that assembles from more than one endpoint, and in the
+bounded walks below.
+
 ## Mutations invalidate what they change
 
 Every mutation invalidates exactly the keys its write affects, no more, no less:
@@ -69,6 +98,16 @@ export function useCreateAlias() {
 - Use `setQueryData` when the mutation already returns the fresh object (`useUpdateSettings`
   seeds `[SETTINGS]` from the response, then invalidates the derived model lists).
 - Prefix fire-and-forget invalidations with `void` so the floating-promise lint stays happy.
+
+### An error has to go somewhere
+
+A mutation's failure is the operator's business. Either let it surface where the action was
+taken (the call-site `mutate(vars, { onError })`, which is what the pages here do, rendering
+it through `ErrorBanner` and `errorMessage(error)`), or handle it in the hook. What is not
+acceptable is an `onError` that swallows: a delete that quietly did nothing is worse than one
+that says why it could not.
+
+401 and 403 are the exception and are already handled centrally, in `apiFetch`.
 
 ## Bounded pagination
 

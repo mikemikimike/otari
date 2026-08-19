@@ -19,6 +19,17 @@ TypeScript runs in `strict` mode; `npm --prefix web run typecheck` must pass. Re
   entry there says why; adding to it is a decision, not a shortcut. See
   [web/AGENTS.md](../../../web/AGENTS.md).
 - Let inference work for locals; annotate function signatures and exported values.
+- **`unknown`, not `any`, at a boundary you cannot type** (a thrown value, an opaque payload),
+  and narrow it with a guard before use. `errorMessage(error: unknown)` in
+  `shared/components/ui.tsx` is the pattern: one place turns an unknown into a display string.
+  Biome's `noExplicitAny` is off in `web/biome.jsonc` because the tree still has older `any`s,
+  which makes it a convention rather than a lint error; do not add to the pile.
+- **A discriminated union beats a bag of optionals** for anything with states. `{ status:
+  "error"; message: string } | { status: "success"; data: T }` makes `state.data` on the error
+  branch a compile error, where `{ status, message?, data? }` makes it a runtime `undefined`.
+- **`as const` on a literal table** that drives a union (`THEME_PREFERENCES`,
+  `STANDALONE_SURFACES`), so the values stay literals and the derived type is the set rather
+  than `string[]`.
 
 ## React
 
@@ -30,25 +41,15 @@ TypeScript runs in `strict` mode; `npm --prefix web run typecheck` must pass. Re
   copying them into `useState` and syncing with effects. Server state lives in TanStack Query,
   not in component state (see [data-fetching.md](./data-fetching.md)).
 - **Stable `key`s** for lists, a stable id, not the array index.
-- Reach for memoization only when a re-render is measurably a problem, not by reflex.
+- **The React Compiler is enabled** (`babel-plugin-react-compiler`, wired up in
+  `vite.config.ts`), so memoization is the build's job. Do not add `useMemo`, `useCallback`, or
+  `React.memo` without a measurement or a specific reference the compiler cannot prove stable.
+  It also means the rules of hooks are load-bearing: the compiler silently skips a component it
+  cannot verify. See [performance.md](./performance.md).
 - Keep a component per file, colocated with its test.
 
 ## Testing
 
-Vitest + Testing Library (`@testing-library/react`, `@testing-library/user-event`,
-`@testing-library/jest-dom` via `web/src/tests/setup.ts`). Run `npm --prefix web test`.
-
-- **Colocate**: `Foo.tsx` → `Foo.test.tsx`, `format.ts` → `format.test.ts`.
-- **Query the way a user would**: `getByRole`, `getByLabelText`, `getByText`. Avoid
-  `getByTestId` and CSS/class selectors, they break the moment markup or tokens change.
-- **Render real providers, mock the network boundary.** Wrap the component in a real
-  `QueryClientProvider` (see the existing page tests) so the real hooks and formatters run;
-  set the master key with `setMasterKey(…)` and stub `apiFetch`'s endpoints, not the hooks
-  themselves. Mocking `useModels`/`usePricing` directly hides query-key, loading, and error
-  regressions.
-- **Drive interactions with `userEvent`** and assert on the user-visible result; don't poke
-  component internals.
-- **Wait on the thing, not the clock.** Use `findBy*`/`waitFor` for async UI; never
-  `setTimeout`-sleep a test.
-- Keep test data explicit and deterministic (fixed ids, absolute dates like the existing
-  `ModelsPage.test.tsx` fixtures), not `Date.now()`.
+Vitest and Testing Library, colocated with the code they cover, mocking the transport rather
+than the hooks. The rules, the harnesses in `src/tests/`, and the two Playwright suites are in
+[testing.md](./testing.md).
