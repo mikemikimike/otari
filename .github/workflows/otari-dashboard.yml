@@ -51,44 +51,53 @@ jobs:
       with:
         persist-credentials: false
 
+    # Installs the pnpm that web/package.json's `packageManager` field pins, so
+    # the version is declared once for CI, the Docker image and a laptop. It has
+    # to precede setup-node, whose `cache: pnpm` shells out to pnpm for the store
+    # path; `package_json_file` is needed because the pin is in web/, not at the
+    # repository root.
+    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      with:
+        package_json_file: web/package.json
+
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: 22
-        cache: npm
-        cache-dependency-path: web/package-lock.json
+        cache: pnpm
+        cache-dependency-path: web/pnpm-lock.yaml
 
     - name: Install dependencies
-      run: npm ci
+      run: pnpm install --frozen-lockfile
 
     # Biome (web/biome.jsonc): formatting, the recommended rule set, and the layer
     # boundary (a feature may not import the composition root; shared/ may not import
-    # either; nothing may import an overlay's tree). `npm run lint` is `biome check`,
+    # either; nothing may import an overlay's tree). `pnpm run lint` is `biome check`,
     # which reports rather than rewrites, so a formatting drift fails here instead of
-    # landing as noise in the next person's diff. `npm run lint:fix` is the writing one.
+    # landing as noise in the next person's diff. `pnpm run lint:fix` is the writing one.
     - name: Lint and format check
-      run: npm run lint
+      run: pnpm run lint
 
     - name: Type-check
-      run: npm run typecheck
+      run: pnpm run typecheck
 
     - name: Test
-      run: npm test
+      run: pnpm test
 
     # The bundle is not committed (the Docker image builds it in a web stage), so
     # there is nothing to compare against; this proves the build still succeeds.
     - name: Build
-      run: npm run build
+      run: pnpm run build
 
     # The route tree IS committed (see AGENTS.md), and both steps above rewrite it
     # in place from web/src/routes/. Without this, adding a route and forgetting to
     # commit the regenerated file passes CI green: the runner regenerates it, uses
     # its own copy, and throws it away, leaving the stale one to break the next
-    # person's `npm run typecheck`, which runs tsc alone and never regenerates.
+    # person's `pnpm run typecheck`, which runs tsc alone and never regenerates.
     - name: Check the committed route tree is up to date
       run: git diff --exit-code -- src/routeTree.gen.ts
 
     # Same contract for the API client, which is generated from
-    # docs/public/openapi.json (see AGENTS.md). `npm test` regenerates it, so this
+    # docs/public/openapi.json (see AGENTS.md). `pnpm test` regenerates it, so this
     # catches both a spec change nobody regenerated against and an edit made to the
     # generated file by hand. Without it the runner would quietly use its own fresh
     # copy and pass while the committed one described a different API.
@@ -119,25 +128,34 @@ jobs:
     - name: Install Python deps
       run: uv sync --dev --frozen
 
+    # Installs the pnpm that web/package.json's `packageManager` field pins, so
+    # the version is declared once for CI, the Docker image and a laptop. It has
+    # to precede setup-node, whose `cache: pnpm` shells out to pnpm for the store
+    # path; `package_json_file` is needed because the pin is in web/, not at the
+    # repository root.
+    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      with:
+        package_json_file: web/package.json
+
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: 22
-        cache: npm
-        cache-dependency-path: web/package-lock.json
+        cache: pnpm
+        cache-dependency-path: web/pnpm-lock.yaml
 
     - name: Install web deps
       working-directory: web
-      run: npm ci
+      run: pnpm install --frozen-lockfile
 
     - name: Install Playwright Chromium
       working-directory: web
-      run: npx playwright install --with-deps chromium
+      run: pnpm exec playwright install --with-deps chromium
 
-    # `npm run e2e` builds the bundle first (see web/package.json), so a local run
+    # `pnpm run e2e` builds the bundle first (see web/package.json), so a local run
     # and CI serve the same freshly built dashboard.
     - name: Run end-to-end tests
       working-directory: web
-      run: npm run e2e
+      run: pnpm run e2e
 
     # The suite writes a Playwright trace for any test that fails
     # (`trace: "retain-on-failure"`), which is the only way to see what the browser
@@ -150,5 +168,84 @@ jobs:
       with:
         name: playwright-traces
         path: web/test-results/
+        retention-days: 7
+        if-no-files-found: ignore
+
+  screenshots:
+    # Visual regression: every screenshot spec captured at three viewports in
+    # both themes (web/playwright.config.ts). Separate from the e2e job because
+    # it is the slower half and fails for a different reason: e2e says a flow
+    # broke, this says a page changed shape.
+    #
+    # Baselines are Linux PNGs produced by this runner and committed to
+    # web/e2e/screenshots/__snapshots__/. A macOS capture renders fonts
+    # differently, so a laptop cannot produce a comparable one; the update step
+    # below writes any that are missing and the diff check then fails the job
+    # with them attached, which is how a new page's baselines are obtained.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        python-version: "3.14"
+
+    - name: Install Python deps
+      run: uv sync --dev --frozen
+
+    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      with:
+        package_json_file: web/package.json
+
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: web/pnpm-lock.yaml
+
+    - name: Install web deps
+      working-directory: web
+      run: pnpm install --frozen-lockfile
+
+    - name: Install Playwright Chromium
+      working-directory: web
+      run: pnpm exec playwright install --with-deps chromium
+
+    # `--update-snapshots=missing` writes a baseline that does not exist yet and
+    # compares every one that does, so a new page does not fail the run for
+    # having no baseline while a changed page still does.
+    - name: Capture screenshots
+      working-directory: web
+      run: pnpm run e2e:screenshots -- --update-snapshots=missing
+
+    # Same contract as the route tree and the API client above: what CI produced
+    # has to be what the branch committed. A newly written baseline shows up
+    # here as an untracked file, so the message names the artifact to download.
+    - name: Check the committed baselines are up to date
+      working-directory: web
+      run: |
+        if [ -n "$(git status --porcelain -- e2e/screenshots/__snapshots__)" ]; then
+          echo "::error::Screenshot baselines are missing or stale. Download the"
+          echo "::error::screenshot-baselines artifact from this run and commit it."
+          git status --short -- e2e/screenshots/__snapshots__
+          exit 1
+        fi
+
+    # Uploaded whatever the outcome, because both are useful: on a failure it
+    # carries the new baselines and the actual/diff PNGs, and on a pass it is
+    # the record of what the app looked like at this commit.
+    - name: Upload screenshots
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: screenshot-baselines
+        path: |
+          web/e2e/screenshots/__snapshots__/
+          web/test-results/
         retention-days: 7
         if-no-files-found: ignore

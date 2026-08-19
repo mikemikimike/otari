@@ -273,8 +273,10 @@ describe("the boundary check is wired up", () => {
     // Skipped rather than failed in a checkout without the workflows (a sparse
     // clone, a vendored copy of web/): the assertion has nothing to say there.
     if (!existsSync(workflow)) return
-    const runsLint = readFileSync(workflow, "utf8").includes("npm run lint")
-    expect(runsLint, "otari-dashboard.yml does not run npm run lint").toBe(true)
+    const runsLint = readFileSync(workflow, "utf8").includes("pnpm run lint")
+    expect(runsLint, "otari-dashboard.yml does not run pnpm run lint").toBe(
+      true,
+    )
   })
 })
 

@@ -25,10 +25,10 @@ const webRoot = fileURLToPath(new URL("./", import.meta.url))
 const docsDir = fileURLToPath(new URL("../docs", import.meta.url))
 
 // The gateway serves the dashboard and the API from one origin, so the app
-// fetches "/v1/..." and "/health" as same-origin paths. `npm run dev` serves
+// fetches "/v1/..." and "/health" as same-origin paths. `pnpm run dev` serves
 // only the SPA, so proxy those to a running gateway. Override the target to
 // develop against a deployed gateway instead of a local one:
-//   OTARI_DEV_API=https://your-app.up.railway.app npm run dev
+//   OTARI_DEV_API=https://your-app.up.railway.app pnpm run dev
 const apiTarget = process.env.OTARI_DEV_API ?? "http://localhost:8000"
 const apiProxy = { target: apiTarget, changeOrigin: true }
 
@@ -56,7 +56,15 @@ export default defineConfig({
     // file may export nothing but `Route`. Must precede the React plugin: it
     // rewrites the route modules that plugin then compiles.
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
-    react(),
+    // The React Compiler memoizes components and derived values at build time,
+    // which is why the frontend standards say not to sprinkle useMemo/useCallback
+    // by hand. It is a Babel pass, so it runs through this plugin's babel hook
+    // rather than as a plugin of its own, and it applies to the app's own source
+    // only (node_modules is excluded by @vitejs/plugin-react's default include).
+    // otari-ai/frontend runs the same pass; keep the two configured alike.
+    react({
+      babel: { plugins: [["babel-plugin-react-compiler", { target: "19" }]] },
+    }),
     tailwindcss(),
     announceApiTarget,
   ],

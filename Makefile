@@ -25,17 +25,18 @@ dev:
 # this to see the dashboard from a source checkout (without it the gateway
 # degrades to the tutorial page) and before building a wheel. The Docker image
 # builds it in its own web stage and needs no local Node.
-dashboard: web/node_modules/.package-lock.json
-	npm --prefix web run build
+dashboard: web/node_modules/.pnpm/lock.yaml
+	pnpm --dir web run build
 
-# `npm ci` deletes and reinstalls node_modules, which is the wrong price to pay on
-# every rebuild now that the READMEs send developers to `make dashboard` to see the
-# dashboard locally. Gate it on npm's own install stamp, which it writes inside
+# Reinstalling on every rebuild is the wrong price to pay now that the READMEs
+# send developers to `make dashboard` to see the dashboard locally. Gate it on
+# pnpm's own install stamp, the copy of the lockfile it writes inside
 # node_modules: absent (or older than the lockfile) means the tree is missing or
-# stale, and otherwise the install is already the one the lockfile asks for. Kept
-# as `ci` rather than `install` so the lockfile is never rewritten as a side effect.
-web/node_modules/.package-lock.json: web/package-lock.json
-	npm --prefix web ci
+# stale, and otherwise the install is already the one the lockfile asks for.
+# `--frozen-lockfile` is the `npm ci` of pnpm: it installs exactly the lockfile
+# and fails rather than rewriting it when package.json has moved on.
+web/node_modules/.pnpm/lock.yaml: web/pnpm-lock.yaml
+	pnpm --dir web install --frozen-lockfile
 
 test:
 	uv run pytest -v tests/unit tests/integration

@@ -1,17 +1,25 @@
 # The admin dashboard bundle is not committed (see .gitignore), so build it here.
 #
 # Pinned to BUILDPLATFORM: otari-docker.yml publishes linux/amd64 and linux/arm64,
-# so without this the whole npm ci + vite build runs a second time under QEMU for
+# so without this the whole install + vite build runs a second time under QEMU for
 # the non-native arch on every publish. The output is JavaScript, CSS, and PNGs,
 # which are architecture-independent, so one native build serves both images.
 FROM --platform=$BUILDPLATFORM node:22-slim AS web
 
 WORKDIR /app/web
 
+# The dashboard is a pnpm project. Corepack ships with Node and reads the
+# `packageManager` field in web/package.json, so the image installs with exactly
+# the pnpm the lockfile was written by, and the version is pinned in one place
+# rather than here as well. The prompt would block a non-interactive build.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable
+
 # Install from the lockfile alone, so the dependency layer is reused whenever
-# only dashboard sources changed.
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
+# only dashboard sources changed. pnpm-workspace.yaml carries the build-script
+# approvals (esbuild), without which the install refuses to link Vite's binary.
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY web ./
 # DocsPage.tsx imports the operator guide with Vite's `?raw`, so the build reads
@@ -20,7 +28,7 @@ COPY docs/dashboard.md /app/docs/dashboard.md
 
 # web/vite.config.ts writes to ../src/gateway/static/dashboard, so the bundle
 # lands at /app/src/gateway/static/dashboard for the runtime stage to copy.
-RUN npm run build
+RUN pnpm run build
 
 FROM python:3.14-slim AS builder
 

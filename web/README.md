@@ -14,7 +14,7 @@ storage.
 - HeroUI v3 (`@heroui/react`, `@heroui/styles`) on Tailwind CSS v4
 - TanStack Query for data fetching, TanStack Router (file-based) for routes
 - Vitest + Testing Library for tests
-- Biome for formatting and lint, including the layer boundary (`npm run lint`, `npm run lint:fix`)
+- Biome for formatting and lint, including the layer boundary (`pnpm run lint`, `pnpm run lint:fix`)
 
 ## Layout
 
@@ -32,7 +32,7 @@ storage.
 `styles/globals.css` is the one stylesheet. This is `otari-ai/frontend/src`'s
 layout, because that control-plane UI moves into this repo at M5.
 
-`npm run lint` fails a PR that has a feature importing `app/`, or `shared/`
+`pnpm run lint` fails a PR that has a feature importing `app/`, or `shared/`
 importing either of the layers above it. No layer may import an overlay's tree,
 which lives in `otari-ai` and is composed onto this base at build time.
 `src/architecture.test.ts` proves the lint still rejects each of those. See
@@ -42,20 +42,20 @@ which lives in `otari-ai` and is composed onto this base at build time.
 
 ```bash
 cd web
-npm install
-npm run dev        # Vite dev server on :5173, proxying the API to :8000
-npm run lint       # format + lint, including the layer boundary
-npm run typecheck
-npm test
+pnpm install
+pnpm run dev        # Vite dev server on :5173, proxying the API to :8000
+pnpm run lint       # format + lint, including the layer boundary
+pnpm run typecheck
+pnpm test
 ```
 
-`npm run dev` serves only the SPA, so it proxies `/v1` and `/health` to a
+`pnpm run dev` serves only the SPA, so it proxies `/v1` and `/health` to a
 gateway at `http://localhost:8000` (see `vite.config.ts`). Start one first, for
 example `uv run otari serve --config config.yml`, then sign in with that
 gateway's master key. To develop against a gateway running elsewhere:
 
 ```bash
-OTARI_DEV_API=https://your-app.up.railway.app npm run dev
+OTARI_DEV_API=https://your-app.up.railway.app pnpm run dev
 ```
 
 If the source is edited through a bind mount (an agent working in a container,
@@ -63,16 +63,16 @@ say) and hot reload misses changes, the host watcher may not see the writes as
 filesystem events. Fall back to polling:
 
 ```bash
-VITE_USE_POLLING=1 npm run dev
+VITE_USE_POLLING=1 pnpm run dev
 ```
 
 ## Build
 
 ```bash
-npm run build
+pnpm run build
 ```
 
-`npm run build` writes the production bundle to `../src/gateway/static/dashboard`
+`pnpm run build` writes the production bundle to `../src/gateway/static/dashboard`
 (configured in `vite.config.ts`). That directory is gitignored, not committed:
 Vite content-hashes every asset filename, so a committed bundle made any two
 branches touching `web/src` conflict on every file. There is nothing to commit

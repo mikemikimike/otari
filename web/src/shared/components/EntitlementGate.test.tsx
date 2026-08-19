@@ -14,7 +14,7 @@ function renderGate(
 ) {
   if (!entitlements) {
     // No provider: the context default is the base build's answer, which is the
-    // path a plain `npm run build` actually takes.
+    // path a plain `pnpm run build` actually takes.
     return render(gate)
   }
   return render(

@@ -21,7 +21,7 @@ const withProvider =
 describe("useEntitlements without a provider", () => {
   it("answers from the base constant, which is the seam's fallback", () => {
     // The base build renders no EntitlementProvider at all, so the context
-    // default is the code path a plain `npm run build` takes. Asserting against
+    // default is the code path a plain `pnpm run build` takes. Asserting against
     // the constant rather than a literal keeps this true when the base grows a
     // capability, instead of turning into the test that has to be edited.
     const { result } = renderHook(() => useEntitlements())

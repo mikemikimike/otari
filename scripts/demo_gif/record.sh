@@ -6,7 +6,7 @@
 # Prereqs (installed once in the dev/sandbox environment):
 #   - ffmpeg on PATH                     (webm -> gif)
 #   - gifsicle on PATH                   (lossy GIF optimisation)
-#   - web deps installed: (cd web && npm ci)
+#   - web deps installed: (cd web && pnpm install --frozen-lockfile)
 #   - a built dashboard bundle in src/gateway/static/dashboard, which is
 #     gitignored, so a fresh clone has none (build with: make dashboard)
 #
