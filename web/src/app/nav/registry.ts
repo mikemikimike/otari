@@ -514,6 +514,29 @@ export function navItemForPath(pathname: string): NavItem | undefined {
   ).sort((a, b) => b.to.length - a.to.length)[0]
 }
 
+/**
+ * Whether this deployment serves the destination at this pathname.
+ *
+ * One predicate for every caller that asks that question, which is the point:
+ * the shell asks it to decide between a page and the "not available here" panel,
+ * and the rail memory asks it to decide whether a stored destination is still
+ * somewhere to send you. Two implementations of the same rule drift, and they
+ * drift in the direction where the memory resumes onto the panel.
+ *
+ * Nesting is where the rule has an edge: `navItemForPath` answers a child with
+ * its parent carrying the child's `surface`, so a child is gated on *its own*
+ * surface rather than on the group's, plus the parent's capability and flag. A
+ * path the registry does not declare (the guide, the 404 splat) is not gated at
+ * all, and this says so with `true`.
+ */
+export function isPathVisible(
+  pathname: string,
+  isVisible: (item: NavItem) => boolean,
+): boolean {
+  const item = navItemForPath(pathname)
+  return item === undefined || isVisible(item)
+}
+
 /** A section that has at least one visible entry, paired with those entries. */
 export interface VisibleNavSection {
   section: NavSection

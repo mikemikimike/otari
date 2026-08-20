@@ -16,9 +16,11 @@
  * gated-off route is still registered and still reachable by URL, so without
  * that check the resume link lands on the shell's "not available here" panel,
  * and the visit that saw the panel is recorded as somewhere worth returning to.
- * And because the first check resolves against the registry, what comes back is
- * a `NavPath`: the caller gets something a `Link` will accept, not a string it
- * has to cast.
+ * That second check is `isPathVisible` rather than a rule of its own, so the
+ * answer here is by construction the one the shell will give when the link is
+ * followed. And because the first check resolves against the registry, what
+ * comes back is a `NavPath`: the caller gets something a `Link` will accept, not
+ * a string it has to cast.
  *
  * It lives here rather than in `shared/helpers` — where `otari-ai` keeps its
  * counterpart — because deciding which rail a path belongs to is
@@ -28,8 +30,13 @@
  * organization destinations that look like anything else.
  */
 
-import { NAV_ITEMS, type NavContext, navContextForPath } from "./registry"
-import type { NavChild, NavItem, NavPath } from "./types"
+import {
+  isPathVisible,
+  NAV_ITEMS,
+  type NavContext,
+  navContextForPath,
+} from "./registry"
+import type { NavItem, NavPath } from "./types"
 
 const STORAGE_KEYS: Record<NavContext, string> = {
   workspace: "otari.dashboard.lastWorkspaceLocation",
@@ -48,13 +55,6 @@ export interface RememberedLocation {
   to: NavPath
 }
 
-/** A registered destination, with the entries that declare its gating. */
-interface Destination {
-  to: NavPath
-  item: NavItem
-  child?: NavChild
-}
-
 /**
  * The registered destination at this pathname, if it is one.
  *
@@ -63,36 +63,20 @@ interface Destination {
  * remembered, which is the right trade: the design asks for the page you were
  * on, and a detail view's id may not exist by the time you come back.
  *
- * The entries come back with the path because the gates are declared on them,
- * and a nested destination may carry a surface of its own (Guardrails is grouped
- * under Routing and served by the tools surface), so `isReachable` needs both.
+ * Note the asymmetry with the visibility question below, which is deliberate:
+ * *what counts as a destination* is stricter here than in the registry's own
+ * prefix matching, while *whether a destination is served* is the registry's
+ * answer verbatim, because that is the answer the shell will act on when the
+ * link is followed.
  */
-function destinationAt(pathname: string): Destination | undefined {
+function destinationAt(pathname: string): NavPath | undefined {
   for (const item of NAV_ITEMS) {
-    if (item.to === pathname) return { to: item.to, item }
+    if (item.to === pathname) return item.to
     for (const child of item.children ?? []) {
-      if (child.to === pathname) return { to: child.to, item, child }
+      if (child.to === pathname) return child.to
     }
   }
   return undefined
-}
-
-/**
- * Whether this deployment still shows the destination.
- *
- * The same composition the sidebar draws with: the entry's own three gates, and
- * for a nested destination the parent's gates with the child's surface
- * substituted, which is what the shell's own group does. Registered is not the
- * same as visible, and the two resume links are where that difference would land
- * on a panel instead of a page.
- */
-function isReachable(
-  found: Destination,
-  isVisible: (item: NavItem) => boolean,
-): boolean {
-  if (!isVisible(found.item)) return false
-  const surface = found.child?.surface
-  return surface === undefined || isVisible({ ...found.item, surface })
 }
 
 /**
@@ -111,13 +95,10 @@ export function rememberLocation(
   pathname: string,
   isVisible: (item: NavItem) => boolean,
 ): void {
-  const found = destinationAt(pathname)
-  if (!found || !isReachable(found, isVisible)) return
+  const to = destinationAt(pathname)
+  if (!to || !isPathVisible(to, isVisible)) return
   try {
-    window.localStorage.setItem(
-      STORAGE_KEYS[navContextForPath(pathname)],
-      found.to,
-    )
+    window.localStorage.setItem(STORAGE_KEYS[navContextForPath(pathname)], to)
   } catch {
     // Storage can throw when it is disabled (blocked cookies, private mode).
     // Losing the memory costs a landing page, so it is not worth an error path.
@@ -142,8 +123,8 @@ export function lastLocation(
   // to the wrong rail. The gate is the half a write-time check cannot cover on
   // its own, because a gateway restarted against a config that reports fewer
   // surfaces changes the answer under an entry already written.
-  const found = destinationAt(raw)
-  if (!found || navContextForPath(found.to) !== context) return undefined
-  if (!isReachable(found, isVisible)) return undefined
-  return { to: found.to }
+  const known = destinationAt(raw)
+  if (!known || navContextForPath(known) !== context) return undefined
+  if (!isPathVisible(known, isVisible)) return undefined
+  return { to: known }
 }

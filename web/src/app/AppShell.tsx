@@ -17,6 +17,7 @@ import { AccountMenu } from "@/app/nav/AccountMenu"
 import { Breadcrumbs } from "@/app/nav/Breadcrumbs"
 import { lastLocation, rememberLocation } from "@/app/nav/navigationHistory"
 import {
+  isPathVisible,
   NAV_SECTIONS,
   navContextForPath,
   navItemForPath,
@@ -301,7 +302,11 @@ export function AppShell() {
   // server would refuse. An unregistered path (the guide, the 404 splat) has no
   // entry and is never gated.
   const currentItem = navItemForPath(pathname)
-  const routeIsGatedOff = currentItem !== undefined && !isVisible(currentItem)
+  // Through the registry's predicate rather than `isVisible(currentItem)` here,
+  // so this and the rail memory cannot answer "is this destination served"
+  // differently: whichever way the nested case resolves, both read it from one
+  // place.
+  const routeIsGatedOff = !isPathVisible(pathname, isVisible)
   // Which of the two sidebars this path belongs under. The organization context
   // is a separate rail reached from the footer, not a section inside the
   // workspace one, so the two never render together.
@@ -693,7 +698,10 @@ export function AppShell() {
                 <EmptyState
                   // The leaf's name, not the group's: someone who followed a
                   // link to Guardrails should not be told "Routing" is missing.
-                  title={`${navLabelForPath(pathname) ?? currentItem.label} is not available here`}
+                  // `navLabelForPath` answers for every registered path, and only
+                  // a registered path can be gated off, so the fallback is there
+                  // for the type rather than for a case that happens.
+                  title={`${navLabelForPath(pathname) ?? currentItem?.label ?? "That page"} is not available here`}
                   description="This deployment does not serve that page. Pick a destination from the sidebar."
                 />
               ) : (

@@ -5,6 +5,7 @@ import { OVERLAY_NAV_LABEL_OVERRIDES } from "./overlayLabelOverrides"
 import {
   applyNavLabelOverrides,
   composeNavSections,
+  isPathVisible,
   NAV_ITEMS,
   NAV_SECTIONS,
   navContextForPath,
@@ -351,6 +352,41 @@ describe("navItemForPath", () => {
     // never gated.
     expect(navItemForPath("/docs")).toBeUndefined()
     expect(navItemForPath("/nope")).toBeUndefined()
+  })
+})
+
+describe("isPathVisible", () => {
+  // The predicate the shell composes, narrowed to the deployment axis: a
+  // surface this test withholds stands for one the bootstrap does not report.
+  const without = (surface: string) => (item: NavItem) =>
+    item.surface !== surface
+
+  it("serves a destination whose surface the deployment reports", () => {
+    expect(isPathVisible("/routing", without("keys"))).toBe(true)
+  })
+
+  it("refuses a destination whose surface it does not", () => {
+    expect(isPathVisible("/routing", without("routing"))).toBe(false)
+  })
+
+  it("gates a nested destination on its own surface, not its group's", () => {
+    // Guardrails is grouped under Routing and served by the tools surface, so
+    // the tools surface is the one that decides. Withholding `routing` leaves
+    // the page served (and the rail without a row for it, which is the grouping
+    // showing through); withholding `tools` is what refuses it.
+    expect(isPathVisible("/tools/guardrails", without("tools"))).toBe(false)
+    expect(isPathVisible("/tools/guardrails", without("routing"))).toBe(true)
+  })
+
+  it("inherits the gate of the destination a deeper path sits under", () => {
+    expect(isPathVisible("/routing/new", without("routing"))).toBe(false)
+  })
+
+  it("leaves a path the registry does not declare ungated", () => {
+    // The guide and the 404 splat: the registry governs what it declares and
+    // nothing else, so withholding every surface must not gate them.
+    expect(isPathVisible("/docs", () => false)).toBe(true)
+    expect(isPathVisible("/nope", () => false)).toBe(true)
   })
 })
 
