@@ -162,8 +162,10 @@ workspace. It is reached from the **Organization** entry at the foot of the
 workspace rail, and left by the link at its top. Users, budgets, and settings
 live there.
 
-At the very bottom sits the account control: the bundled user guide, the
-light/dark preference, and sign-out.
+At the very bottom sits the account control, which holds account settings, an
+**Appearance** row that cycles through system, light, and dark, the hosted legal
+pages where there are any, and **Log out**. The bundled user guide is not in it:
+it is **Documentation**, in the top bar.
 
 The groups below match the current dashboard, rail by rail.
 
