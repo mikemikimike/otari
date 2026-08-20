@@ -117,48 +117,6 @@ def seed_workspace_id(db: Any) -> Any:
     db.flush()
     return workspace.id
 
-def extract_trace_context_from_carrier(carrier: Mapping[str, str]) -> Span | None:
-    """Extract the W3C Trace Context span from a carrier.
-
-    Convenience function for tests that extracts just the span (not the full
-    context). Delegates to the standard `TraceContextTextMapPropagator` so
-    vendor `tracestate` entries are preserved on the resulting span context.
-
-    Args:
-        carrier: A mapping of request headers (e.g. `request.headers`).
-
-    Returns:
-        The extracted non-recording span, or None if extraction failed or no
-        context is present.
-    """
-    context = _extract_otel_context_from_carrier(carrier)
-    if context is None:
-        return None
-
-    return trace.get_current_span(context)
-
-
-def _extract_otel_context_from_carrier(carrier: Mapping[str, str]) -> Context | None:
-    """Extract the full OpenTelemetry Context from a carrier.
-
-    Internal helper that returns the complete context (not just the span).
-    Delegates to the standard `TraceContextTextMapPropagator` so vendor
-    `tracestate` entries are preserved.
-
-    Args:
-        carrier: A mapping of request headers.
-
-    Returns:
-        An OpenTelemetry Context with the extracted trace context, or None if
-        extraction failed or no valid traceparent is present.
-    """
-    context = TraceContextTextMapPropagator().extract(carrier=carrier)
-
-    if trace.get_current_span(context).get_span_context().trace_id == trace.INVALID_TRACE_ID:
-        return None
-
-    return context
-
 @pytest.fixture(autouse=True)
 def _reset_db_state() -> Generator[None, None, None]:
     from gateway.core.database import reset_db
