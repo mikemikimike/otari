@@ -17,6 +17,7 @@ import {
   PageHeader,
   PageLoading,
 } from "@/shared/components/ui"
+import { formatCost } from "@/shared/helpers/format"
 
 // The organization's model pricing: what the gateway meters a request at, and
 // where the numbers come from.
@@ -24,9 +25,9 @@ import {
 // The navigation design gives this a destination of its own on the organization
 // rail, under Cost & billing, and pricing is genuinely tenant-scoped: a rate
 // applies to every workspace and every key in the deployment. It had no home
-// before — the default catalog's refresh flow was buried in the gateway's runtime
-// Settings page, next to the master key, and the per-model rates were a column on
-// Models.
+// before: the default catalog's refresh flow was buried in the gateway's runtime
+// Settings page, next to the master key, and the per-model rates were a column
+// on Models.
 //
 // The split it settles: **this page owns the catalog** (whether unpriced models
 // are metered at all, where the defaults come from, and which models carry a
@@ -212,12 +213,6 @@ interface PriceRow {
   updatedAt: string
 }
 
-const rate = (value: number) =>
-  `$${value.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`
-
 /**
  * One row per priced model, from the price that is in force today.
  *
@@ -251,13 +246,13 @@ const COLUMNS: DataTableColumn<PriceRow>[] = [
     id: "input",
     header: "Input / 1M",
     align: "end",
-    cell: (row) => rate(row.input),
+    cell: (row) => formatCost(row.input),
   },
   {
     id: "output",
     header: "Output / 1M",
     align: "end",
-    cell: (row) => rate(row.output),
+    cell: (row) => formatCost(row.output),
   },
   {
     id: "cacheRead",
@@ -265,7 +260,7 @@ const COLUMNS: DataTableColumn<PriceRow>[] = [
     align: "end",
     // An em dash rather than $0.00: a model with no cache-read rate is not the
     // same as one that reads cache for free.
-    cell: (row) => (row.cacheRead === null ? "—" : rate(row.cacheRead)),
+    cell: (row) => (row.cacheRead === null ? "—" : formatCost(row.cacheRead)),
   },
   {
     id: "tiers",

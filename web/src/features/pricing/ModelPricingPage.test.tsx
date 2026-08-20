@@ -124,6 +124,28 @@ describe("ModelPricingPage", () => {
     expect(within(table).queryByText("$1.00")).toBeNull()
   })
 
+  it("keeps a sub-cent rate legible instead of rounding it to nothing", async () => {
+    // Two cents to the dollar is not enough precision for a per-million rate: at
+    // two digits a cache-read price of 0.0025 renders as "$0.00", which is what
+    // this table's em dash means (no cache-read rate at all). `formatCost` is
+    // what Models formats the same stored numbers with, so the two pages cannot
+    // print different figures for one price.
+    mockApi({
+      pricing: [
+        price({
+          input_price_per_million: 0.0025,
+          cache_read_price_per_million: 0.075,
+        }),
+      ],
+    })
+    renderPage(<ModelPricingPage />)
+
+    const table = await screen.findByRole("grid", { name: "Model prices" })
+    expect(within(table).getByText("$0.0025")).toBeInTheDocument()
+    expect(within(table).getByText("$0.08")).toBeInTheDocument()
+    expect(within(table).queryByText("$0.00")).toBeNull()
+  })
+
   it("says an unset cache rate is unset rather than free", async () => {
     mockApi({ pricing: [price({ cache_read_price_per_million: null })] })
     renderPage(<ModelPricingPage />)
