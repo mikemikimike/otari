@@ -4,42 +4,29 @@ import { EntitlementGate } from "@/shared/components/EntitlementGate"
 import { useDeployment } from "@/shared/hooks/useDeployment"
 
 // The right end of the top bar: the links that are not destinations in either
-// rail, and the balance.
+// rail.
 //
-// The design puts three things here. Documentation is the guide bundled with
-// this gateway, which used to sit inside the account menu; it belongs in the
-// chrome, because it is read alongside a page rather than instead of one, and
-// the design's account menu has no row for it.
+// Documentation is the guide bundled with this gateway. It sits in the chrome
+// because it is read alongside a page rather than instead of one, and the
+// design's account menu has no row for it; the menu keeps a row of its own
+// anyway, because this cluster is hidden below `md` and the guide would
+// otherwise have no entry point on a phone.
 //
-// Playground and the balance are hosted surfaces, and each is gated on the two
-// things it actually needs rather than on a flag that stands in for them. The
-// playground is a page otari.ai serves and this gateway does not, so the link
-// needs both the entitlement and a `management_url` to point at, which only a
-// gateway attached to otari.ai has. The balance needs an entitlement and a
-// figure: this gateway meters spend but holds no wallet, so there is nothing to
-// report and a zero here would be a claim rather than a reading.
+// Playground is a hosted surface, gated on the two things it actually needs
+// rather than on a flag that stands in for them: it is a page otari.ai serves
+// and this gateway does not, so the link needs both the entitlement and a
+// `management_url` to point at, which only a gateway attached to otari.ai has.
+//
+// The design also draws a balance here. It is not built: this gateway meters
+// spend but holds no wallet, and there is no seam that could feed one, since an
+// overlay replaces `overlaySections.ts` / `overlayLabelOverrides.ts` and not
+// this file. A prop and a component that nothing can reach read as wired, so
+// they wait for the deployment that has a figure to report.
 
 const ACTION =
-  "flex min-h-[2.125rem] items-center rounded-md px-1 text-[0.8125rem] leading-[1.125rem] font-medium text-muted transition-colors hover:text-foreground"
+  "flex min-h-[2.125rem] items-center rounded-md px-1 text-chrome-row font-medium text-muted transition-colors hover:text-foreground"
 
-function Balance({ amount }: { amount: number }) {
-  return (
-    <span className="flex min-h-[2.125rem] shrink-0 items-center px-1">
-      <span className="rounded-2xl bg-success-subtle px-1.5 text-xs font-medium text-success">
-        {amount.toLocaleString(undefined, {
-          style: "currency",
-          currency: "USD",
-        })}
-      </span>
-    </span>
-  )
-}
-
-/**
- * @param balance Spendable credit, when the deployment holds a wallet. Nothing
- * in this build supplies one; it is the seam an overlay build fills.
- */
-export function TopBarActions({ balance }: { balance?: number }) {
+export function TopBarActions() {
   const { management_url } = useDeployment()
   const platform = management_url?.replace(/\/$/, "")
 
@@ -62,11 +49,6 @@ export function TopBarActions({ balance }: { balance?: number }) {
           </a>
         </EntitlementGate>
       ) : null}
-      {balance === undefined ? null : (
-        <EntitlementGate capability="billing">
-          <Balance amount={balance} />
-        </EntitlementGate>
-      )}
     </div>
   )
 }

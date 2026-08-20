@@ -164,8 +164,9 @@ live there.
 
 At the very bottom sits the account control, which holds account settings, an
 **Appearance** row that cycles through system, light, and dark, the hosted legal
-pages where there are any, and **Log out**. The bundled user guide is not in it:
-it is **Documentation**, in the top bar.
+pages where there are any, and **Log out**. The bundled user guide is
+**Documentation**, in the top bar; on a narrow screen, where the top bar has room
+for the trail and nothing else, the account control carries it instead.
 
 The groups below match the current dashboard, rail by rail.
 

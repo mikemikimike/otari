@@ -579,6 +579,20 @@
  *   text-emphasis   — emphasized body text. Use rarely.
  *   text-caption    — supporting metadata (timestamps, helper text).
  *   text-overline   — small uppercase label above a group.
+ *
+ * The shell chrome (the rails, the account menu, the top bar) reads a step
+ * below the content scale, because it is furniture around a page rather than
+ * part of one. Its three roles live here for the same reason the rest do: a
+ * size repeated inline in a component is a scale nobody can see the whole of,
+ * and these were six arbitrary values across four nav files before.
+ *
+ *   text-chrome-row      — a row label in the rail, the menu, or the top bar.
+ *   text-chrome-meta     — the second line under one of those labels.
+ *   text-chrome-initials — initials in an avatar.
+ *
+ * These three carry metrics only, no color and no weight: one menu row is
+ * `text-foreground` resting and `text-muted` disabled, and an identity line is
+ * medium over semibold, so the call site keeps saying which.
  * ============================================================= */
 @utility text-display {
   font-family: var(--font-display);
@@ -626,6 +640,18 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-text-muted);
+}
+@utility text-chrome-row {
+  font-size: 0.84375rem; /* 13.5px, a step under the rail's own 14px rows */
+  line-height: 1.125rem;
+}
+@utility text-chrome-meta {
+  font-size: 0.71875rem; /* 11.5px */
+  line-height: 0.9375rem;
+}
+@utility text-chrome-initials {
+  font-size: 0.5625rem; /* 9px, sized to a 26px avatar */
+  line-height: 1;
 }
 
 /* =============================================================

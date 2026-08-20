@@ -293,3 +293,35 @@ describe("semantic tokens only", () => {
     )
   })
 })
+
+// The chrome's own type roles, added because the nav files had grown six
+// arbitrary sizes between them (13.5px twice, 13px, 11.5px, 11px, 9px), which is
+// a scale with no single place to read it and nothing to keep it from growing a
+// seventh. Both halves are asserted: the roles exist, and the chrome uses them.
+describe("the shell chrome's type roles", () => {
+  const CHROME_ROLES = [
+    "text-chrome-row",
+    "text-chrome-meta",
+    "text-chrome-initials",
+  ]
+
+  it.each(CHROME_ROLES)("declares %s in globals.css", (role) => {
+    // The same failure the documented-utilities list guards against: a role
+    // named in the scale's comment but never declared is a className that
+    // produces no CSS, on text that looks merely unstyled rather than broken.
+    expect(CSS).toContain(`@utility ${role} {`)
+  })
+
+  it("leaves no arbitrary font size in the nav chrome", () => {
+    const NAV = join(WEB, "src", "app", "nav")
+    const offenders = readdirSync(NAV)
+      .filter((name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name))
+      .filter((name) =>
+        // `text-[` followed by a digit: an arbitrary size, as opposed to an
+        // arbitrary color, which the token rules above already cover.
+        /text-\[\d/.test(readFileSync(join(NAV, name), "utf8")),
+      )
+
+    expect(offenders, "use a text-chrome-* role, or add one").toEqual([])
+  })
+})

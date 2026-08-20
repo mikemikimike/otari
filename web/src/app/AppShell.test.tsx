@@ -428,8 +428,8 @@ describe("AppShell surface gating", () => {
       "Org settings",
       "Settings",
     ])
-    // The design's rail has four more rows — the organization's own Providers,
-    // Billing, Guardrails and Gateways — and each is gated on a surface a
+    // The design's rail has four more rows (the organization's own Providers,
+    // Billing, Guardrails and Gateways), and each is gated on a surface a
     // standalone gateway does not report, so none of them is here. The Gateway
     // group is all four's worst case: both its rows are gated, so the heading
     // goes with them.
@@ -734,6 +734,21 @@ describe("AppShell entitlement and flag gating", () => {
     expect(
       await screen.findByRole("button", { name: "Log out" }),
     ).toBeInTheDocument()
+  })
+
+  it("keeps the bundled guide reachable from the account menu, for the phone", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    await renderShell()
+
+    // The top bar's cluster is `hidden md:flex`, and this menu is what the
+    // mobile drawer contains, so without this row the guide has no control
+    // pointing at it below the breakpoint. The row carries `md:hidden` for the
+    // mirror-image reason: above it, the top bar already answers.
+    await user.click(screen.getByRole("button", { name: "Account" }))
+    const guideRow = await screen.findByRole("link", { name: "Documentation" })
+    expect(guideRow).toHaveAttribute("href", "/docs")
+    expect(guideRow).toHaveClass("md:hidden")
   })
 
   it("names the scope and the page, leaving out an organization there is one of", async () => {

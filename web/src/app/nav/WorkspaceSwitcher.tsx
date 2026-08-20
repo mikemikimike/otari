@@ -124,7 +124,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                 <span className="truncate text-sm leading-[1.125rem] font-semibold tracking-[-0.01em] text-foreground">
                   {workspaceName}
                 </span>
-                <span className="truncate text-[0.6875rem] leading-[0.875rem] font-medium text-muted">
+                <span className="truncate text-chrome-meta font-medium text-muted">
                   {organizationName}
                 </span>
               </span>

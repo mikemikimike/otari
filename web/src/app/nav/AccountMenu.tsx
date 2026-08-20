@@ -1,7 +1,9 @@
 import { Button, Popover } from "@heroui/react"
+import { Link } from "@tanstack/react-router"
 import { useState } from "react"
 import type { IconType } from "react-icons"
 import {
+  FiBookOpen,
   FiChevronDown,
   FiFileText,
   FiLogOut,
@@ -48,7 +50,11 @@ const THEME_LABELS: Record<ThemePreference, string> = {
 // 36px rows at 13.5px, which is the menu's own scale: a step down from the
 // rail's 44px/14px, because a menu row is read once on the way to a decision
 // rather than scanned as a standing list.
-const MENU_ROW = `flex min-h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[0.84375rem] leading-[1.125rem] font-medium ${NAV_TRANSITION}`
+//
+// That 36px is a desk figure. This menu also renders inside the mobile drawer,
+// where these rows are tapped, so below `md` they take the 44px touch floor and
+// the menu's own scale resumes at the breakpoint.
+const MENU_ROW = `flex min-h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-chrome-row font-medium md:min-h-9 ${NAV_TRANSITION}`
 const MENU_ROW_RESTING = "text-foreground hover:bg-surface-alt"
 const MENU_ROW_DISABLED = "cursor-not-allowed text-muted opacity-60"
 // No vertical margin: the dialog's own 6px gap is the menu's rhythm, and a
@@ -123,6 +129,31 @@ function MenuItem({
         <span aria-hidden="true" className="h-0 w-11 shrink-0" />
       )}
     </button>
+  )
+}
+
+/**
+ * Documentation, which the top bar owns above `md` and this menu carries below
+ * it: that cluster is `hidden md:flex`, and this menu is the one surface that
+ * renders inside the mobile drawer, so without this row the guide bundled with
+ * the gateway has no control pointing at it on a phone. Hidden from `md` up
+ * rather than shown everywhere, because the design's menu draws no such row and
+ * above the breakpoint the top bar already answers.
+ *
+ * A router `Link`, not `MenuExternalLink`: `/docs` is a route in this app, and
+ * an `<a href>` to it would reload the whole shell.
+ */
+function MenuDocumentationLink({ onNavigate }: { onNavigate: () => void }) {
+  return (
+    <Link
+      to="/docs"
+      onClick={onNavigate}
+      className={`${MENU_ROW} ${MENU_ROW_RESTING} md:hidden`}
+    >
+      <FiBookOpen aria-hidden="true" className={MENU_ICON_CLASS} />
+      <span className="min-w-0 flex-1 truncate">Documentation</span>
+      <span aria-hidden="true" className="h-0 w-11 shrink-0" />
+    </Link>
   )
 }
 
@@ -203,7 +234,7 @@ export function AccountMenu({ collapsed }: { collapsed: boolean }) {
         aria-label="Account"
         className={`${navRowClass({ collapsed })} w-auto! justify-start`}
       >
-        <span className="flex h-[1.625rem] w-[1.625rem] shrink-0 items-center justify-center rounded-full border border-border bg-surface-alt text-[0.5625rem] font-semibold text-muted">
+        <span className="flex h-[1.625rem] w-[1.625rem] shrink-0 items-center justify-center rounded-full border border-border bg-surface-alt text-chrome-initials font-semibold text-muted">
           {identity.initials}
         </span>
         {collapsed ? null : (
@@ -235,6 +266,7 @@ export function AccountMenu({ collapsed }: { collapsed: boolean }) {
           />
           <AppearanceControl />
           <div className={MENU_DIVIDER} />
+          <MenuDocumentationLink onNavigate={() => setOpen(false)} />
           {/* Hosted-only, and gated twice over: the entitlement says the
               deployment has terms to show, and `management_url` is where they
               are. A self-hosted gateway is neither, so the row is absent rather
@@ -263,10 +295,10 @@ export function AccountMenu({ collapsed }: { collapsed: boolean }) {
               {identity.initials}
             </span>
             <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
-              <span className="truncate text-[0.84375rem] leading-[1.125rem] font-semibold text-foreground">
+              <span className="truncate text-chrome-row font-semibold text-foreground">
                 {identity.name}
               </span>
-              <span className="truncate text-[0.71875rem] leading-[0.9375rem] text-muted">
+              <span className="truncate text-chrome-meta text-muted">
                 {identity.detail}
               </span>
             </span>
