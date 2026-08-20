@@ -22,8 +22,8 @@
  * comes back is a `NavPath`: the caller gets something a `Link` will accept, not
  * a string it has to cast.
  *
- * It lives here rather than in `shared/helpers` — where `otari-ai` keeps its
- * counterpart — because deciding which rail a path belongs to is
+ * It lives here rather than in `shared/helpers` (where `otari-ai` keeps its
+ * counterpart) because deciding which rail a path belongs to is
  * `navContextForPath`'s job, and `src/shared` may not import `src/app`. Over
  * there the same decision is a pair of path-prefix regexes, which this
  * dashboard's URLs do not support: `/workspaces` and `/settings` are

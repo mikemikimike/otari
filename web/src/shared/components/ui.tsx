@@ -134,7 +134,7 @@ export type StatStatus = "ok" | "warn" | "alert"
 
 // The accent bar is `!`-important because the design foundation gives every
 // HeroUI Card a 1px outline (`.card:not(.card--transparent)` in globals.css),
-// and that rule is unlayered while a Tailwind utility sits in @layer utilities —
+// and that rule is unlayered while a Tailwind utility sits in @layer utilities;
 // unlayered always wins, whatever the specificity. Without the bang the
 // shorthand `border:` resets this tile's left edge back to a hairline.
 const STAT_STATUS: Record<StatStatus, { accent: string; pill: string }> = {
