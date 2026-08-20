@@ -86,8 +86,16 @@ export function UserComboBox({
   // would silently create a second user named after it.
   const resolveId = (raw: string): string => {
     const trimmed = raw.trim()
-    const match = options.find((o) => o.id === trimmed || o.name === trimmed)
-    return match ? match.id : trimmed
+    // An id match outranks a name match, and the order matters now that a
+    // member's label is a free-form roster name rather than its own id: a roster
+    // name can equal another user's `user_id`, members sort to the front, and a
+    // single scan matching either field would then bill the key to whichever of
+    // the two came first. Only the typed path is affected (picking an option
+    // carries the item's id), which is exactly the path that takes an id.
+    const byId = options.find((o) => o.id === trimmed)
+    if (byId) return byId.id
+    const byName = options.find((o) => o.name === trimmed)
+    return byName ? byName.id : trimmed
   }
 
   const selectedId = resolveId(text)

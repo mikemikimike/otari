@@ -79,4 +79,24 @@ describe("UserComboBox", () => {
     // label would have the keys API create a second user called "Alice Example".
     expect(changes.at(-1)).toBe(uuid)
   })
+
+  it("submits a typed id even when it is another owner's roster name", async () => {
+    const uuid = "33333333-3333-3333-3333-333333333333"
+    const changes: string[] = []
+    render(
+      <UserComboBox
+        value=""
+        onChange={(id) => changes.push(id)}
+        users={[user(uuid), user("ci-bot")]}
+        // The collision: this member's roster name is exactly another user's id,
+        // and a member sorts ahead of it. Matching either field in one scan would
+        // resolve the typed id to the member's UUID and bill the key to them.
+        memberLabels={new Map([[uuid, "ci-bot"]])}
+      />,
+    )
+
+    await userEvent.type(screen.getByRole("combobox"), "ci-bot")
+
+    expect(changes.at(-1)).toBe("ci-bot")
+  })
 })
