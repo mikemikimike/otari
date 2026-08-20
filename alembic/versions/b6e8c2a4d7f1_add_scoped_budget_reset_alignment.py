@@ -18,8 +18,16 @@ column is added through ``batch_alter_table`` because SQLite has no ``ALTER TABL
 (two of them partial) through SQLite's rebuild, which reflection could not
 recover on its own.
 
+Re-parented after the fact: this was authored against ``a3c7e1b9d5f2`` and
+merged (#640) after ``f2a4c6d8b0e3`` (#667) had claimed the same parent, which
+left two heads and ``upgrade head`` with nothing to choose between them. The two
+are independent (a ``scoped_budgets`` rebuild against three ``user`` columns), so
+serializing them is enough and no merge revision is needed. This one moves
+because nothing can be sitting on it: reaching it required resolving the
+ambiguity this fixes.
+
 Revision ID: b6e8c2a4d7f1
-Revises: a3c7e1b9d5f2
+Revises: f2a4c6d8b0e3
 Create Date: 2026-08-19
 """
 
@@ -29,7 +37,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b6e8c2a4d7f1"
-down_revision: str | Sequence[str] | None = "a3c7e1b9d5f2"
+down_revision: str | Sequence[str] | None = "f2a4c6d8b0e3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
