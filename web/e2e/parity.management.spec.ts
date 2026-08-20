@@ -7,6 +7,7 @@ import {
   nav,
   openNested,
   openOrganization,
+  pageHeading,
   tableRows,
 } from "./helpers"
 import { PARITY } from "./parity-data"
@@ -226,9 +227,7 @@ test.describe("fallback routing", () => {
   test("grows and shrinks a policy's failure chain", async ({ page }) => {
     await login(page)
     await openNested(page, "Routing", "Policies")
-    await expect(
-      page.getByRole("heading", { name: "Routing", exact: true }),
-    ).toBeVisible()
+    await expect(pageHeading(page, "Routing")).toBeVisible()
 
     await page.getByRole("button", { name: "New policy" }).click()
     await page.getByRole("textbox", { name: /Policy name/ }).fill(POLICY)
@@ -295,7 +294,7 @@ test.describe("legacy routes", () => {
     // policies they are; the old path is a bookmark that still has to land.
     await gotoRoute(page, "/aliases")
     await expect(page).toHaveURL(/#\/routing$/)
-    await expect(page.getByRole("heading", { name: "Routing" })).toBeVisible()
+    await expect(pageHeading(page, "Routing")).toBeVisible()
 
     // An unrecognised path is a stale link from a route that has since moved,
     // so it lands on the overview rather than a dead end.

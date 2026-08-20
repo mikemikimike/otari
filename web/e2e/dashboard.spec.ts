@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test"
 
-import { login, MASTER_KEY, nav, openNested, openOrganization } from "./helpers"
+import {
+  login,
+  MASTER_KEY,
+  nav,
+  openNested,
+  openOrganization,
+  pageHeading,
+} from "./helpers"
 
 // One shared gateway + DB, so the flows build on each other and must run in order.
 test.describe.configure({ mode: "serial" })
@@ -43,20 +50,14 @@ test.describe("dashboard core flows", () => {
       await nav(page).getByRole("link", { name: link }).click()
       // Exact match: the Budgets onboarding heading ("No budgets yet") would
       // otherwise also substring-match the page title.
-      await expect(
-        page.getByRole("heading", { name: heading, exact: true }),
-      ).toBeVisible()
+      await expect(pageHeading(page, heading)).toBeVisible()
     }
 
     // Routing and Tools nest their pages, so each is reached through its group.
     await openNested(page, "Routing", "Policies")
-    await expect(
-      page.getByRole("heading", { name: "Routing", exact: true }),
-    ).toBeVisible()
+    await expect(pageHeading(page, "Routing")).toBeVisible()
     await openNested(page, "Tools", "Web search")
-    await expect(
-      page.getByRole("heading", { name: "Web search", exact: true }),
-    ).toBeVisible()
+    await expect(pageHeading(page, "Web search")).toBeVisible()
 
     await openOrganization(page)
     for (const [link, heading] of [
@@ -68,9 +69,7 @@ test.describe("dashboard core flows", () => {
       ["Settings", "Settings"],
     ]) {
       await nav(page).getByRole("link", { name: link, exact: true }).click()
-      await expect(
-        page.getByRole("heading", { name: heading, exact: true }),
-      ).toBeVisible()
+      await expect(pageHeading(page, heading)).toBeVisible()
     }
   })
 
