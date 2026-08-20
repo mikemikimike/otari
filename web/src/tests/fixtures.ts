@@ -78,6 +78,7 @@ const STANDALONE_SURFACES = [
   "keys",
   "models",
   "organizations",
+  "pricing",
   "providers",
   "routing",
   "settings",

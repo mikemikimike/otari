@@ -264,7 +264,13 @@ const ORGANIZATION_NAV_SECTIONS = [
       {
         to: "/organization/pricing",
         label: "Model pricing",
-        surface: "settings",
+        // `pricing`, not `settings`: the table and the refresh flow are
+        // `/v1/pricing`, its own router, and this page reads `/v1/settings` only
+        // for the policy banner. This gateway serves the surfaces as one set, so
+        // the two are the same answer here; the axis exists for the deployment
+        // where they come apart, and there this row would otherwise offer a page
+        // whose data is not served.
+        surface: "pricing",
         icon: FiTag,
       },
     ],

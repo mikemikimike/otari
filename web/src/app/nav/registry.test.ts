@@ -220,6 +220,7 @@ describe("nav registry", () => {
       "keys",
       "models",
       "organizations",
+      "pricing",
       "providers",
       "routing",
       "settings",
