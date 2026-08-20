@@ -220,7 +220,13 @@ export function AccountMenu({ collapsed }: { collapsed: boolean }) {
       </Button>
       {/* Opens upward: the control is pinned to the bottom of the rail. */}
       <Popover.Content placement="top start">
-        <Popover.Dialog className="flex w-[17rem] flex-col gap-1.5">
+        {/* Named, like the collapsed nav flyout and the switcher's create modal:
+            a dialog with no accessible name is announced as an unnamed one, and
+            the trigger's own name does not carry over to it. */}
+        <Popover.Dialog
+          aria-label="Account"
+          className="flex w-[17rem] flex-col gap-1.5"
+        >
           <MenuItem
             label="Account settings"
             icon={FiSettings}

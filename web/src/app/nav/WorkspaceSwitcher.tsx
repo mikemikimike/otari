@@ -136,7 +136,13 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
           )}
         </Button>
         <Popover.Content placement="bottom start">
-          <Popover.Dialog className="flex w-[19.75rem] flex-col">
+          {/* Named for the same reason the create modal below is: a dialog with
+              no accessible name is announced as an unnamed one, and the
+              trigger's name does not carry over to the surface it opens. */}
+          <Popover.Dialog
+            aria-label="Switch workspace"
+            className="flex w-[19.75rem] flex-col"
+          >
             <p className={`${MENU_HEADING} min-h-7`}>Organization</p>
             {/* Not a control: a standalone gateway provisions one organization at
               first boot and mounts no endpoint to switch or create another, so
@@ -219,7 +225,14 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
               mounts no create-organization endpoint, so the row is gated on an
               entitlement this build does not grant rather than rendered as a
               control that would fail. An overlay build that serves several
-              organizations grants it and the menu matches the design whole. */}
+              organizations grants it and the menu matches the design whole.
+              **The handler is that build's to supply along with the grant**, and
+              closing the popover is all this one can honestly do: there is no
+              endpoint to call and no page to open. So a deployment that grants
+              the capability without wiring anything ships a row that does
+              nothing, which nothing in this repository can fail on. That is the
+              cost of proving the row's place in the menu here, and it is the
+              reason the grant and the handler belong in the same change. */}
             {createsOrganizations ? (
               <button
                 type="button"
