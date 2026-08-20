@@ -83,4 +83,13 @@ test.describe("organization rail", () => {
     ).toBeVisible()
     await captureScreenshot(page, "workspaces")
   })
+
+  test("organization model pricing", async ({ page }) => {
+    await login(page)
+    await gotoRoute(page, "/organization/pricing")
+    await expect(
+      page.getByRole("heading", { name: /model pricing/i }).first(),
+    ).toBeVisible()
+    await captureScreenshot(page, "organization-model-pricing")
+  })
 })
