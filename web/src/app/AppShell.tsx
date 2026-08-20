@@ -331,11 +331,14 @@ export function AppShell() {
   // return you rather than resetting you. Recorded here rather than on those
   // controls' clicks, so leaving a rail by a link on a page or by a bookmark
   // updates the memory too.
+  // Both halves take the visibility predicate: a gated-off destination is
+  // registered and reachable by URL, so without it the memory would both record
+  // the visit that landed on "not available here" and resume onto it.
   useEffect(() => {
-    rememberLocation(pathname)
-  }, [pathname])
-  const organizationLanding = lastLocation("organization")
-  const workspaceLanding = lastLocation("workspace")
+    rememberLocation(pathname, isVisible)
+  }, [pathname, isVisible])
+  const organizationLanding = lastLocation("organization", isVisible)
+  const workspaceLanding = lastLocation("workspace", isVisible)
   // Named once: the same string is the row's visible text, its accessible name
   // when collapsed, and its tooltip, and three copies of it is three chances for
   // the name a screen reader hears to drift from the one on screen.
@@ -449,7 +452,13 @@ export function AppShell() {
       <UpdatePrompt />
       <ConnectionStatus />
       <PricingWarning />
-      <div className="flex min-h-0 flex-1">
+      {/* `relative` so the mobile drawer can be offset from *this row* rather
+          than from the viewport. The row's top edge is the header's top edge,
+          and the banners above it (the update prompt, the connection status, the
+          pricing alarm) are in flow, so a viewport-relative offset would leave
+          the drawer covering the header by however tall they are, taking the
+          only control that closes it with them. */}
+      <div className="relative flex min-h-0 flex-1">
         <aside
           ref={asideRef}
           id="app-sidebar"
@@ -468,12 +477,17 @@ export function AppShell() {
               ? clsx(
                   // Full width, starting below the top bar: `top-14` pairs with
                   // the header's `min-h-14`, which is exact because everything in
-                  // that bar truncates rather than wrapping. The design fills the
-                  // viewport this way, which is why there is no backdrop to dim
-                  // and no shadow to lift it off a page you cannot see.
+                  // that bar truncates rather than wrapping. Absolute within the
+                  // row the header leads, not fixed to the viewport, so a banner
+                  // above that row moves the drawer down with the header instead
+                  // of leaving it over the top of it: the header holds the only
+                  // control that closes this, since the design fills the
+                  // viewport below the bar and so has no backdrop to dim, no
+                  // shadow to lift it off a page you cannot see, and nothing
+                  // behind it to dismiss it by.
                   // 250ms on `--ease-out-fluid` is what HeroUI slides its
                   // own Drawer in on, and this is the same gesture.
-                  "fixed inset-x-0 top-14 bottom-0 z-40 w-full transition-transform duration-250 ease-out-fluid motion-reduce:transition-none",
+                  "absolute inset-x-0 top-14 bottom-0 z-40 w-full transition-transform duration-250 ease-out-fluid motion-reduce:transition-none",
                   mobileNavOpen ? "translate-x-0" : "-translate-x-full",
                 )
               : clsx(
@@ -649,7 +663,8 @@ export function AppShell() {
                   than floating on the rail's edge: the rail now runs the full
                   height of the window and has no edge above the fold to hang it
                   on. Desktop-only, as before; on mobile the drawer is dismissed
-                  from the control to its left or from the backdrop. */}
+                  from the control to its left, which is why that control stays
+                  visible under an open drawer. */}
               <button
                 type="button"
                 onClick={() => setCollapsed((value) => !value)}

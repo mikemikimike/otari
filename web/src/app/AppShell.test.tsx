@@ -52,7 +52,12 @@ function mockMatchMedia(matches: boolean, options: { legacy?: boolean } = {}) {
 // are the router's children, which is what makes clicking a nav link swap them.
 function renderShell(
   deployment: DeploymentBootstrap = bootstrap(),
-  options: { entitlements?: Partial<Entitlements>; url?: string } = {},
+  options: {
+    entitlements?: Partial<Entitlements>
+    url?: string
+    /** The caller's membership, for the controls that gate on their role. */
+    context?: Parameters<typeof organizationContext>[0]
+  } = {},
 ) {
   const entitlements: Entitlements = {
     capabilities: BASE_CAPABILITIES,
@@ -65,7 +70,7 @@ function renderShell(
   // into that rail, and the switcher reads it for the names it shows. Stubbed
   // here so the sidebar behaves as it does in front of a real gateway.
   vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-    Response.json(organizationContext()),
+    Response.json(organizationContext(options.context)),
   )
   return renderWithRouter(<div>PAGE CONTENT</div>, {
     url,
@@ -104,8 +109,14 @@ describe("AppShell responsive layout", () => {
 
     const aside = container.querySelector("aside")
     // Off-canvas by default so it does not squash the page's content.
-    expect(aside?.className).toContain("fixed")
     expect(aside?.className).toContain("-translate-x-full")
+    // Absolute within the row the header leads, not fixed to the viewport: the
+    // banners above that row are in flow, so a viewport offset left the drawer
+    // over the top of the header by however tall they were, covering the one
+    // control that closes it.
+    expect(aside?.className).toContain("absolute")
+    expect(aside?.className).not.toContain("fixed")
+    expect(aside?.parentElement?.className).toContain("relative")
 
     const toggle = screen.getByRole("button", { name: "Open navigation" })
     expect(toggle).toHaveAttribute("aria-expanded", "false")
@@ -165,9 +176,9 @@ describe("AppShell responsive layout", () => {
     const { container } = await renderShell()
 
     const aside = container.querySelector("aside")
-    // Desktop keeps the in-flow rail rather than a fixed overlay, and it is one
+    // Desktop keeps the in-flow rail rather than an overlay, and it is one
     // width: no inline style, because nothing drags it any more.
-    expect(aside?.className).not.toContain("fixed")
+    expect(aside?.className).not.toContain("absolute")
     expect(aside?.className).toContain("w-[16.5rem]")
     expect(aside?.getAttribute("style")).toBeNull()
     expect(
@@ -576,6 +587,41 @@ describe("AppShell entitlement and flag gating", () => {
     expect(screen.queryByText(/^Back to /)).toBeNull()
   })
 
+  it("offers Create workspace to a role the server would let create one", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    await renderShell()
+
+    await user.click(
+      await screen.findByRole("button", { name: /^Switch workspace/ }),
+    )
+    const menu = await screen.findByRole("dialog")
+    expect(
+      within(menu).getByRole("button", { name: "Create workspace" }),
+    ).toBeInTheDocument()
+  })
+
+  it("withholds Create workspace from a role the server would refuse", async () => {
+    mockMatchMedia(false)
+    const user = userEvent.setup()
+    // `POST /v1/workspaces` is owners and admins only, and the Workspaces page
+    // gates its own create control on the same predicate. Offering it here would
+    // hand a member the whole form and report the refusal as a 403 after they
+    // had typed a name.
+    await renderShell(bootstrap(), { context: { role: "member" } })
+
+    await user.click(
+      await screen.findByRole("button", { name: /^Switch workspace/ }),
+    )
+    const menu = await screen.findByRole("dialog")
+    expect(
+      within(menu).queryByRole("button", { name: "Create workspace" }),
+    ).toBeNull()
+    // The organization row is still there, so this is the create row missing
+    // rather than the menu failing to open.
+    expect(within(menu).getByText("Default Organization")).toBeInTheDocument()
+  })
+
   it("leaves the organization rail by its own way back", async () => {
     mockMatchMedia(false)
     await renderShell(bootstrap(), { url: "/organization/members" })
@@ -614,6 +660,37 @@ describe("AppShell entitlement and flag gating", () => {
     expect(
       await screen.findByRole("link", { name: "Organization" }),
     ).toHaveAttribute("href", "/organization/members")
+  })
+
+  it("does not resume onto a destination this deployment gates off", async () => {
+    mockMatchMedia(false)
+    // Registered and still an organization destination, so the registry check
+    // passes it; the gateway was restarted against a config that no longer
+    // reports the surface. The only way onto that rail must not land on the
+    // "not available here" panel.
+    window.localStorage.setItem(
+      "otari.dashboard.lastOrganizationLocation",
+      "/settings",
+    )
+    await renderShell(bootstrap({ surfaces: ["organizations", "budgets"] }))
+
+    expect(
+      await screen.findByRole("link", { name: "Organization" }),
+    ).toHaveAttribute("href", "/organization/members")
+  })
+
+  it("does not record a gated-off route it answered with the panel", async () => {
+    mockMatchMedia(false)
+    // Reached by URL, refused by the shell. Recording it would make the panel
+    // the page the rail resumes to.
+    await renderShell(bootstrap({ surfaces: ["organizations"] }), {
+      url: "/settings",
+    })
+    await screen.findByText("Settings is not available here")
+
+    expect(
+      window.localStorage.getItem("otari.dashboard.lastOrganizationLocation"),
+    ).toBeNull()
   })
 
   it("expands a nav group to reveal its nested destinations", async () => {

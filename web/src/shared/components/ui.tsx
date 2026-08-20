@@ -561,6 +561,18 @@ export function EmptyState({
 // `data` arrives (Settings, Tools & Guardrails, the Overview index) flash a bare
 // header over blank space, which reads as broken. `role="status"` announces the
 // wait (and its label) to assistive tech.
+export function PageLoading({ label = "Loading…" }: { label?: string }) {
+  return (
+    <div
+      role="status"
+      className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-muted"
+    >
+      <Spinner size="sm" />
+      <span>{label}</span>
+    </div>
+  )
+}
+
 /**
  * A destination this build declares but does not serve.
  *
@@ -576,18 +588,6 @@ export function UnavailableHere({ title }: { title: string }) {
       title={`${title} is not available here`}
       description="This deployment declares the page but does not serve it. Pick a destination from the sidebar."
     />
-  )
-}
-
-export function PageLoading({ label = "Loading…" }: { label?: string }) {
-  return (
-    <div
-      role="status"
-      className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-muted"
-    >
-      <Spinner size="sm" />
-      <span>{label}</span>
-    </div>
   )
 }
 

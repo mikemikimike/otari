@@ -1,10 +1,11 @@
 import { Button, Modal, Popover } from "@heroui/react"
 import { useState } from "react"
 import { FiCheck, FiChevronDown, FiPlus } from "react-icons/fi"
+import { canManage } from "@/features/organization/roles"
 import { CreateWorkspaceForm } from "@/features/workspaces/WorkspacesPage"
 import { useOrganizationContext } from "@/shared/api/hooks"
-import { EntitlementGate } from "@/shared/components/EntitlementGate"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
+import { useEntitlement } from "@/shared/hooks/useEntitlements"
 import { NAV_TRANSITION, navIndicatorClass } from "./rowStyles"
 
 // The menu's own rhythm, which is the rail's: a 44px row and a 32px heading
@@ -57,6 +58,18 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   const context = useOrganizationContext()
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  // Owners and admins only, which is what the server says of
+  // `POST /v1/workspaces` and what the Workspaces page gates its own create
+  // control on. Without it a member or a viewer is handed the whole form from
+  // the scope menu and meets the refusal as a 403 after typing a name.
+  const managesOrganization = canManage(context.data)
+  // The predicate form of the gate rather than `EntitlementGate`, for the same
+  // reason the sidebar uses a predicate: the divider above these two rows has to
+  // disappear along with the last row under it, which a wrapper cannot tell it.
+  const { entitled: createsOrganizations } = useEntitlement(
+    "organizations.create",
+  )
+  const offersCreate = managesOrganization || createsOrganizations
 
   // Both hops optional: the context can answer without an organization (a
   // failed read, or a shape a test supplies), and the switcher is chrome that
@@ -186,24 +199,28 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                 })}
               </ul>
             )}
-            <div className={MENU_DIVIDER} />
-            <button
-              type="button"
-              className={`${MENU_ROW} font-semibold text-muted hover:bg-surface-alt hover:text-foreground`}
-              onClick={() => {
-                setOpen(false)
-                setCreating(true)
-              }}
-            >
-              <PlusMark />
-              <span className="min-w-0 flex-1 truncate">Create workspace</span>
-            </button>
+            {offersCreate ? <div className={MENU_DIVIDER} /> : null}
+            {managesOrganization ? (
+              <button
+                type="button"
+                className={`${MENU_ROW} font-semibold text-muted hover:bg-surface-alt hover:text-foreground`}
+                onClick={() => {
+                  setOpen(false)
+                  setCreating(true)
+                }}
+              >
+                <PlusMark />
+                <span className="min-w-0 flex-1 truncate">
+                  Create workspace
+                </span>
+              </button>
+            ) : null}
             {/* Coded, and absent here. A self-hosted gateway is one tenant: it
               mounts no create-organization endpoint, so the row is gated on an
               entitlement this build does not grant rather than rendered as a
               control that would fail. An overlay build that serves several
               organizations grants it and the menu matches the design whole. */}
-            <EntitlementGate capability="organizations.create">
+            {createsOrganizations ? (
               <button
                 type="button"
                 className={`${MENU_ROW} text-muted hover:bg-surface-alt hover:text-foreground`}
@@ -214,7 +231,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                   Create organization
                 </span>
               </button>
-            </EntitlementGate>
+            ) : null}
           </Popover.Dialog>
         </Popover.Content>
       </Popover>

@@ -118,6 +118,16 @@ const BASE_NAV_SECTIONS = [
         // manage (only per-request config a caller passes in, plus two safety
         // toggles on Settings), so it is left out rather than linked to an
         // empty page.
+        //
+        // `to` gates and names the group; it is not somewhere the rail
+        // navigates. A group with more than one visible child is a disclosure
+        // when expanded and a flyout when collapsed, and neither offers the
+        // parent, so `/tools` (the three services on one page) is reachable by
+        // URL only. Deliberate: each service has its own destination here, and
+        // Guardrails belongs to Routing, so a row for the combined page would
+        // duplicate all three and cross the grouping the design draws. Routing
+        // leads with Policies because `/routing` *is* the policies page, not to
+        // make a parent reachable.
         children: [
           { to: "/tools/web-search", label: "Web search", icon: FiGlobe },
           {

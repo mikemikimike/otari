@@ -1,9 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest"
-
 import { lastLocation, rememberLocation } from "./navigationHistory"
+import type { NavItem } from "./types"
 
 const WORKSPACE_KEY = "otari.dashboard.lastWorkspaceLocation"
 const ORGANIZATION_KEY = "otari.dashboard.lastOrganizationLocation"
+
+// What the shell's own predicate answers for a deployment that hosts every
+// surface, which is the ordinary standalone gateway.
+const showsEverything = () => true
+// And what it answers for one that does not. The predicate is given the entry,
+// so a surface is all a test needs to withhold to hide a destination.
+const withoutSurface =
+  (surface: string) =>
+  (item: NavItem): boolean =>
+    item.surface !== surface
 
 describe("rail location memory", () => {
   afterEach(() => {
@@ -11,30 +21,57 @@ describe("rail location memory", () => {
   })
 
   it("files a destination under the rail that declares it", () => {
-    rememberLocation("/usage")
-    rememberLocation("/budgets")
+    rememberLocation("/usage", showsEverything)
+    rememberLocation("/budgets", showsEverything)
 
     // Two rails, two memories: recording an organization page must not overwrite
     // where you were on the workspace one, which is the whole point.
-    expect(lastLocation("workspace")).toEqual({ to: "/usage" })
-    expect(lastLocation("organization")).toEqual({ to: "/budgets" })
+    expect(lastLocation("workspace", showsEverything)).toEqual({ to: "/usage" })
+    expect(lastLocation("organization", showsEverything)).toEqual({
+      to: "/budgets",
+    })
   })
 
   it("remembers a nested destination, not just a top-level one", () => {
     // "Including its subpage" is the part the shell used to lose: it sent you to
     // the rail's landing page however deep you had been.
-    rememberLocation("/tools/web-search")
+    rememberLocation("/tools/web-search", showsEverything)
 
-    expect(lastLocation("workspace")).toEqual({ to: "/tools/web-search" })
+    expect(lastLocation("workspace", showsEverything)).toEqual({
+      to: "/tools/web-search",
+    })
   })
 
   it("ignores a path the registry does not declare", () => {
-    rememberLocation("/usage")
-    rememberLocation("/docs")
+    rememberLocation("/usage", showsEverything)
+    rememberLocation("/docs", showsEverything)
 
     // The guide and the 404 splat are not places to return to, so the last real
     // destination stands rather than being replaced by one.
-    expect(lastLocation("workspace")).toEqual({ to: "/usage" })
+    expect(lastLocation("workspace", showsEverything)).toEqual({ to: "/usage" })
+  })
+
+  it("ignores a destination this deployment gates off", () => {
+    rememberLocation("/budgets", showsEverything)
+    // Registered, and reachable by URL, but the shell answers it with the "not
+    // available here" panel. The page someone was just told they cannot have is
+    // not the page to send them back to.
+    rememberLocation("/settings", withoutSurface("settings"))
+
+    expect(lastLocation("organization", showsEverything)).toEqual({
+      to: "/budgets",
+    })
+  })
+
+  it("ignores a nested destination whose own surface is gated off", () => {
+    rememberLocation("/routing", showsEverything)
+    // Guardrails is grouped under Routing and served by the tools surface, so
+    // the child's surface is the one that has to be consulted, not its parent's.
+    rememberLocation("/tools/guardrails", withoutSurface("tools"))
+
+    expect(lastLocation("workspace", showsEverything)).toEqual({
+      to: "/routing",
+    })
   })
 
   it("drops a stored value that is no longer a destination", () => {
@@ -42,7 +79,21 @@ describe("rail location memory", () => {
     // send someone to the shell's "not available here" panel.
     window.localStorage.setItem(WORKSPACE_KEY, "/retired-page")
 
-    expect(lastLocation("workspace")).toBeUndefined()
+    expect(lastLocation("workspace", showsEverything)).toBeUndefined()
+  })
+
+  it("drops a stored value the deployment has since gated off", () => {
+    // The half a write-time check cannot cover: the entry was visible when it was
+    // stored, and a gateway restarted against a config reporting fewer surfaces
+    // changed the answer underneath it.
+    window.localStorage.setItem(ORGANIZATION_KEY, "/settings")
+
+    expect(
+      lastLocation("organization", withoutSurface("settings")),
+    ).toBeUndefined()
+    expect(lastLocation("organization", showsEverything)).toEqual({
+      to: "/settings",
+    })
   })
 
   it("drops a stored value that belongs to the other rail", () => {
@@ -50,11 +101,11 @@ describe("rail location memory", () => {
     // has since moved rails cannot land you on the wrong one.
     window.localStorage.setItem(ORGANIZATION_KEY, "/usage")
 
-    expect(lastLocation("organization")).toBeUndefined()
+    expect(lastLocation("organization", showsEverything)).toBeUndefined()
   })
 
   it("answers with nothing before anything has been recorded", () => {
-    expect(lastLocation("workspace")).toBeUndefined()
-    expect(lastLocation("organization")).toBeUndefined()
+    expect(lastLocation("workspace", showsEverything)).toBeUndefined()
+    expect(lastLocation("organization", showsEverything)).toBeUndefined()
   })
 })
