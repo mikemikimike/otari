@@ -18,15 +18,6 @@ column is added through ``batch_alter_table`` because SQLite has no ``ALTER TABL
 (two of them partial) through SQLite's rebuild, which reflection could not
 recover on its own.
 
-This was authored against ``a3c7e1b9d5f2`` and merged (#640) after
-``f2a4c6d8b0e3`` (#667) had claimed the same parent, which left two heads and
-``upgrade head`` with nothing to choose between them. It keeps its original
-parent: a database that already ran this revision from ``a3c7e1b9d5f2``, on
-#640's branch or through ``upgrade heads``, would be stranded by a re-parent,
-because the revision would then be the head and ``upgrade head`` a no-op that
-silently skips #667's three ``user`` columns. ``d0f2b4a6c8e1`` merges the two
-strands instead, which converges from either side.
-
 Revision ID: b6e8c2a4d7f1
 Revises: a3c7e1b9d5f2
 Create Date: 2026-08-19
