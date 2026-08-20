@@ -10,7 +10,7 @@
 // The handful of shapes the spec does not describe live in `./local.ts`, with
 // the reason each one is there.
 
-import type { PolicySpec } from "./local"
+import type { PolicySpec, UsageFilters } from "./local"
 import type { components, operations } from "./schema"
 
 export type { components, operations, paths } from "./schema"
@@ -132,6 +132,22 @@ type SeriesQuery = NonNullable<
   operations["usage_series_v1_usage_series_get"]["parameters"]["query"]
 >
 export type UsageGroupBy = NonNullable<SeriesQuery["group_by"]>
+
+// `UsageFilters` (`./local`) stays hand-written, because it is a filter set the
+// hooks assemble across five usage endpoints and several of its values go on the
+// wire as repeated params, which no request body in the spec describes. What it
+// must not be is unbound: a key that is not a real query parameter would be
+// serialized and ignored, and nothing would say so. So its keys are pinned to
+// the operation that carries all of them, and a name the spec drops (or a typo)
+// fails to compile here rather than going quiet on the wire.
+type RequestsQuery = NonNullable<
+  operations["list_usage_v1_usage_get"]["parameters"]["query"]
+>
+/** Fails to compile unless `T` is `true`, so a `false` below is a build error. */
+type Assert<T extends true> = T
+export type UsageFilterKeysArePinned = Assert<
+  keyof UsageFilters extends keyof RequestsQuery ? true : false
+>
 
 // ---------------------------------------------------------------------------
 // Users, keys and budgets
