@@ -409,9 +409,9 @@ describe("AppShell surface gating", () => {
         .getAllByRole("link")
         .map((link) => link.textContent),
     ).toEqual([
+      "Workspaces",
       "Members & roles",
       "Users",
-      "Workspaces",
       "Spend & budgets",
       "Model pricing",
       "Org settings",

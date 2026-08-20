@@ -194,6 +194,16 @@ const ORGANIZATION_NAV_SECTIONS = [
     id: "org-people",
     label: "People & access",
     items: [
+      // Absent from the design, which switches workspace from the scope menu and
+      // has no list page. Kept because this is the only place a workspace is
+      // renamed, deleted, or has its roster read, and the scope menu offers none
+      // of that.
+      {
+        to: "/workspaces",
+        label: "Workspaces",
+        surface: "workspaces",
+        icon: FiGrid,
+      },
       {
         to: "/organization/members",
         label: "Members & roles",
@@ -216,16 +226,6 @@ const ORGANIZATION_NAV_SECTIONS = [
         label: "Providers",
         surface: "organization_providers",
         icon: FiBox,
-      },
-      // Absent from the design, which switches workspace from the scope menu and
-      // has no list page. Kept because this is the only place a workspace is
-      // renamed, deleted, or has its roster read, and the scope menu offers none
-      // of that.
-      {
-        to: "/workspaces",
-        label: "Workspaces",
-        surface: "workspaces",
-        icon: FiGrid,
       },
     ],
   },

@@ -266,7 +266,14 @@ function NavGroup({
           which wraps its children in a div carrying 0.5rem of padding that no
           className can reach: it would inset these rows from the lane their
           siblings share and clip their fill short at both edges. */}
-      <Disclosure.Content className="flex flex-col">
+      {/* `focus-within:overflow-visible` because HeroUI's `.disclosure__content`
+          is `overflow: clip` (that is what keeps the rows out of sight while the
+          panel animates), and a nested row is exactly the panel's width, so the
+          2px its focus ring paints outside its border box was being cut off on
+          every edge. The clip is only needed while the panel is moving, and it
+          cannot be moving while something inside it holds focus: closing the
+          group puts focus on the trigger, which is outside the panel. */}
+      <Disclosure.Content className="flex flex-col focus-within:overflow-visible">
         {children.map((child) => (
           <NavRowLink
             key={child.to}

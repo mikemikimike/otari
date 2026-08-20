@@ -112,15 +112,15 @@ function MenuItem({
     >
       <Icon aria-hidden="true" className={MENU_ICON_CLASS} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {/* The trailing lane is held open on every row, at the icon's width, so
-          the one row that carries a value does not push its own label out of
-          the column the others sit in. */}
+      {/* The trailing lane is held open on every row, at the width a value
+          takes, so the one row that carries a value does not push its own label
+          out of the column the others sit in. */}
       {trailing ? (
         <span className="w-11 shrink-0 text-right text-xs font-normal text-muted">
           {trailing}
         </span>
       ) : (
-        <span aria-hidden="true" className="h-0 w-4 shrink-0" />
+        <span aria-hidden="true" className="h-0 w-11 shrink-0" />
       )}
     </button>
   )
@@ -144,7 +144,7 @@ function MenuExternalLink({
     >
       <Icon aria-hidden="true" className={MENU_ICON_CLASS} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span aria-hidden="true" className="h-0 w-4 shrink-0" />
+      <span aria-hidden="true" className="h-0 w-11 shrink-0" />
     </a>
   )
 }

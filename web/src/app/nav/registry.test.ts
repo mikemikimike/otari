@@ -55,10 +55,10 @@ describe("nav registry", () => {
       "API keys",
       "Providers",
       "Members",
+      "Workspaces",
       "Members & roles",
       "Users",
       "Providers",
-      "Workspaces",
       "Spend & budgets",
       "Billing",
       "Model pricing",
@@ -96,13 +96,13 @@ describe("nav registry", () => {
       (section) => section.id === "org-people",
     )
     expect(tenancy?.items.map((item) => [item.label, item.surface])).toEqual([
+      ["Workspaces", "workspaces"],
       ["Members & roles", "organizations"],
       // Grouped with the tenancy rows but gated on its own surface: Users reads
       // the pre-tenancy `users` table, so a deployment serving one identity
       // without the other hides exactly the row it cannot answer for.
       ["Users", "users"],
       ["Providers", "organization_providers"],
-      ["Workspaces", "workspaces"],
     ])
   })
 

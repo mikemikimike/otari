@@ -20,7 +20,7 @@ const MENU_ROW_RESTING = "text-foreground hover:bg-surface-alt"
 const MENU_ROW_CURRENT = "bg-primary-subtle text-primary-subtle-foreground"
 // The dividers are inset to the rows' own text lane rather than run edge to
 // edge, so they separate the groups without drawing a line across the card.
-const MENU_DIVIDER = "mx-2.5 h-px shrink-0 bg-border"
+const MENU_DIVIDER = "mx-2.5 my-1 h-px shrink-0 bg-border"
 
 // The marks `otari-ai/frontend`'s scope switcher uses for the same two rows:
 // a 16px check on the current scope, a 20px plus on the row that creates one.
@@ -186,7 +186,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                 })}
               </ul>
             )}
-            <div className={`${MENU_DIVIDER} my-1`} />
+            <div className={MENU_DIVIDER} />
             <button
               type="button"
               className={`${MENU_ROW} font-semibold text-muted hover:bg-surface-alt hover:text-foreground`}

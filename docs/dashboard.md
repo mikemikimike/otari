@@ -442,6 +442,8 @@ lands: the address they are added by is the handle it will claim them with.
 
 ### People & access
 
+- **Workspaces**: create, rename, and delete workspaces, and manage each
+  roster. The last workspace cannot be deleted.
 - **Members & roles**: who belongs to the organization, their role
   (owner, admin, member, viewer), and their status. Adding someone takes an
   email address and optionally the workspaces to put them in straight away.
@@ -449,8 +451,6 @@ lands: the address they are added by is the handle it will claim them with.
   default model access for a user's keys. Distinct from members: a member is a
   person who signs in, a user is what spend is attributed to, and the two merge
   once the request plane is re-parented onto tenancy.
-- **Workspaces**: create, rename, and delete workspaces, and manage each
-  roster. The last workspace cannot be deleted.
 
 ### Cost & billing
 
