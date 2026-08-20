@@ -303,13 +303,6 @@ hand.
 
 ### Gateway
 
-- **Providers**: add, edit, test, and delete provider credentials at runtime
-  (standalone only). Stored keys are encrypted with `OTARI_SECRET_KEY`; config
-  providers appear read-only. See the first-run walkthrough above. The add and
-  edit forms also take **Client options (JSON)**, the `client_args` passed to the
-  provider's client (a request timeout, custom headers); on the known-provider
-  form they sit under Advanced. A backend that can take longer than 10 minutes to
-  answer a non-streaming request needs an explicit `{"timeout": 1800}` here.
 - **Models**: browse the model catalog and set per-model pricing, with specs
   and modality metadata where available (from models.dev). The copy control next
   to a model puts its full `provider:model` id on your clipboard, which is what
@@ -381,8 +374,14 @@ hand.
   models a key may call and setting an expiry (leave blank for a key that never
   expires). A key belongs to one workspace, the one selected above, and every
   request on it is billed there.
-- **Providers**: the page described under Gateway above. It is listed here
-  because a provider credential is what a key spends upstream.
+- **Providers**: listed here because a provider credential is what a key
+  spends upstream. Add, edit, test, and delete provider credentials at runtime
+  (standalone only). Stored keys are encrypted with `OTARI_SECRET_KEY`; config
+  providers appear read-only. See the first-run walkthrough above. The add and
+  edit forms also take **Client options (JSON)**, the `client_args` passed to the
+  provider's client (a request timeout, custom headers); on the known-provider
+  form they sit under Advanced. A backend that can take longer than 10 minutes to
+  answer a non-streaming request needs an explicit `{"timeout": 1800}` here.
 - **Members**: who is assigned to the selected workspace and their role in it.
   A workspace's members are always a subset of the organization's, so someone
   joins the organization first, on the organization rail.
