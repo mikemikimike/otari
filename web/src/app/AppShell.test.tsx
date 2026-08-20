@@ -788,6 +788,22 @@ describe("AppShell entitlement and flag gating", () => {
     expect(screen.queryByRole("link", { name: "Policies" })).toBeNull()
   })
 
+  it("answers a nested route with the panel when the child's own surface is gone", async () => {
+    mockMatchMedia(false)
+    // The other half of the case above: dropping the link is not enough, because
+    // a bookmark still reaches the route. `NAV_CHILD_PARENTS` carries the child's
+    // surface onto the entry `navItemForPath` answers with, which is what lets
+    // the shell refuse a path whose *parent* surface it does host.
+    await renderShell(bootstrap({ surfaces: ["routing"] }), {
+      url: "/tools/guardrails",
+    })
+
+    expect(
+      await screen.findByText("Guardrails is not available here"),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("PAGE CONTENT")).toBeNull()
+  })
+
   it("reaches a group's nested destinations from the collapsed rail", async () => {
     mockMatchMedia(false)
     const user = userEvent.setup()
