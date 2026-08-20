@@ -18,11 +18,12 @@ import {
   FiTool,
   FiUsers,
 } from "react-icons/fi"
+import { OVERLAY_NAV_LABEL_OVERRIDES } from "./overlayLabelOverrides"
 import {
   OVERLAY_NAV_SECTIONS,
   OVERLAY_ORG_NAV_SECTIONS,
 } from "./overlaySections"
-import type { NavItem, NavSection } from "./types"
+import type { NavItem, NavLabelOverride, NavSection } from "./types"
 
 /**
  * The sidebar the base build ships, and the only place a destination is
@@ -314,6 +315,53 @@ const ORGANIZATION_NAV_SECTIONS = [
 ] as const satisfies readonly NavSection[]
 
 /**
+ * Rename base section headings and disclosure labels, matched by `sectionId`.
+ *
+ * Those two fields only: everything else about a section, its items, and their
+ * icons and gating passes through untouched, and a section no override targets
+ * is returned as it was. An override naming a section, or a path inside one,
+ * that the registry does not declare is a no-op rather than a throw, so a stale
+ * override in an overlay costs a rename and not the sidebar. Two overrides
+ * naming one section is the overlay's own bug, and the last of them wins.
+ *
+ * Applied to the base sections before `composeNavSections` appends an overlay's
+ * own, which declare their labels directly and have nothing to rename.
+ */
+export function applyNavLabelOverrides(
+  sections: readonly NavSection[],
+  overrides: readonly NavLabelOverride[],
+): readonly NavSection[] {
+  if (overrides.length === 0) return sections
+  const overrideBySectionId = new Map(
+    overrides.map((override) => [override.sectionId, override]),
+  )
+  return sections.map((section) => {
+    const override = overrideBySectionId.get(section.id)
+    if (!override) return section
+    const { disclosureLabels } = override
+    return {
+      ...section,
+      ...(override.label !== undefined && { label: override.label }),
+      ...(disclosureLabels && {
+        items: section.items.map((item) => {
+          const label = disclosureLabels[item.to]
+          // Groups only, which is what the platform's single `NavDisclosure`
+          // label maps to. A group is a destination here as well as a heading,
+          // so renaming one also renames what the breadcrumbs and the shell's
+          // gated-off panel call that page (`/tools`); the group and the page
+          // sharing a name is why that reads correctly rather than as a bug.
+          // A plain link's label and a `NavChild`'s are outside the seam, as
+          // they are over there; widen it when a contribution needs one.
+          return label !== undefined && item.children
+            ? { ...item, label }
+            : item
+        }),
+      }),
+    }
+  })
+}
+
+/**
  * Compose the base sections with an overlay build's contributions.
  *
  * Base first, then overlay, so an overlay appends its own sections without
@@ -329,10 +377,11 @@ export function composeNavSections(
 /**
  * The composed workspace sidebar.
  *
- * This build appends nothing, so it is the base sections alone.
+ * This build renames nothing and appends nothing, so it is the base sections
+ * alone.
  */
 export const NAV_SECTIONS: readonly NavSection[] = composeNavSections(
-  BASE_NAV_SECTIONS,
+  applyNavLabelOverrides(BASE_NAV_SECTIONS, OVERLAY_NAV_LABEL_OVERRIDES),
   OVERLAY_NAV_SECTIONS,
 )
 
@@ -344,9 +393,16 @@ export const NAV_SECTIONS: readonly NavSection[] = composeNavSections(
  * and it belongs on this rail, so an overlay that could only contribute to the
  * workspace one would have to edit this file to register it, which is what
  * cardinal rule 6 rules out. This build appends nothing.
+ *
+ * Label overrides come from the same list the workspace rail reads: a section id
+ * is unique across the two rails (`registry.test.ts` pins that), so one list
+ * addresses both and an overlay has one module to replace rather than two.
  */
 export const ORG_NAV_SECTIONS: readonly NavSection[] = composeNavSections(
-  ORGANIZATION_NAV_SECTIONS,
+  applyNavLabelOverrides(
+    ORGANIZATION_NAV_SECTIONS,
+    OVERLAY_NAV_LABEL_OVERRIDES,
+  ),
   OVERLAY_ORG_NAV_SECTIONS,
 )
 
