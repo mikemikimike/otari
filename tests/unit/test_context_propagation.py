@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -25,6 +25,25 @@ def _isolate_config_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in os.environ:
         if name.startswith("OTARI_"):
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def _reset_db_state() -> Generator[None, None, None]:
+    """Drop the engine each app here initialized, so it cannot outlive its tmp file.
+
+    Every test in this module boots a real lifespan against a throwaway SQLite
+    file, which leaves ``gateway.core.database`` pointing at a path that is gone
+    once ``tmp_path`` is cleaned up. Scoped to this module rather than the root
+    conftest, matching how the other app-booting unit tests
+    (``test_gateway_root_page.py``, ``test_deployment_bootstrap.py``) clean up
+    after themselves.
+    """
+    from gateway.core.database import reset_db
+
+    try:
+        yield
+    finally:
+        reset_db()
 
 
 def _test_config(tmp_path: Path, **overrides: Any) -> GatewayConfig:

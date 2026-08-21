@@ -77,6 +77,7 @@ pricing:
 | `pricing` | dict | `{}` | Model pricing entries |
 | `search_tools` | dict | `{}` | Search tools served by `POST /v1/search` (see below). Standalone mode only. |
 | `enable_metrics` | bool | `false` | Enable Prometheus `/metrics` endpoint |
+| `accept_incoming_trace_context` | bool | `false` | Honor incoming OpenTelemetry propagation headers (W3C `traceparent`/`tracestate` by default) so spans the gateway creates join the caller's trace. Off by default because the headers are unauthenticated. See [HTTP trace context propagation](#http-trace-context-propagation). |
 | `enable_docs` | bool | `true` | Enable `/docs`, `/redoc`, `/openapi.json` |
 | `bootstrap_api_key` | bool | `true` | Create a first-use API key on startup when none exist |
 | `log_writer_strategy` | string | `"single"` | Usage log writing: `"single"` (inline) or `"batch"` (background). Prefer `"batch"` for streaming clients: with `"single"`, a client that disconnects at the SSE `[DONE]` marker can leave the usage row uncommitted and the budget reservation unreconciled. `"batch"` queues in memory and flushes on a 1s interval or 100-row batch, so it removes that race but is not crash-durable. |
@@ -154,12 +155,13 @@ span. Context is detached when the request finishes, so separate HTTP requests
 do not share trace state.
 
 Malformed propagation headers can still affect observability noise. In particular,
-malformed `tracestate` values may cause OpenTelemetry's internal logger
-(`opentelemetry.trace.span`) to emit warnings before Otari resumes with a new root
-trace. If Otari is exposed to untrusted callers, treat this as client-controlled
-log-volume input: keep propagation disabled unless needed, strip propagation
-headers at the edge, and tune the `opentelemetry.trace.span` log level or filters
-for your deployment.
+a malformed `tracestate` makes OpenTelemetry's internal logger
+(`opentelemetry.trace.span`) emit a warning per offending member and drop the
+`tracestate`; a valid `traceparent` alongside it is still honored, so the request
+joins the caller's trace without the vendor state. If Otari is exposed to
+untrusted callers, treat this as client-controlled log-volume input: keep
+propagation disabled unless needed, strip propagation headers at the edge, and
+tune the `opentelemetry.trace.span` log level or filters for your deployment.
 
 Cross-origin browser propagation is not enabled: propagation headers, including
 the default W3C `traceparent` and `tracestate` headers, are not in the CORS

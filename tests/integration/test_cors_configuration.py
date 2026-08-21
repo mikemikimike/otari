@@ -70,6 +70,9 @@ def test_cors_rejects_trace_context_headers(postgres_url: str, test_db: Session)
         host="127.0.0.1",
         port=8000,
         cors_allow_origins=["https://trusted.com"],
+        # Enabled so the assertion pins what it claims: even where the gateway
+        # honors propagation headers, a browser still cannot send them.
+        accept_incoming_trace_context=True,
     )
 
     app = create_app(config)

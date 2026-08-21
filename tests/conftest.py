@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import sys
 from collections.abc import Generator
 from pathlib import Path
@@ -85,6 +83,7 @@ def _reset_default_pricing() -> Generator[None, None, None]:
     configure_provider_types(None)
     reset_price_refresh_state()
 
+
 def seed_workspace_id(db: Any) -> Any:
     """The workspace a directly-built request-plane row belongs to.
 
@@ -116,12 +115,3 @@ def seed_workspace_id(db: Any) -> Any:
     db.add(workspace)
     db.flush()
     return workspace.id
-
-@pytest.fixture(autouse=True)
-def _reset_db_state() -> Generator[None, None, None]:
-    from gateway.core.database import reset_db
-
-    try:
-        yield
-    finally:
-        reset_db()

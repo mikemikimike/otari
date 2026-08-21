@@ -91,11 +91,8 @@ def extract_trace_context(carrier: Mapping[str, str]) -> Context:
         An OpenTelemetry Context with whatever the configured propagator could
         extract from the carrier.
     """
-    # Extract into the current context so we preserve any existing baggage,
-    # suppress-instrumentation flags, or enclosing spans that may already
-    # be set (e.g., by an outer instrumentation layer).
-    context = propagate.extract(
-        carrier=carrier, context=otel_context.get_current()
-    )
-
-    return context
+    # Extract into the current context so any existing baggage and
+    # suppress-instrumentation flags survive. An enclosing span does not: a
+    # valid incoming traceparent replaces it, which is what makes the caller's
+    # span the parent of everything this request goes on to create.
+    return propagate.extract(carrier=carrier, context=otel_context.get_current())
