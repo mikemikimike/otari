@@ -338,7 +338,10 @@ def classify_provider_error(exc: BaseException) -> ProviderErrorMapping | None:
     if status_code is None:
         msg = upstream_error_message(exc).lower()
         if any(k in msg for k in ("image", "vision", "media", "invalid_request_error")):
-            return ProviderErrorMapping(status.HTTP_400_BAD_REQUEST, _caller_fault_detail(exc, PROVIDER_BAD_REQUEST_DETAIL))
+            return ProviderErrorMapping(
+                status.HTTP_400_BAD_REQUEST,
+                _caller_fault_detail(exc, PROVIDER_BAD_REQUEST_DETAIL)
+            )
         return None
     # Account billing exhaustion, which several providers report as a 400/422
     # rather than the 402 the condition deserves (and DeepSeek does report as a
