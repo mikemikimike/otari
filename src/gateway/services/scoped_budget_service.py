@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Literal, get_args
 
 from sqlalchemy import and_, case, or_, select, update
@@ -33,14 +34,27 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
 from gateway.log_config import logger
-from gateway.models.entities import APIKey, ScopedBudget
+from gateway.models.entities import APIKey, Budget, ScopedBudget
 from gateway.models.tenancy import OrganizationMember, Workspace, WorkspaceMember
+from gateway.services.budget_periods import (
+    ALIGN_DAY,
+    ALIGN_MONTH,
+    ALIGN_WEEK,
+    ResetAlignment,
+    period_window,
+)
 from gateway.services.workspace_scope import resolve_workspace_id
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+# The counters on this table are ``NUMERIC(18, 6)`` (mozilla-ai/otari#691), so
+# the constants the SQL is built from are ``Decimal``: a bare ``0.0`` in a CASE
+# arm or a ``.values()`` would make PostgreSQL resolve the expression as double
+# precision and hand a binary-rounded amount back to an exact column.
+ZERO = Decimal(0)
 
 SCOPE_ORGANIZATION = "organization"
 SCOPE_WORKSPACE = "workspace"
@@ -57,17 +71,6 @@ SCOPE_API_TOKEN = "api_token"
 ScopeType = Literal["organization", "workspace", "workspace_member", "org_member", "api_token"]
 SCOPE_TYPES: tuple[ScopeType, ...] = get_args(ScopeType)
 
-ALIGN_DAY = "calendar_day"
-ALIGN_WEEK = "calendar_week"
-ALIGN_MONTH = "calendar_month"
-
-# The other way a ceiling can carry a period, and like ``ScopeType`` the one
-# place the wire vocabulary is written. A row holds either a duration in seconds
-# (a rolling window measured from the last reset) or one of these (a window
-# snapped to a UTC calendar boundary), never both: a CHECK on the table refuses
-# the fourth state. This is not a period enum, it only says which boundary a
-# reset snaps to, and a calendar month is the one no number of seconds can name.
-ResetAlignment = Literal["calendar_day", "calendar_week", "calendar_month"]
 
 # Most specific first, so the ceiling closest to the caller is the one that
 # refuses when several are exhausted at once and the reported error is the
@@ -203,46 +206,6 @@ async def _resolve_identities(
     return identities
 
 
-def _aligned_window(alignment: str, now: datetime) -> tuple[datetime, datetime]:
-    """The UTC calendar window containing ``now``.
-
-    Derived from the boundary rather than from ``now`` itself, which is the point:
-    a budget rolled late still lands on the window it belongs to, so when anything
-    looked at the row stops leaking into the period it gets.
-    """
-    day = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    if alignment == ALIGN_DAY:
-        return day, day + timedelta(days=1)
-    if alignment == ALIGN_WEEK:
-        # ISO weeks, so a week runs Monday 00:00 to the next Monday 00:00.
-        start = day - timedelta(days=day.weekday())
-        return start, start + timedelta(days=7)
-    if alignment == ALIGN_MONTH:
-        start = day.replace(day=1)
-        end = start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
-        return start, end
-    raise ValueError(f"Unknown reset alignment: {alignment!r}")
-
-
-def period_window(
-    now: datetime,
-    *,
-    duration: int | None,
-    alignment: str | None,
-) -> tuple[datetime, datetime] | None:
-    """The window a ceiling with this cadence occupies at ``now``, or None for one that never resets.
-
-    The single place a period is derived, so a window written at creation, a
-    window rewritten by a retiming, and a window rolled at the gate cannot drift
-    apart. Raises ``ValueError`` for an alignment this codebase does not know.
-    """
-    if alignment is not None:
-        return _aligned_window(alignment, now)
-    if duration:
-        return now, now + timedelta(seconds=duration)
-    return None
-
-
 async def _roll_expired_periods(
     db: AsyncSession,
     expired: Sequence[tuple[str, int | None, str | None]],
@@ -281,7 +244,7 @@ async def _roll_expired_periods(
                 ScopedBudget.period_end <= now,
             )
             .values(
-                current_spend=0.0,
+                current_spend=ZERO,
                 period_start=period_start,
                 period_end=period_end,
             )
@@ -326,10 +289,12 @@ async def applicable_budgets(
                 ScopedBudget.id,
                 ScopedBudget.scope_type,
                 ScopedBudget.provider_key_id,
-                ScopedBudget.budget_duration_sec,
-                ScopedBudget.reset_alignment,
+                Budget.budget_duration_sec,
+                Budget.reset_alignment,
                 ScopedBudget.period_end,
-            ).where(ident_clause, key_clause)
+            )
+            .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
+            .where(ident_clause, key_clause)
         )
     ).all()
     if not rows:
@@ -360,21 +325,21 @@ async def applicable_budgets(
     return tuple(resolved)
 
 
-def _release_expression(amount: float) -> object:
+def _release_expression(amount: Decimal) -> object:
     """Subtract ``amount`` from the hold, clamped at zero.
 
     CASE rather than GREATEST, matching the per-user release, because SQLite has
-    no GREATEST.
+    no GREATEST. Both arms are ``Decimal`` so the CASE resolves as ``numeric``.
     """
     return case(
-        (ScopedBudget.reserved_spend - amount < 0, 0.0),
+        (ScopedBudget.reserved_spend - amount < ZERO, ZERO),
         else_=ScopedBudget.reserved_spend - amount,
     )
 
 
-async def release(db: AsyncSession, budget_ids: Sequence[str], amount: float) -> None:
+async def release(db: AsyncSession, budget_ids: Sequence[str], amount: Decimal) -> None:
     """Give a held amount back to every ceiling that took it."""
-    if not budget_ids or amount <= 0:
+    if not budget_ids or amount <= ZERO:
         return
     await db.execute(
         update(ScopedBudget)
@@ -388,7 +353,7 @@ async def release(db: AsyncSession, budget_ids: Sequence[str], amount: float) ->
 async def reserve(
     db: AsyncSession,
     budgets: Sequence[ApplicableBudget],
-    amount: float,
+    amount: Decimal,
 ) -> ApplicableBudget | None:
     """Hold ``amount`` on every ceiling, or hold none and name the one that refused.
 
@@ -401,16 +366,23 @@ async def reserve(
     the caller rejects.
     """
     taken: list[str] = []
+    # The cap is a column on the budget this ceiling names, read as a correlated
+    # subquery so the whole check stays inside the one conditional UPDATE. Reading
+    # it first and comparing in Python would reintroduce the read-then-write race
+    # this service exists to close.
+    cap = (
+        select(Budget.max_budget).where(Budget.budget_id == ScopedBudget.budget_id).scalar_subquery()
+    )
     for budget in budgets:
         result = await db.execute(
             update(ScopedBudget)
             .where(
                 ScopedBudget.id == budget.budget_id,
                 or_(
-                    ScopedBudget.max_budget.is_(None),
+                    cap.is_(None),
                     and_(
-                        ScopedBudget.current_spend + ScopedBudget.reserved_spend < ScopedBudget.max_budget,
-                        ScopedBudget.current_spend + ScopedBudget.reserved_spend + amount <= ScopedBudget.max_budget,
+                        ScopedBudget.current_spend + ScopedBudget.reserved_spend < cap,
+                        ScopedBudget.current_spend + ScopedBudget.reserved_spend + amount <= cap,
                     ),
                 ),
             )
@@ -429,17 +401,17 @@ async def settle(
     db: AsyncSession,
     budget_ids: Sequence[str],
     *,
-    actual_cost: float,
-    held: float,
+    actual_cost: Decimal,
+    held: Decimal,
     counts_toward_budget: bool = True,
 ) -> None:
     """Record the real cost on every ceiling and release what the request held."""
     if not budget_ids:
         return
     values: dict[str, object] = {}
-    if actual_cost > 0 and counts_toward_budget:
+    if actual_cost > ZERO and counts_toward_budget:
         values["current_spend"] = ScopedBudget.current_spend + actual_cost
-    if held > 0:
+    if held > ZERO:
         values["reserved_spend"] = _release_expression(held)
     if not values:
         return

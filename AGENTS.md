@@ -53,7 +53,8 @@ The per-request flow (auth → budget → dispatch → reconciliation) spans sev
   bugs suite-wide. Mark a genuinely flaky test with
   `@pytest.mark.flaky(reruns=...)` (from `pytest-rerunfailures`) and say why,
   rather than reintroducing a global retry.
-- Integration tests need PostgreSQL: `TEST_DATABASE_URL` if set, otherwise a Testcontainers `postgres:17`, so without Docker the suite cannot start. SQLite is not a fallback even though `_to_async_url` accepts one: the fixtures tear down with `DROP TABLE ... CASCADE`, which SQLite rejects, so every test errors in teardown. With no Docker, point `TEST_DATABASE_URL` at any reachable PostgreSQL instead.
+- Integration tests need PostgreSQL: `TEST_DATABASE_URL` if set, otherwise a Testcontainers `postgres:17`, so without Docker the suite cannot start. Whichever it is, it is a *server* URL: each xdist worker creates a database of its own on it (`postgres` becomes `postgres_gw0`, and so on) and drops it at the end of the session, so the credentials it points at need `CREATE DATABASE` and a `postgres` database to connect through. Two suites must not share one server URL: they pick the same worker database names and drop each other's database mid-run. SQLite is not a fallback even though `_to_async_url` accepts one: none of that is available there. With no Docker, point `TEST_DATABASE_URL` at any reachable PostgreSQL instead.
+- The schema is built once per worker, not once per test. `tests/integration/conftest.py` runs the migration chain on first use and then returns each test a clean database by truncating it and restoring the migration-seeded rows (`clean_database`, autouse). A fixture that needs a client on a config of its own gets it from `build_test_client`, which is why no test module drops tables any more: dropping them would take the schema out from under every later test on that worker.
 - The OSS-edition smoke gate (`scripts/oss_edition_smoke.py`, run by
   `otari-oss-edition.yml` on any PR touching the app, the migrations, or dependency
   resolution) boots the packaged CLI as a subprocess with no overlay
@@ -67,6 +68,7 @@ The per-request flow (auth → budget → dispatch → reconciliation) spans sev
   import that reached an OSS code path, and a single third-party import in it
   (httpx, pyyaml) gives that up.
 - Two tests assert the provider-error sanitization by making a real outbound call (`test_error_detail_leakage.py::test_provider_error_does_not_leak_details`, `test_streaming_error_event.py::test_streaming_creation_error_returns_http_error`). With no network egress the upstream fails differently and both report a status mismatch, so treat them as environment noise rather than a regression, and confirm a change against the rest of the suite.
+- `tests/integration/test_mcp_dependency_ceiling.py::test_mcp_constraint_resolves_to_an_importable_version` also needs network egress, to install `mcp` fresh from PyPI into a throwaway venv. Unlike the two above, a missing egress here does not look like a status mismatch: it fails hard after burning both `@pytest.mark.flaky` reruns. It also skips outright (not fails) when `uv` is not on `PATH`.
 
 ## Generated Artifacts
 - The Postman collection is generated **from** `docs/public/openapi.json`, so it goes stale

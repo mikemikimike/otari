@@ -35,9 +35,15 @@ settlement path: a streaming response outlives its route handler, and the
 per request (the same reason `gateway_active_requests` is instrumented there).
 
 ## Cost math
-`src/gateway/core/metered_pricing.py` is the only place a cost is derived from a rate: settlement, the reserve-time estimate, repricing, and imported usage all go through it. It is `Decimal` throughout, takes no database, and reads a pricing object structurally, so a stored `ModelPricing`, an organization override, and a genai-prices default are all priced by one implementation. Two rules it enforces rather than assumes: **which cached-token convention a caller speaks is an argument with no default** (`cache_tokens_included`; `GatewayUsage.cache_tokens_in_prompt` is where the request path gets it), and **rounding happens once**, half-up, to the micro-dollar, at the point an amount becomes a settled total. The pricing *lookup* chain, which is a different concern, stays in `services/pricing_service.py`.
+`src/gateway/core/metered_pricing.py` is the only place a cost is derived from a rate: settlement, the reserve-time estimate, repricing, and imported usage all go through it. It is `Decimal` throughout, takes no database, and reads a pricing object structurally, so a stored `ModelPricing`, an organization override, and a genai-prices default are all priced by one implementation. Two rules it enforces rather than assumes: **which cached-token convention a caller speaks is an argument with no default** (`cache_tokens_included`; `GatewayUsage.cache_tokens_in_prompt` is where the request path gets it), and **rounding happens once**, half-up, to the micro-dollar, at the point an amount becomes a settled total. Settlement and the external-usage ingest also record which convention a row's counts arrived under, in `usage_logs.cache_tokens_in_prompt`; it is nullable and nothing backfills it, so a row written before the column, or by a path that does not record one, reads NULL and repricing recovers the convention from `billing_meters` instead (`usage_admin_service._row_cache_tokens_included`). The pricing *lookup* chain, which is a different concern, stays in `services/pricing_service.py`.
 
-Money columns (`model_pricing` and `organization_model_pricing` rates, `usage_logs.cost`) are the exact types in `models/money.py`, not floats. The budget counters (`users.spend`, `users.reserved`, `scoped_budgets`) are still floats, so a `Decimal` narrows to reach them: a *settled* cost in one place, `reconcile_reservation`, and a reserve-time *estimate* in `budget_service.estimate_cost` plus the three route-local `estimate` callbacks that bypass it (`images.py`, `moderations.py`, `search.py`). Every one of those conversions is commented at the site; if you add a fourth, comment it too.
+Money columns are the exact types in `models/money.py`, not floats, and that now covers the whole path: the `model_pricing` and `organization_model_pricing` rates, `usage_logs.cost`, and (since mozilla-ai/otari#691) every budget counter, `users.spend` / `reserved`, `budgets.max_budget`, `scoped_budgets.max_budget` / `current_spend` / `reserved_spend`, `workspace_budget_defaults.max_budget`, and `budget_reset_logs.previous_spend`. So a settled cost reaches the counter a 403 is decided against unchanged, and a user's spend is the sum of the rows that produced it rather than an approximation of it.
+
+**Nothing narrows on the way in, and the widening is spelled once per entry point.** `budget_service.reserve_budget` and `reconcile_reservation` take `Decimal | float` and widen through `models/money.to_usd`, because a caller may still hold a float (an imported amount, a flat dollar rate a route wrote as a literal). Do not push that conversion outward and do not add a `float()` inward: in PostgreSQL a float added to a `NUMERIC` column resolves the whole expression as double precision, which puts the drift back. The same rule is why `ZERO` (a module-level `Decimal`) is what the CASE clamps and the `.values()` zeroes are written with, in both `budget_service` and `scoped_budget_service`.
+
+**The reserve-time estimate is `Decimal` too, and that was a decision rather than a consequence.** It is an upper bound reconciled against an exact settlement, so it *could* have stayed float. It did not, because on the stream-without-usage path the estimate is what settles the row (`cost_override=reservation.estimate` in `_pipeline.py`), which makes it accounting after all, and because a hold released at the amount it was taken needs both sides written the same way.
+
+Amounts narrow in exactly one direction: **on the way out**, for a response body or a metric, through `models/money.as_float` or a bare `float()`. The wire contract and the generated dashboard client are float and stay that way, so `budgets.py`, `scoped_budgets.py`, `users.py` and `workspace_budget_default_service.py` each convert at the response boundary, and `get_budget_state` converts for the routing compiler, which is float throughout. Those are display conversions; none of them feeds arithmetic that settles anything.
 
 ## Budget enforcement
 Two mechanisms, both enforced, neither replacing the other.
@@ -91,8 +97,55 @@ workspace row is a veto and a refinement and never a grant, and no row means no 
 (MCP, which has no deployment-level server list to narrow, is the stated exception). The
 question is [#655](https://github.com/mozilla-ai/otari/issues/655) and the reasoning is in
 the PR that answered it,
-[#678](https://github.com/mozilla-ai/otari/pull/678). Read both before building any of
-#654, #656, #657 or #658, each of which settles its own surface under the rule above.
+[#678](https://github.com/mozilla-ai/otari/pull/678). Read both before building the
+remaining guardrails surface ([#654](https://github.com/mozilla-ai/otari/issues/654)),
+which settles its own surface under the rule above.
+
+MCP's own surface is the one that has landed (#658). `workspace_mcp_servers`
+(`models/entities.py`) holds a workspace's configured servers, with the bearer token
+encrypted by the same `secret_box` the two stores above use; it is managed over
+`/v1/workspaces/{workspace_id}/mcp-servers` through
+`services/tenancy/workspace_mcp_server_service.py`, and read on the request path by
+`_pipeline._resolve_mcp_server_ids`, the standalone half of an `mcp_server_ids` field the
+platform answers in hybrid mode. There is no overlay and no cache: it resolves per
+request against `ctx.db`, which is what the decision above says the seam should do.
+
+Code execution is the second to land (#657), and the first that has a
+deployment-wide setting to compose over, so it is the worked example of the
+narrowing rule rather than of the exception. `workspace_code_execution_policies`
+(`models/entities.py`) holds one row per workspace or none, managed over
+`/v1/workspaces/{workspace_id}/code-execution-policy` through
+`services/tenancy/workspace_code_execution_policy_service.py`, whose two halves are
+the role-gated CRUD and the identity-free `resolve_workspace_code_execution_policy`
+that `prepare_gateway_tools` calls. The row carries no URL and no credential: the
+sandbox stays deployment-scoped on `/v1/tool-settings`, and the row only refuses it,
+lowers its two ceilings, or supplies a hint the request omitted. No row means no
+narrowing.
+
+Web search is the third (#656), and the one whose narrowing is not just a number.
+`workspace_web_search_configs` (`models/entities.py`) holds one row per workspace
+or none, managed over `/v1/workspaces/{workspace_id}/web-search` through
+`services/tenancy/workspace_web_search_service.py`, whose halves are the
+role-gated CRUD, the identity-free `resolve_workspace_web_search_config`, and the
+pure `narrow_web_search_tool_entry` that composes a row onto a request's tool
+entry. It carries no URL and no credential: the backend stays deployment-scoped
+on `/v1/tool-settings`, and the `/v1/search` tools stay on `/v1/search-tools`.
+
+Two things about it are worth knowing before editing either side.
+
+- **It narrows where the hybrid path defaults.** `prepare_gateway_tools`'s hybrid
+  arm applies the policy it resolves from otari.ai as a set of defaults a request
+  overrides, which is the platform's own contract and is left alone. The
+  standalone arm floors `max_results`, unions `blocked_domains` and intersects
+  `allowed_domains` instead, because under default-only precedence a request
+  sheds a workspace's block-list simply by sending one of its own. An empty
+  intersection is refused (`WorkspaceWebSearchDomainsExcludedError`) rather than
+  stored as `[]`, which `_build_web_search_backend` would read as *no* allow-list.
+- **`POST /v1/search` honors the veto too**, in `routes/search.py`, and only the
+  veto. It is a second door into the same capability, and leaving it open would
+  make the switch bypassable by any key in the workspace; the row's other fields
+  shape the in-loop backend's own request and have no counterpart in that
+  endpoint's provider adapters.
 
 ## The first-request setup guide
 `services/tenancy/workspace_activation_service.py` is the state behind the dashboard's setup guide (`routes/workspace_activation.py`, `/v1/workspaces/{id}/activation`): whether to offer it, the API key it hands out, what the workspace's traffic says about the attempt, and the dismissal that retires it. Ported from the platform's `WorkspaceActivationService`, and the one departure to know is that **activation is derived, not recorded**: the first successful `source="gateway"` row in `usage_logs` for the workspace *is* the evidence, read through `ix_usage_logs_workspace_source_status_timestamp`. The platform stores that telemetry in columns because its usage pipeline is asynchronous and crosses services; here the row is written by this process into this database, so a second copy could only drift. `workspace_activation_state` therefore holds one row per workspace carrying what cannot be observed elsewhere (the dismissal, when a key was last issued, and which key it was).

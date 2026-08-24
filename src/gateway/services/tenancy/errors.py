@@ -408,7 +408,7 @@ class WorkspaceProviderKeyOverrideConflictError(TenancyValidationError):
 
 
 class SecretBoxUnavailableTenancyError(TenancyError):
-    """`OTARI_SECRET_KEY` is not configured, so a provider key cannot be stored.
+    """`OTARI_SECRET_KEY` is not configured, so a secret cannot be stored.
 
     Wraps `services.secret_box.SecretBoxUnavailableError` as a tenancy error so
     the route stays thin (see the module docstring): the underlying error
@@ -417,10 +417,14 @@ class SecretBoxUnavailableTenancyError(TenancyError):
     request, and a missing secret key is a deployment configuration gap the
     caller cannot fix. Blaming the client here would also keep the condition
     out of 5xx error-rate alerting, which is exactly the audience that can.
+
+    ``stored`` names what could not be stored, so the message points at the
+    surface the caller was using. It defaults to the provider credentials this
+    error was written for; workspace MCP servers pass their own.
     """
 
-    def __init__(self) -> None:
-        super().__init__("OTARI_SECRET_KEY is not set; it is required to store provider credentials")
+    def __init__(self, stored: str = "provider credentials") -> None:
+        super().__init__(f"OTARI_SECRET_KEY is not set; it is required to store {stored}")
 
 
 # The two below are pricing errors in a tenancy module, because the status
@@ -523,6 +527,18 @@ class WorkspaceBudgetDefaultNotFoundError(TenancyNotFoundError):
         super().__init__(f"Workspace budget default {default_id} not found")
 
 
+class WorkspaceBudgetDefaultBudgetNotFoundError(TenancyNotFoundError):
+    """The default names a budget that does not exist.
+
+    Only reachable on the way in, when a caller assigns a budget by id. A stored
+    default cannot reach it: ``budget_id`` is NOT NULL and the foreign key is
+    ``RESTRICT``, so the budget it names cannot be deleted out from under it.
+    """
+
+    def __init__(self, budget_id: object):
+        super().__init__(f"Budget {budget_id} not found")
+
+
 class WorkspaceBudgetDefaultAlreadyExistsError(TenancyConflictError):
     def __init__(self, workspace_id: object, provider_key_id: object):
         scope = "every provider" if provider_key_id is None else f"provider '{provider_key_id}'"
@@ -548,6 +564,63 @@ class WorkspaceAlreadyActivatedError(TenancyConflictError):
 
     def __init__(self) -> None:
         super().__init__("This workspace has already served a successful request")
+
+
+class WorkspaceMcpServerNotFoundError(TenancyNotFoundError):
+    def __init__(self, mcp_server_id: object):
+        super().__init__(f"MCP server {mcp_server_id} not found")
+
+
+class WorkspaceMcpServerAlreadyExistsError(TenancyConflictError):
+    """A workspace already has an MCP server under this name.
+
+    Refused rather than collapsed onto the existing row: the name is what the
+    tool loop labels a server's tools with, so silently reusing it would point
+    a caller's request at a different endpoint than the one they just
+    configured.
+    """
+
+    def __init__(self, workspace_id: object, name: object):
+        super().__init__(f"Workspace {workspace_id} already has an MCP server named '{name}'")
+
+
+class WorkspaceMcpServerUnsafeUrlError(TenancyValidationError):
+    """The URL failed the same SSRF and TLS checks a request-body MCP server faces.
+
+    Carries the reason from `services.url_safety.UnsafeURLError` verbatim: it
+    names the host and the range it resolved into, which is what an operator
+    needs to fix the entry, and it is the operator's own URL either way (this
+    surface is management-gated, not a caller-supplied endpoint).
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+
+
+class WorkspaceMcpServerLimitReachedError(TenancyValidationError):
+    """The workspace already holds as many MCP servers as it may.
+
+    A resolved request opens a session to every server it names, so the cap
+    bounds the fan-out one workspace can ask a gateway process for.
+    """
+
+    def __init__(self, workspace_id: object, limit: int):
+        super().__init__(f"Workspace {workspace_id} already has the maximum of {limit} MCP servers")
+
+
+class WorkspaceWebSearchDomainsExcludedError(TenancyForbiddenError):
+    """A request's search allow-list shares no domain with its workspace's.
+
+    The two lists are intersected rather than overridden, so this is the empty
+    intersection: every domain the request asked for is one the workspace does
+    not permit. Refused rather than run, because an empty effective allow-list
+    is read by ``_build_web_search_backend`` as *no* allow-list (an empty list
+    is falsy), which would turn the narrowest possible policy into no policy at
+    all.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("The requested search domains are not permitted for this workspace")
 
 
 __all__ = [
@@ -599,11 +672,17 @@ __all__ = [
     "WorkspaceActivationUnavailableError",
     "WorkspaceAlreadyActivatedError",
     "WorkspaceBudgetDefaultAlreadyExistsError",
+    "WorkspaceBudgetDefaultBudgetNotFoundError",
     "WorkspaceBudgetDefaultNotFoundError",
     "WorkspaceInUseError",
+    "WorkspaceMcpServerAlreadyExistsError",
+    "WorkspaceMcpServerLimitReachedError",
+    "WorkspaceMcpServerNotFoundError",
+    "WorkspaceMcpServerUnsafeUrlError",
     "WorkspaceMemberAlreadyExistsError",
     "WorkspaceMemberNotFoundError",
     "WorkspaceNameRequiredError",
     "WorkspaceNotFoundError",
     "WorkspaceProviderKeyOverrideConflictError",
+    "WorkspaceWebSearchDomainsExcludedError",
 ]

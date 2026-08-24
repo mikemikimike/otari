@@ -11,53 +11,14 @@ import { useState } from "react"
 import { useSetPassword } from "@/shared/api/hooks"
 import { ErrorBanner } from "@/shared/components/ui"
 import {
+  MAX_PASSWORD_BYTES,
+  MIN_PASSWORD_LENGTH,
+  newPasswordProblem,
+} from "@/shared/helpers/password"
+import {
   useDeployment,
   useRetireMasterKeySignIn,
 } from "@/shared/hooks/useDeployment"
-
-// The client half of the server's password policy
-// (`gateway.services.password_service`), not a second authority: it disables a
-// save the gateway would refuse instead of round-tripping to a 400. The ceiling
-// is counted in bytes because bcrypt's is, so an accented character spends more
-// than one and a character count would let a 72-character password through to
-// the refusal this exists to pre-empt.
-const MIN_PASSWORD_LENGTH = 8
-const MAX_PASSWORD_BYTES = 72
-
-// Both counts are the server's, and neither is `String.length`. Python's `len`
-// counts code points where JavaScript counts UTF-16 units, so seven emoji are
-// 14 to `.length` and 7 to the gateway: the minimum would pass here and be
-// refused there. bcrypt's ceiling is bytes, which is a third number again.
-function passwordLength(password: string): number {
-  return [...password].length
-}
-
-function passwordByteLength(password: string): number {
-  return new TextEncoder().encode(password).length
-}
-
-/**
- * Why the new password cannot be saved yet, or null when it can.
- *
- * Returns the empty-field case as null rather than as a complaint: a form
- * nobody has typed in yet is not wrong, it is unfinished, and the disabled Save
- * already says so.
- */
-function newPasswordProblem(password: string, confirm: string): string | null {
-  if (password === "") {
-    return null
-  }
-  if (passwordLength(password) < MIN_PASSWORD_LENGTH) {
-    return `At least ${MIN_PASSWORD_LENGTH} characters.`
-  }
-  if (passwordByteLength(password) > MAX_PASSWORD_BYTES) {
-    return `At most ${MAX_PASSWORD_BYTES} bytes; accented characters count for more than one.`
-  }
-  if (confirm !== "" && confirm !== password) {
-    return "The two passwords do not match."
-  }
-  return null
-}
 
 interface PasswordFieldProps {
   label: string
@@ -113,8 +74,19 @@ function PasswordField({
  *   always cookie-authenticated, so that field is always required here.
  *
  * Which of the two applies is read from the bootstrap's `sign_in_methods`
- * rather than probed: `master_key` is published exactly while no identity on
- * this deployment holds a password. That context cannot be refetched, so a
+ * rather than probed: `master_key` is published exactly while this deployment's
+ * operator identity holds no password (otari#702).
+ *
+ * That is a fact about the operator and not about the reader, and the gap shows
+ * here: a member who signed up on a deployment its operator never claimed is
+ * shown the claim form, and no input to it can succeed (their own address wants
+ * a `current_password` the form does not render; any other address is refused
+ * as a change). The copy below says so up front rather than letting them find
+ * out by submitting, which is as far as this can go without a route for asking
+ * what the *signed-in* identity holds; the management API has none, and
+ * inferring it from a refusal would be guessing at a 400. Reaching this state
+ * at all means having gone around the sign-in screen, which offers such a
+ * member no password form either. That context cannot be refetched, so a
  * successful claim reports itself through `useRetireMasterKeySignIn` and the
  * provider serves the corrected value from then on. This card therefore reads
  * the context on every render and keeps no mode of its own: the fact belongs to
@@ -163,7 +135,7 @@ export function PasswordCard() {
   // is no longer the one being made, so typing clears them together.
   //
   // Never while one is in flight. `reset()` returns the observer to idle
-  // without cancelling the request, so resetting mid-call would clear the
+  // without canceling the request, so resetting mid-call would clear the
   // `isPending` that `submit` guards on and let a keystroke reopen the form to
   // a second, concurrent password change.
   const clearResult = () => {
@@ -210,7 +182,7 @@ export function PasswordCard() {
           <p className="max-w-3xl text-sm text-muted">
             {isClaimed
               ? "The password you sign in to this dashboard with. Changing it ends every other session this identity holds; this one stays signed in."
-              : "This gateway still signs in with its master key. Set an address and a password to sign in as yourself from now on. The master key stays the credential for the management API, and it can still reset this password if you forget it."}
+              : "This gateway still signs in with its master key. Set an address and a password to sign in as yourself from now on. The master key stays the credential for the management API, and it can still reset this password if you forget it. Claiming is the operator's to do: if your own account already has a password, this form will refuse it, and your password changes once they have claimed."}
           </p>
 
           {outcome ? (

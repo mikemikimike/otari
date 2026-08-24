@@ -12,18 +12,26 @@ mozilla-ai/otari-ai#1716 settled that the master key bootstraps a standalone
 deployment and then retires as its dashboard login, staying the deployment-wide
 API credential. So:
 
-- Until any identity has a password, the master key signs in here, provisioning
-  the default organization and its workspace and binding the session to the
-  bootstrap operator. This is first boot, and it is unchanged.
-- Once an identity has a password (an operator claimed the deployment through
+- Until the bootstrap operator has a password, the master key signs in here,
+  provisioning the default organization and its workspace and binding the
+  session to that operator. This is first boot, and it is unchanged.
+- Once that identity has a password (an operator claimed the deployment through
   ``PUT /v1/auth/password``), the master key is refused *for sign-in*, and email
-  and password is the login. It still authenticates ``/v1/keys``, ``/v1/users``
-  and the rest of the management surface through the header, which is what every
-  self-hoster's automation and the OSS smoke gate use.
+  and password is the login. It is the operator's own password that decides
+  this and no other identity's (#702): a member who signs up or resets theirs
+  claims their account, not the deployment. The master key still authenticates
+  ``/v1/keys``, ``/v1/users`` and the rest of the management surface through the
+  header, which is what every self-hoster's automation and the OSS smoke gate
+  use.
 
 ``GET /v1/bootstrap`` publishes which of the two a deployment is currently
 accepting, so the login page asks for the credential that will work rather than
 discovering it from a 403.
+
+**Maintenance mode freezes this endpoint and nothing else.** While it is on,
+every credential here is refused with 503 so nobody starts a session during a
+redeploy, but a session already minted keeps working and the management API and
+the data plane are untouched. See ``services/maintenance_mode_service.py``.
 
 #651 and #652 add further credentials (OAuth, WebAuthn). Both are redirect or
 ceremony flows with more than one round trip, so they get their own endpoints
@@ -54,17 +62,23 @@ from gateway.services.dashboard_session_service import (
     request_is_https,
     revoke_dashboard_session,
 )
+from gateway.services.maintenance_mode_service import is_maintenance_mode
 from gateway.services.password_service import MAX_PASSWORD_BYTES
 from gateway.services.tenancy.email_address import MAX_EMAIL_LENGTH
 from gateway.services.tenancy.errors import EmailNotVerifiedError, InvalidCredentialsError
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
-from gateway.services.tenancy.user_service import authenticate, has_password_identity
+from gateway.services.tenancy.user_service import authenticate, operator_has_password
 
 router = APIRouter(prefix="/v1/auth/session", tags=["auth"])
 
 MASTER_KEY_SIGN_IN_RETIRED = (
-    "Master-key sign-in is retired on this deployment: an identity here has a password. "
+    "Master-key sign-in is retired on this deployment: it has been claimed with a password. "
     "Sign in with your email and password. The master key still authenticates the management API."
+)
+
+MAINTENANCE_MODE_REFUSAL = (
+    "This gateway is in maintenance mode and is not starting new dashboard sessions right now. "
+    "Try again shortly. The management API is unaffected and still accepts the master key."
 )
 
 
@@ -104,7 +118,8 @@ class CreateSessionRequest(BaseModel):
         max_length=512,
         description=(
             "The gateway master key; verified once and never stored by the browser. Accepted only "
-            "while no identity on this deployment has a password (see GET /v1/bootstrap)."
+            "while the operator identity has no password, which is to say while nobody has claimed "
+            "this deployment (see GET /v1/bootstrap)."
         ),
     )
     email: str | None = Field(
@@ -192,8 +207,12 @@ async def _sign_in_with_master_key(
 ) -> TenancyUser:
     """Bootstrap sign-in: verify the master key and resolve the operator identity.
 
-    Refused once any identity holds a password, which is what retires this as a
-    login. The refusal is a 403 and not a 401, and it comes after verification:
+    Refused once the operator identity holds a password, which is what retires
+    this as a login. Scoped to that identity and not to any identity (#702):
+    this credential resolves to the operator and to nobody else, so a password
+    somebody else set is not a reason to stop accepting it.
+
+    The refusal is a 403 and not a 401, and it comes after verification:
     the key is a valid credential, it is this *use* of it that is over, and
     saying so is what lets a stale client show the right message instead of
     prompting for the key again. It leaks nothing that ``GET /v1/bootstrap``
@@ -204,7 +223,7 @@ async def _sign_in_with_master_key(
         record_auth_failure("invalid_key")
         _check_login_rate_limit(request)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master key")
-    if await has_password_identity(db):
+    if await operator_has_password(db):
         record_auth_failure("master_key_sign_in_retired")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=MASTER_KEY_SIGN_IN_RETIRED)
     # Provisions the tenancy root on a first-ever sign-in, and resolves the same
@@ -263,7 +282,29 @@ async def create_session(
     one is burned against a stand-in hash even for an address nobody holds)
     before the limit is consulted, so a 429 costs the same as a 401. A gateway
     exposed to the internet should rate-limit this path at the proxy as well.
+
+    The maintenance-mode check runs before either credential is verified, and
+    refuses both. Before, because a frozen deployment should not spend a bcrypt
+    verification per attempt and the refusal is not about the credential
+    anyway; both, because the way back out is the master key against
+    ``PATCH /v1/settings/maintenance-mode`` through the header, which never
+    passes through this door. That is what keeps the way back out off the frozen
+    path, and it is why no identity needs an exemption here; an operator who no
+    longer holds the master key recovers by setting ``OTARI_MASTER_KEY`` and
+    restarting, which is a restart rather than a click. It leaks nothing
+    either: ``GET /v1/bootstrap`` already publishes the same flag
+    unauthenticated, so the sign-in screen can render the right page.
     """
+    if await is_maintenance_mode(db):
+        # Deliberately not counted in ``AUTH_FAILURES``: nobody failed to
+        # authenticate here, because the check runs before either credential is
+        # verified and the gateway declined to try. Counting it would also put a
+        # maintenance window's worth of refusals into the metric an operator
+        # alerts on for credential attacks, and page them for their own redeploy.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MAINTENANCE_MODE_REFUSAL,
+        )
     if body.master_key is not None:
         identity = await _sign_in_with_master_key(body.master_key, request, db, config)
     else:

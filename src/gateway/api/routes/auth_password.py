@@ -9,11 +9,14 @@ over.
 **Claiming a deployment.** First boot leaves a standalone deployment with an
 operator identity that has no address and no password
 (`gateway.services.tenancy.provisioning_service`), and with the master key still
-accepted as the dashboard login. The first call here supplies an address and a
-password, and that single act is what retires master-key sign-in and turns email
-and password into the steady-state login (mozilla-ai/otari-ai#1716). Nothing
-schedules it and nothing expires: a deployment that never claims goes on signing
-in with the master key indefinitely.
+accepted as the dashboard login. The first call here *by that identity* supplies
+an address and a password, and that single act is what retires master-key
+sign-in and turns email and password into the steady-state login
+(mozilla-ai/otari-ai#1716). Nothing schedules it and nothing expires: a
+deployment that never claims goes on signing in with the master key
+indefinitely, including one where every member has since set a password of their
+own, because the credential this retires resolves to the operator and to nobody
+else (#702).
 
 **Which proof is required, and why it differs.** The table is small and every
 row has a reason:
@@ -44,6 +47,7 @@ from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash
 from gateway.services.password_service import MIN_PASSWORD_LENGTH
 from gateway.services.tenancy.email_address import MAX_EMAIL_LENGTH, validated_email
 from gateway.services.tenancy.errors import CurrentPasswordRequiredError, EmailChangeNotSupportedError
+from gateway.services.tenancy.provisioning_service import load_bootstrap_identity
 from gateway.services.tenancy.user_service import set_password, update_password
 
 # Auth is declared on the router rather than left to arrive through
@@ -128,9 +132,10 @@ class PasswordResponse(BaseModel):
     email: str = Field(description="The address this identity signs in with.")
     master_key_sign_in_retired: bool = Field(
         description=(
-            "Always true once this succeeds: some identity on this deployment now has a password, "
-            "so POST /v1/auth/session no longer accepts the master key. It stays the credential for "
-            "the management API."
+            "Whether POST /v1/auth/session has stopped accepting the master key as a dashboard "
+            "login. True once the operator identity has a password, which is what claiming the "
+            "deployment means; a member setting their own password leaves an unclaimed deployment "
+            "on the master key. Either way the master key stays the credential for the management API."
         )
     )
 
@@ -151,8 +156,8 @@ async def set_dashboard_password(
     authenticated by the session cookie. The master key in a header is what
     excuses ``current_password``, which is how a forgotten password is
     recovered; it does not excuse ``email``, because an identity with no address
-    has nothing to sign in with whoever is asking. Setting a password for the
-    first time retires master-key sign-in on this deployment.
+    has nothing to sign in with whoever is asking. The operator setting a password
+    for the first time retires master-key sign-in on this deployment.
 
     Every other session this identity holds ends, the caller's own excepted, so
     a cookie stolen before the change does not outlive it.
@@ -167,8 +172,8 @@ async def set_dashboard_password(
     # Resubmitting the address the identity already holds is not a change, and
     # refusing it would break any client that keeps one form for both claiming
     # and changing a password. Normalized on both sides, because the stored
-    # value is only lower-cased when this tree wrote it: a row from the M4
-    # re-parenting backfill or from an operator's own SQL can carry any casing,
+    # value is only lower-cased when this tree wrote it: a row from a
+    # convergence backfill or from an operator's own SQL can carry any casing,
     # which ``UserRepository.get_by_email`` already accounts for, and comparing
     # a normalized candidate against a raw column would refuse an identity its
     # own address.
@@ -184,6 +189,17 @@ async def set_dashboard_password(
         if validated_email(body.email) != identity.email.strip().lower():
             raise EmailChangeNotSupportedError
         body = body.model_copy(update={"email": None})
+    # Resolved *before* the write, not read back after it. ``set_password`` and
+    # ``update_password`` each commit, so a read placed after that commit can
+    # fail on its own and turn a change that already landed into a 500; the
+    # caller would then retry with a ``current_password`` that is no longer the
+    # current one. Nothing about the answer needs the write to have happened:
+    # the operator either already holds a password, or this very call is the one
+    # giving them one, and no other identity's password moves the switch (#702).
+    operator = await load_bootstrap_identity(db)
+    claims_the_deployment = operator is not None and operator.id == identity.id
+    was_already_claimed = operator is not None and operator.hashed_password is not None
+
     if identity.hashed_password is not None and not by_master_key:
         if body.current_password is None:
             raise CurrentPasswordRequiredError
@@ -203,7 +219,15 @@ async def set_dashboard_password(
             keep_session_token_hash=keep_session,
         )
     assert identity.email is not None  # guaranteed by set_password
-    return PasswordResponse(email=identity.email, master_key_sign_in_retired=True)
+    # Derived rather than hardcoded True: this route acts on the caller's own
+    # identity, and only the operator's password retires master-key sign-in
+    # (#702). A member changing theirs on an unclaimed deployment answers False,
+    # which is what stops the dashboard telling them it retired a login that is
+    # still the only one their operator has.
+    return PasswordResponse(
+        email=identity.email,
+        master_key_sign_in_retired=was_already_claimed or claims_the_deployment,
+    )
 
 
 def _caller_session_hash(request: Request, *, by_master_key: bool) -> str | None:

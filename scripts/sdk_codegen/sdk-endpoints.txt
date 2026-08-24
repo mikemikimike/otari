@@ -99,6 +99,8 @@ GET /v1/settings                                # not yet wrapped
 PATCH /v1/settings                              # not yet wrapped
 GET /v1/settings/mail                           # not yet wrapped
 POST /v1/settings/mail/test                     # not yet wrapped
+GET /v1/settings/maintenance-mode               # not yet wrapped
+PATCH /v1/settings/maintenance-mode             # not yet wrapped
 # Model discovery / metadata
 GET /v1/models/discoverable                     # not yet wrapped
 GET /v1/models/metadata                         # not yet wrapped
@@ -222,6 +224,21 @@ DELETE /v1/workspaces/{workspace_id}/member-budget-policies/{default_id} # dashb
 GET /v1/workspaces/{workspace_id}/activation                # dashboard-only
 POST /v1/workspaces/{workspace_id}/activation/key           # dashboard-only
 POST /v1/workspaces/{workspace_id}/activation/dismiss       # dashboard-only
+# The workspace's code-execution policy (otari#657) is set by whoever administers
+# the workspace, not by the key-holder running code inside it, so it is the same
+# dashboard-side surface as the rows above. An SDK caller sees its effect on
+# `otari_code_execution` (a 403, a lower iteration ceiling), never the policy row.
+GET /v1/workspaces/{workspace_id}/code-execution-policy                  # dashboard-only
+PUT /v1/workspaces/{workspace_id}/code-execution-policy                  # dashboard-only
+DELETE /v1/workspaces/{workspace_id}/code-execution-policy               # dashboard-only
+# The workspace's web-search configuration (otari#656) is the same shape of
+# surface for the same reason: whoever administers the workspace decides whether
+# it may search and how far, not the key-holder searching inside it. An SDK
+# caller sees its effect on `otari_web_search` and on `POST /v1/search` (a 403, a
+# lower result ceiling, a domain filter), never the row.
+GET /v1/workspaces/{workspace_id}/web-search                            # dashboard-only
+PUT /v1/workspaces/{workspace_id}/web-search                            # dashboard-only
+DELETE /v1/workspaces/{workspace_id}/web-search                         # dashboard-only
 # Organization-scoped provider keys (otari-ai#1748, otari#643): the same
 # tenancy-admin surface as the organization/workspace rows just above, and
 # excluded for the same reason. An SDK caller acts inside one workspace with a
@@ -240,3 +257,11 @@ DELETE /v1/workspaces/{workspace_id}/provider-keys/{key_id}               # dash
 GET /v1/workspaces/{workspace_id}/provider-keys/{key_id}/models           # dashboard-only
 POST /v1/workspaces/{workspace_id}/provider-keys/{key_id}/models          # dashboard-only
 DELETE /v1/workspaces/{workspace_id}/provider-keys/{key_id}/models/{model} # dashboard-only
+# Workspace-scoped MCP servers (otari#658): a master-key operator surface for
+# registering the endpoints a workspace's requests may reach, alongside the
+# tenancy admin rows above. An SDK caller does not manage these; it names them
+# by id in `mcp_server_ids` on a completion request, which is already covered.
+GET /v1/workspaces/{workspace_id}/mcp-servers                             # operator surface
+POST /v1/workspaces/{workspace_id}/mcp-servers                            # operator surface
+PATCH /v1/workspaces/{workspace_id}/mcp-servers/{server_id}               # operator surface
+DELETE /v1/workspaces/{workspace_id}/mcp-servers/{server_id}              # operator surface

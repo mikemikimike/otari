@@ -158,6 +158,44 @@ Use in a request:
 
 A runnable walkthrough is in `demo/code-exec/`.
 
+### Per-workspace policy
+
+The sandbox above is deployment-wide: one operator points Otari at one backend.
+On top of it, each workspace can carry a policy saying whether requests billed to
+that workspace may use code execution at all, and within which limits.
+
+```bash
+# Read (an organization owner/admin, or an owner/admin of the workspace)
+curl -H "Otari-Key: Bearer $OTARI_MASTER_KEY" \
+  http://localhost:8000/v1/workspaces/$WORKSPACE_ID/code-execution-policy
+
+# Turn it off for this workspace, or narrow the limits
+curl -X PUT -H "Otari-Key: Bearer $OTARI_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "max_iterations": 3, "exec_timeout_s": 20}' \
+  http://localhost:8000/v1/workspaces/$WORKSPACE_ID/code-execution-policy
+
+# Drop the policy, returning the workspace to the deployment default
+curl -X DELETE -H "Otari-Key: Bearer $OTARI_MASTER_KEY" \
+  http://localhost:8000/v1/workspaces/$WORKSPACE_ID/code-execution-policy
+```
+
+A policy can only narrow what the deployment already permits:
+
+- `enabled: false` refuses `otari_code_execution` for that workspace with a 403.
+  It cannot enable a sandbox the deployment has not configured.
+- `max_iterations` and `exec_timeout_s` lower the tool-loop and per-execution
+  ceilings. A value above the deployment's own ceiling is refused rather than
+  stored, since it could never take effect.
+- `default_purpose_hint` is used only when a request declares
+  `otari_code_execution` without a hint of its own.
+
+A workspace with no policy is not narrowed, so a deployment that configures none
+behaves exactly as it did. The workspace comes from the API key that
+authenticated the request, never from a header; a master-key request resolves to
+the deployment's default workspace. In hybrid mode the same policy is resolved
+from otari.ai instead, and this endpoint is not served.
+
 ## Web search
 
 Brings up a SearXNG instance Otari dispatches `otari_web_search` calls to.
@@ -181,6 +219,56 @@ To let a client that only speaks a provider's vocabulary (Claude Code, the Anthr
 The bundled SearXNG backend is suitable for trying things out but rate-limited for sustained use. For production, point `OTARI_WEB_SEARCH_URL` at a licensed backend. Ready-to-run Brave and Tavily adapters ship in `scripts/` and are available as separate Compose profiles (`web-search-brave`, `web-search-tavily`).
 
 A runnable walkthrough is in `demo/web-search/`.
+
+### Per-workspace configuration
+
+The backend above is deployment-wide: one operator points Otari at one search
+service. On top of it, each workspace can carry a row saying whether requests
+billed to that workspace may search at all, and how far a search may reach. The
+row holds no credential; that stays with the backend the operator configured.
+
+```bash
+# Read (an organization owner/admin, or an owner/admin of the workspace)
+curl -H "Otari-Key: Bearer $OTARI_MASTER_KEY" \
+  http://localhost:8000/v1/workspaces/$WORKSPACE_ID/web-search
+
+# Turn it off for this workspace, or narrow how it searches
+curl -X PUT -H "Otari-Key: Bearer $OTARI_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "max_results": 3, "blocked_domains": ["example.invalid"]}' \
+  http://localhost:8000/v1/workspaces/$WORKSPACE_ID/web-search
+
+# Drop the row, returning the workspace to the deployment default
+curl -X DELETE -H "Otari-Key: Bearer $OTARI_MASTER_KEY" \
+  http://localhost:8000/v1/workspaces/$WORKSPACE_ID/web-search
+```
+
+A row can only narrow what the deployment already permits:
+
+- `enabled: false` refuses `otari_web_search` for that workspace with a 403, and
+  refuses [`POST /v1/search`](api-reference.md#search) for it too. It cannot
+  enable a backend the deployment has not configured.
+- `max_results` lowers how many results one search returns. A request asking for
+  fewer keeps its own number; a value above what the backend honors is refused
+  rather than stored, since it could never take effect.
+- `blocked_domains` is added to whatever a request blocks, and `allowed_domains`
+  is intersected with whatever a request allows, so no request can shed a
+  workspace's domain rules by sending rules of its own. An entry covers its
+  subdomains, so a request allowing `docs.example.com` under a workspace that
+  allows `example.com` keeps the narrower of the two. A request whose allow-list
+  names only domains the workspace does not permit is refused with a 403 rather
+  than served an empty result set.
+- `purpose_hint` is used only when a request declares `otari_web_search` without
+  a hint of its own, and `provider_options` fills in the provider knobs a request
+  did not name.
+
+A workspace with no row is not narrowed, so a deployment that configures none
+behaves exactly as it did. The workspace comes from the API key that
+authenticated the request, never from a header; a master-key request resolves to
+the deployment's default workspace. In hybrid mode the same configuration is
+resolved from otari.ai instead and this endpoint is not served, and it composes
+differently there: the platform's values are defaults a request overrides rather
+than limits it is narrowed to.
 
 To search directly rather than as part of a completion, use
 [`POST /v1/search`](api-reference.md#search). It is billed and usage-logged the

@@ -178,7 +178,7 @@ class WorkspaceService:
             member = await self.members.create(workspace_id=workspace.id, user_id=user.id, role="owner")
             # No-op today: a workspace this fresh has no defaults of its own yet.
             # Called anyway so every WorkspaceMember-creating path materializes
-            # the same way, rather than two of three doing it and this one
+            # the same way, rather than three of four doing it and this one
             # relying on being first.
             await self.budget_defaults.materialize_for_member(member)
             await self.db.commit()
@@ -433,6 +433,19 @@ class WorkspaceService:
         if member is None:
             return
 
+        # The ceilings keyed on this membership go with it, for the same reason
+        # `delete_workspace` sweeps them: `scoped_budgets.scope_id` is not a
+        # foreign key, so nothing cascades, and a ceiling naming a membership that
+        # no longer exists can never bind again. It is not inert, either: it holds
+        # a RESTRICT reference to its budget, so an orphan would refuse that
+        # budget's deletion forever, and there is no page listing ceilings to go
+        # and find it on. Same transaction, so a failed removal takes them back.
+        await self.db.execute(
+            delete(ScopedBudget).where(
+                ScopedBudget.scope_type == "workspace_member",
+                ScopedBudget.scope_id == str(member.id),
+            )
+        )
         await self.members.delete(member)
         await self.db.commit()
 

@@ -33,6 +33,7 @@ Settlement invariants owned here:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
@@ -93,11 +94,17 @@ from gateway.api.routes._tools import (
     _resolve_sandbox_purpose_hint,
     _web_search_intercept_enabled,
     declares_native_web_search,
+    web_search_max_results_baseline,
 )
 from gateway.core.config import GatewayConfig
 from gateway.core.env import otari_env
 from gateway.core.metered_pricing import calculate_metered_cost
-from gateway.core.usage import cache_read_tokens_of, cache_write_1h_tokens_of, cache_write_tokens_of
+from gateway.core.usage import (
+    cache_read_tokens_of,
+    cache_tokens_in_prompt_of,
+    cache_write_1h_tokens_of,
+    cache_write_tokens_of,
+)
 from gateway.inflight import track_request
 from gateway.log_config import logger
 from gateway.metrics import record_abandoned_attempt, record_cost, record_inline_cost_settlement, record_tokens
@@ -105,8 +112,10 @@ from gateway.model_labeling import relabel_model
 from gateway.models.entities import ModelPricing, UsageLog
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
+from gateway.models.money import to_usd
 from gateway.rate_limit import RateLimitInfo, check_rate_limit
 from gateway.services.budget_service import (
+    ZERO,
     ReservationHandle,
     estimate_cost,
     get_budget_state,
@@ -145,11 +154,25 @@ from gateway.services.routing import (
 from gateway.services.routing.decide import RoutingSignal, decide_ordering
 from gateway.services.sandbox_backend import (
     CODE_EXECUTION_TOOL_NAME,
+    DEFAULT_EXEC_TIMEOUT_S,
     SandboxBackend,
     SandboxNotReachableError,
 )
 from gateway.services.scoped_budget_service import BudgetScopeRequest
+from gateway.services.secret_box import SecretBoxUnavailableError, SecretDecryptionError
+from gateway.services.tenancy.errors import (
+    WorkspaceMcpServerNotFoundError,
+    WorkspaceWebSearchDomainsExcludedError,
+)
 from gateway.services.tenancy.org_provider_key_service import cached_org_model_restriction
+from gateway.services.tenancy.workspace_code_execution_policy_service import (
+    resolve_workspace_code_execution_policy,
+)
+from gateway.services.tenancy.workspace_mcp_server_service import resolve_workspace_mcp_servers
+from gateway.services.tenancy.workspace_web_search_service import (
+    narrow_web_search_tool_entry,
+    resolve_workspace_web_search_config,
+)
 from gateway.services.tool_usage import (
     MAX_TOOL_NAMES,
     OVERFLOW_TOOL_NAME,
@@ -181,7 +204,8 @@ ChunkT = TypeVar("ChunkT")
 DB_UNAVAILABLE_DETAIL = "Database session unavailable"
 API_KEY_VALIDATION_FAILED_DETAIL = "API key validation failed"
 API_KEY_NO_USER_DETAIL = "API key has no associated user"
-MCP_SERVER_IDS_HYBRID_ONLY_DETAIL = "mcp_server_ids is only available in hybrid mode"
+MCP_SERVER_IDS_UNAVAILABLE_DETAIL = "mcp_server_ids is unavailable for this request"
+MCP_SERVER_TOKEN_UNREADABLE_DETAIL = "A configured MCP server's authorization token could not be read"
 NO_RESOLVABLE_PROVIDER_DETAIL = "Authorization service returned no resolvable provider"
 PROVIDER_ERROR_DETAIL = "LLM provider error"
 PROVIDER_TIMEOUT_DETAIL = "LLM provider timeout"
@@ -219,6 +243,8 @@ WEB_SEARCH_CONFLICT_DETAIL = (
 WEB_SEARCH_NOT_ENABLED_DETAIL = "web search is not enabled for this workspace"
 SANDBOX_NOT_ENABLED_DETAIL = "code execution is not enabled for this workspace"
 MALFORMED_CODE_EXEC_POLICY_DETAIL = "Authorization service returned a malformed code-execution policy"
+CODE_EXEC_POLICY_UNRESOLVABLE_DETAIL = "Code execution policy could not be resolved for this request"
+WEB_SEARCH_CONFIG_UNRESOLVABLE_DETAIL = "Web search configuration could not be resolved for this request"
 SANDBOX_UNREACHABLE_DETAIL = (
     "code_execution sandbox unreachable. Check the sandbox URL in the dashboard's "
     "Tools settings, or OTARI_SANDBOX_URL, and that the container is running."
@@ -779,7 +805,7 @@ async def _bill_vision_side_call(
         db,
         ReservationHandle(
             user_id=user_id,
-            estimate=0.0,
+            estimate=ZERO,
             reserved=False,
             strategy=config.budget_strategy,
             counts_toward_budget=counts_toward_budget,
@@ -883,7 +909,7 @@ async def top_up_reservation_for_attempt(ctx: RequestContext, attempt: Attempt) 
         cache_write_ttl=ctx.estimate_inputs.cache_write_ttl,
     )
     delta = repriced - ctx.reservation.estimate
-    if delta <= 0:
+    if delta <= ZERO:
         return
     try:
         await increase_reservation(
@@ -1489,6 +1515,7 @@ class ToolContext:
         sandbox_tool_entry: dict[str, Any] | None,
         sandbox_url: str | None,
         sandbox_auth_token: str | None,
+        sandbox_exec_timeout_s: int | None = None,
         use_web_search: bool,
         web_search_tool_entry: dict[str, Any] | None,
         web_search_url: str | None,
@@ -1504,6 +1531,10 @@ class ToolContext:
         self.sandbox_tool_entry = sandbox_tool_entry
         self.sandbox_url = sandbox_url
         self.sandbox_auth_token = sandbox_auth_token
+        # The execution budget one sandbox call gets. A workspace policy may only
+        # lower it, so the deployment's default is the ceiling rather than a value
+        # a policy replaces.
+        self.sandbox_timeout_s = min(DEFAULT_EXEC_TIMEOUT_S, float(sandbox_exec_timeout_s or DEFAULT_EXEC_TIMEOUT_S))
         self.use_web_search = use_web_search
         self.web_search_tool_entry = web_search_tool_entry
         self.web_search_url = web_search_url
@@ -1627,6 +1658,47 @@ def merge_policy_guardrails(
     return list(merged.values())
 
 
+async def _resolve_mcp_server_ids(
+    adapter: FormatAdapter[Any, Any],
+    ctx: RequestContext,
+    mcp_server_ids: list[uuid.UUID],
+) -> list[McpServerConfig]:
+    """Swap a request's ``mcp_server_ids`` for the configs they name.
+
+    One field, two sources, chosen by mode: hybrid asks the platform, which
+    owns the workspace's stored servers there, and standalone reads
+    ``workspace_mcp_servers`` for the workspace the request's key belongs to
+    (otari#658). The workspace is `RequestContext.workspace_id`, resolved at
+    auth off the key and never from a header, which is the seam otari#655
+    settled; MCP is the exception that decision names, since there is no
+    deployment-wide server list for a workspace row to narrow.
+
+    Both modes refuse an unknown id with a 404, so a caller moving between them
+    sees one contract. A standalone request with no database session or no
+    resolved workspace cannot resolve anything, and is refused rather than
+    served with the ids silently dropped.
+    """
+    if ctx.hybrid_mode:
+        assert ctx.user_token is not None  # guaranteed by the hybrid-mode preamble
+        return await _resolve_platform_mcp_servers(
+            config=ctx.config,
+            user_token=ctx.user_token,
+            mcp_server_ids=mcp_server_ids,
+        )
+
+    if ctx.db is None or ctx.workspace_id is None:
+        raise adapter.error(400, MCP_SERVER_IDS_UNAVAILABLE_DETAIL, ErrorKind.INVALID_REQUEST)
+    try:
+        return await resolve_workspace_mcp_servers(ctx.db, workspace_id=ctx.workspace_id, server_ids=mcp_server_ids)
+    except WorkspaceMcpServerNotFoundError as exc:
+        raise adapter.error(404, exc.message, ErrorKind.INVALID_REQUEST) from exc
+    except (SecretBoxUnavailableError, SecretDecryptionError) as exc:
+        # The operator's problem, not the caller's, and the underlying message
+        # names the environment variable, so it stays in the log.
+        logger.error("MCP server token could not be decrypted for workspace %s: %s", ctx.workspace_id, exc)
+        raise adapter.error(500, MCP_SERVER_TOKEN_UNREADABLE_DETAIL, ErrorKind.API) from exc
+
+
 async def prepare_gateway_tools(
     *,
     adapter: FormatAdapter[Any, Any],
@@ -1646,9 +1718,9 @@ async def prepare_gateway_tools(
     ``block``-mode flags raise 403 here (provider never called);
     ``monitor``-mode flags annotate the response header and fall through.
 
-    ``mcp_server_ids`` is hybrid-only: standalone mode has no platform to
-    resolve the ids against, so the field is rejected with a 400 rather than
-    silently ignored. The sandbox and web_search opt-ins follow the wire shape
+    ``mcp_server_ids`` resolves against the platform in hybrid mode and against
+    the request's own workspace in standalone; see
+    :func:`_resolve_mcp_server_ids`. The sandbox and web_search opt-ins follow the wire shape
     of Anthropic / OpenAI tool entries; their backend URLs are operator
     controlled (no per-request URL override, which would be an SSRF surface).
     The three backends are mutually exclusive for now.
@@ -1665,16 +1737,8 @@ async def prepare_gateway_tools(
             merge_policy_guardrails(ctx, guardrails), guardrail_text, response=response, config=ctx.config
         )
 
-        if mcp_server_ids and not ctx.hybrid_mode:
-            raise adapter.error(400, MCP_SERVER_IDS_HYBRID_ONLY_DETAIL, ErrorKind.INVALID_REQUEST)
-        if ctx.hybrid_mode and mcp_server_ids:
-            assert ctx.user_token is not None  # guaranteed by the hybrid-mode preamble
-            resolved_mcp_servers = await _resolve_platform_mcp_servers(
-                config=ctx.config,
-                user_token=ctx.user_token,
-                mcp_server_ids=mcp_server_ids,
-            )
-            mcp_servers = (mcp_servers or []) + resolved_mcp_servers
+        if mcp_server_ids:
+            mcp_servers = (mcp_servers or []) + await _resolve_mcp_server_ids(adapter, ctx, mcp_server_ids)
 
         if mcp_servers:
             await _validate_mcp_server_urls(adapter, mcp_servers)
@@ -1700,6 +1764,7 @@ async def prepare_gateway_tools(
         # leak it to a standalone exec-service an operator pointed the URL at.
         sandbox_auth_token: str | None = None
         sandbox_max_iterations: int | None = None
+        sandbox_exec_timeout_s: int | None = None
         if use_sandbox and ctx.hybrid_mode:
             assert ctx.user_token is not None  # guaranteed by the hybrid-mode preamble
             assert sandbox_tool_entry is not None  # use_sandbox implies the entry is present
@@ -1724,6 +1789,42 @@ async def prepare_gateway_tools(
             # `bool` is an `int` subclass — exclude it so a JSON `true` isn't read as 1.
             if isinstance(resolved_iters, int) and not isinstance(resolved_iters, bool) and resolved_iters > 0:
                 sandbox_max_iterations = resolved_iters
+        elif use_sandbox:
+            # Standalone's counterpart to the resolve above: the policy is a row in
+            # this deployment's own database, read here at admission because this is
+            # where the request's session is live and where the values it carries
+            # (the hint, the two ceilings) still have somewhere to land. The
+            # workspace comes off the key that authenticated the request, never off
+            # a header; a master-key request resolves to the deployment's default
+            # workspace, so an operator who has narrowed that workspace is narrowed
+            # by it too (`services/workspace_scope.py`).
+            #
+            # No row means no narrowing, which is what keeps a deployment that has
+            # configured nothing per-workspace behaving exactly as it did. A row may
+            # only narrow: it refuses the tool, lowers the ceilings (applied with
+            # `min` further down and in `ToolContext`), and fills in a hint the
+            # request did not give. It can never turn on a sandbox the deployment
+            # has not configured, which the missing-URL 400 above already settled.
+            assert sandbox_tool_entry is not None  # use_sandbox implies the entry is present
+            if ctx.db is None or ctx.workspace_id is None:
+                # Fail closed. Both are invariants on this path today (a standalone
+                # request with no session is refused with `DB_UNAVAILABLE_DETAIL`
+                # before this, and `resolve_workspace_id` always answers, falling
+                # back to the default workspace), so this is unreachable, which is
+                # exactly why it refuses rather than falling through. What this arm
+                # guards is a *veto*: skipping it would serve code execution to a
+                # workspace whose row says `enabled=False`, silently, on the day one
+                # of those invariants stops holding. `_resolve_mcp_server_ids`
+                # refuses at the identical condition.
+                raise adapter.error(500, CODE_EXEC_POLICY_UNRESOLVABLE_DETAIL, ErrorKind.API)
+            workspace_policy = await resolve_workspace_code_execution_policy(ctx.db, ctx.workspace_id)
+            if workspace_policy is not None:
+                if not workspace_policy.enabled:
+                    raise adapter.error(403, SANDBOX_NOT_ENABLED_DETAIL, ErrorKind.PERMISSION)
+                if not sandbox_tool_entry.get("purpose_hint") and workspace_policy.default_purpose_hint:
+                    sandbox_tool_entry["purpose_hint"] = workspace_policy.default_purpose_hint
+                sandbox_max_iterations = workspace_policy.max_iterations
+                sandbox_exec_timeout_s = workspace_policy.exec_timeout_s
 
         web_search_url: str | None = ctx.config.web_search_url or otari_env("WEB_SEARCH_URL") or None
         # Interception (claiming the provider-named web_search keywords) is opt-in and
@@ -1749,10 +1850,14 @@ async def prepare_gateway_tools(
                 raise adapter.error(400, WEB_SEARCH_CONFLICT_DETAIL, ErrorKind.INVALID_REQUEST)
             use_web_search = True
 
-            # Hybrid mode owns the per-workspace web-search policy (whether it's
-            # enabled at all, plus workspace-default max_results / domain filters /
-            # purpose hint / provider_options). Mirrors the mcp_server_ids resolve
-            # above. Precedence is "per-request overrides workspace default":
+            # Both modes carry a per-workspace web-search configuration (whether
+            # it is enabled at all, plus the result ceiling, the domain filters,
+            # the purpose hint and the provider options); they differ only in
+            # where it is read and how it composes with the request.
+            #
+            # Hybrid asks otari.ai, which owns the policy, and applies the
+            # platform's own precedence, "per-request overrides workspace
+            # default":
             #  * top-level keys are applied only when the request didn't supply a
             #    meaningful (truthy) value of its own. An empty list / empty string
             #    reads as "no preference" and falls back to the workspace value
@@ -1761,7 +1866,12 @@ async def prepare_gateway_tools(
             #  * provider_options is shallow-merged so workspace defaults fill the
             #    keys the request omitted while per-request keys still win (rather
             #    than the request's dict replacing the workspace dict wholesale).
-            # Standalone mode has no platform to consult.
+            #
+            # Standalone reads the row from this deployment's own database and
+            # *narrows* with it instead, per the seam settled in #655/#678: the
+            # ceiling is floored, the block-list is added to, and the allow-list
+            # is intersected, so no request can shed a guardrail its workspace
+            # set. `workspace_web_search_service` says why the two differ.
             if ctx.hybrid_mode:
                 assert ctx.user_token is not None  # guaranteed by the hybrid-mode preamble
                 # Forward the platform token only when the search backend IS the
@@ -1789,12 +1899,72 @@ async def prepare_gateway_tools(
                         if isinstance(request_options, dict)
                         else workspace_options
                     )
+            else:
+                # Standalone's counterpart to the resolve above: the configuration
+                # is a row in this deployment's own database, read here at
+                # admission because this is where the request's session is live
+                # and where the values it carries still have somewhere to land.
+                # The workspace comes off the key that authenticated the request,
+                # never off a header; a master-key request resolves to the
+                # deployment's default workspace, so an operator who has narrowed
+                # that workspace is narrowed by it too
+                # (`services/workspace_scope.py`).
+                #
+                # No row means no narrowing, which is what keeps a deployment that
+                # has configured nothing per-workspace behaving exactly as it did.
+                # A row may only narrow: it refuses the tool, lowers the result
+                # ceiling, and adds to the domains a search may not reach. It can
+                # never turn on a backend the deployment has not configured, which
+                # the missing-URL 400 above already settled.
+                if ctx.db is None or ctx.workspace_id is None:
+                    # Fail closed, for the reason the code-execution arm above
+                    # does: both are invariants on this path today, so this is
+                    # unreachable, which is exactly why it refuses rather than
+                    # falling through. What it guards is a *veto*, and skipping
+                    # the read would serve web search to a workspace whose row
+                    # says `enabled=False`, silently, on the day one of those
+                    # invariants stops holding.
+                    raise adapter.error(500, WEB_SEARCH_CONFIG_UNRESOLVABLE_DETAIL, ErrorKind.API)
+                workspace_search = await resolve_workspace_web_search_config(ctx.db, ctx.workspace_id)
+                if workspace_search is not None:
+                    if not workspace_search.enabled:
+                        raise adapter.error(403, WEB_SEARCH_NOT_ENABLED_DETAIL, ErrorKind.PERMISSION)
+                    try:
+                        web_search_tool_entry = narrow_web_search_tool_entry(
+                            web_search_tool_entry,
+                            workspace_search,
+                            # What the request would get with no row at all, so
+                            # a workspace ceiling above the operator's own
+                            # narrows nothing rather than raising it.
+                            baseline_max_results=web_search_max_results_baseline(ctx.config),
+                        )
+                    except WorkspaceWebSearchDomainsExcludedError as exc:
+                        raise adapter.error(403, exc.message, ErrorKind.PERMISSION) from exc
 
         # Inside the try so a rejection releases the budget reservation the
         # request already took, like every other admission failure here.
         await _require_tool_pricing(adapter, ctx, use_sandbox=use_sandbox, use_web_search=use_web_search)
     except HTTPException:
         await release_reservation(ctx)
+        raise
+    except SQLAlchemyError:
+        # Four reads in this block touch the database (the workspace MCP servers,
+        # the workspace code-execution policy and the workspace web-search
+        # configuration above, and `_require_tool_pricing`), and a failure in any
+        # of them is not an
+        # `HTTPException`, so without this arm it would leave `users.reserved`
+        # holding the estimate until the budget's next reset, or forever for a
+        # budget with no reset period. The rollback comes first because a failed
+        # statement leaves the session unusable and `release_reservation` writes:
+        # releasing on a poisoned session raises `PendingRollbackError` and the
+        # hold survives anyway. Both calls are best-effort so a database that is
+        # still refusing work re-raises the original failure rather than a
+        # confusing second one.
+        if ctx.db is not None:
+            with contextlib.suppress(SQLAlchemyError):
+                await ctx.db.rollback()
+        with contextlib.suppress(SQLAlchemyError):
+            await release_reservation(ctx)
         raise
 
     return ToolContext(
@@ -1804,6 +1974,7 @@ async def prepare_gateway_tools(
         sandbox_tool_entry=sandbox_tool_entry,
         sandbox_url=sandbox_url,
         sandbox_auth_token=sandbox_auth_token,
+        sandbox_exec_timeout_s=sandbox_exec_timeout_s,
         use_web_search=use_web_search,
         web_search_tool_entry=web_search_tool_entry,
         web_search_url=web_search_url,
@@ -2009,6 +2180,9 @@ async def log_usage(
         usage_log.cache_read_tokens = cache_read_tokens_of(usage_data)
         usage_log.cache_write_tokens = cache_write_tokens_of(usage_data)
         usage_log.cache_write_1h_tokens = cache_write_1h_tokens_of(usage_data)
+        # Which convention those cache counts were reported under, recorded rather
+        # than left to be inferred from the numbers later (mozilla-ai/otari#690).
+        usage_log.cache_tokens_in_prompt = cache_tokens_in_prompt_of(usage_data)
 
         record_tokens(
             str(provider or ""),
@@ -2042,9 +2216,7 @@ async def log_usage(
     # stream-missing-usage estimate policy), record that amount on the log row
     # so usage_logs.cost stays consistent with the spend that was reconciled.
     if cost_override is not None:
-        # The estimate paths still hold a float (``users.reserved`` is one), so
-        # the amount is made exact here rather than at each call site.
-        usage_log.cost = Decimal(str(cost_override))
+        usage_log.cost = to_usd(cost_override)
 
     # Gateway-run tool calls are a separate charge from the model's tokens, so they
     # are folded in last: after the token branch (which may not have run at all) and
@@ -2357,6 +2529,7 @@ async def dispatch_non_stream(
         async with SandboxBackend(
             sandbox_url=tool_ctx.sandbox_url,
             purpose_hint=sandbox_hint,
+            timeout_s=tool_ctx.sandbox_timeout_s,
             auth_token=tool_ctx.sandbox_auth_token,
             tally=tool_ctx.tally,
         ) as backend:
@@ -2447,6 +2620,7 @@ async def open_stream(
         sandbox_backend = SandboxBackend(
             sandbox_url=tool_ctx.sandbox_url,
             purpose_hint=sandbox_hint,
+            timeout_s=tool_ctx.sandbox_timeout_s,
             auth_token=tool_ctx.sandbox_auth_token,
             tally=tool_ctx.tally,
         )
@@ -3082,6 +3256,7 @@ async def run_streaming_with_fallback(
                 SandboxBackend(
                     sandbox_url=tool_ctx.sandbox_url,
                     purpose_hint=sandbox_hint,
+                    timeout_s=tool_ctx.sandbox_timeout_s,
                     auth_token=tool_ctx.sandbox_auth_token,
                     tally=tool_ctx.tally,
                 ),

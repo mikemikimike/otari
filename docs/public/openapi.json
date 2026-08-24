@@ -337,7 +337,7 @@
         "type": "object"
       },
       "ActiveOrganizationMemberPublic": {
-        "description": "A member row joined to the identity behind it, as the roster shows it.\n\nField-for-field the platform's shape, so the ported roster page is not\nrewritten around a new contract, with two consequences of the OSS line:\n``email`` is nullable here (a local operator identity has no sign-in\naddress), and ``invitation_id`` is always null until the invitation flow\nrehomes, which is what fills it.\n\n``attribution_user_id`` is the addition the platform has no counterpart for.\nKeys, budgets, and usage attach to the gateway's string-keyed ``users`` row,\nnot to this UUID identity, so this carries the ``user_id`` a caller passes to\n``POST /v1/keys`` to give this member a key. It is null when no usable row\nexists (nobody minted one, or it was soft-deleted through\n``DELETE /v1/users``), which is the signal not to offer this member as a key\nowner: key creation would refuse. The two ids converge when the request plane\nre-parents onto tenancy (M4), and this field is what lets that happen without\nthe dashboard changing.",
+        "description": "A member row joined to the identity behind it, as the roster shows it.\n\nField-for-field the platform's shape, so the ported roster page is not\nrewritten around a new contract, with two consequences of the OSS line:\n``email`` is nullable here (a local operator identity has no sign-in\naddress), and ``invitation_id`` is always null until the invitation flow\nrehomes, which is what fills it.\n\n``attribution_user_id`` is the addition the platform has no counterpart for.\nKeys, budgets, and usage attach to the gateway's string-keyed ``users`` row,\nnot to this UUID identity, so this carries the ``user_id`` a caller passes to\n``POST /v1/keys`` to give this member a key. It is null when no usable row\nexists (nobody minted one, or it was soft-deleted through\n``DELETE /v1/users``), which is the signal not to offer this member as a key\nowner: key creation would refuse. How the two ids converge is the open\nquestion in otari-ai#1727; this field is the join until it is answered, and\nis what lets either answer land without the dashboard changing.",
         "properties": {
           "attribution_user_id": {
             "anyOf": [
@@ -1469,6 +1469,17 @@
             ],
             "title": "Name"
           },
+          "reset_alignment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Alignment"
+          },
           "total_reserved": {
             "default": 0.0,
             "title": "Total Reserved",
@@ -1494,6 +1505,7 @@
           "name",
           "max_budget",
           "budget_duration_sec",
+          "reset_alignment",
           "created_at",
           "updated_at"
         ],
@@ -1655,6 +1667,7 @@
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 50,
                 "type": "array"
               },
               {
@@ -2295,6 +2308,7 @@
           "max_budget": {
             "anyOf": [
               {
+                "maximum": 999999999999.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -2316,6 +2330,23 @@
             ],
             "description": "Admin-facing label for the budget",
             "title": "Name"
+          },
+          "reset_alignment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "calendar_day",
+                  "calendar_week",
+                  "calendar_month"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec",
+            "title": "Reset Alignment"
           }
         },
         "title": "CreateBudgetRequest",
@@ -2559,31 +2590,12 @@
       "CreateScopedBudgetRequest": {
         "description": "Request model for creating a scoped budget.",
         "properties": {
-          "budget_duration_sec": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Period length in seconds (e.g. 86400 for daily); null never resets",
-            "title": "Budget Duration Sec"
-          },
-          "max_budget": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Maximum USD spend in the period",
-            "title": "Max Budget"
+          "budget_id": {
+            "description": "The budget this ceiling enforces; its limit and period are read through it",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Budget Id",
+            "type": "string"
           },
           "name": {
             "anyOf": [
@@ -2595,7 +2607,7 @@
                 "type": "null"
               }
             ],
-            "description": "Admin-facing label for the budget",
+            "description": "Admin-facing label for this ceiling",
             "title": "Name"
           },
           "provider_key_id": {
@@ -2610,23 +2622,6 @@
             ],
             "description": "Narrow the cap to one provider instance; null caps spend across every provider",
             "title": "Provider Key Id"
-          },
-          "reset_alignment": {
-            "anyOf": [
-              {
-                "enum": [
-                  "calendar_day",
-                  "calendar_week",
-                  "calendar_month"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec",
-            "title": "Reset Alignment"
           },
           "scope_id": {
             "description": "Id of the capped identity: an organization, workspace, membership row, or API key",
@@ -2650,7 +2645,8 @@
         },
         "required": [
           "scope_type",
-          "scope_id"
+          "scope_id",
+          "budget_id"
         ],
         "title": "CreateScopedBudgetRequest",
         "type": "object"
@@ -2762,7 +2758,7 @@
                 "type": "null"
               }
             ],
-            "description": "The gateway master key; verified once and never stored by the browser. Accepted only while no identity on this deployment has a password (see GET /v1/bootstrap).",
+            "description": "The gateway master key; verified once and never stored by the browser. Accepted only while the operator identity has no password, which is to say while nobody has claimed this deployment (see GET /v1/bootstrap).",
             "title": "Master Key"
           },
           "password": {
@@ -2929,6 +2925,11 @@
             "title": "Mail Ready",
             "type": "boolean"
           },
+          "maintenance_mode": {
+            "description": "Whether this deployment is refusing new dashboard sign-ins while an operator redeploys it. The sign-in screen says so rather than presenting a form whose only outcome is a 503. Sessions already issued keep working, and the management API and the data plane are unaffected. False for a hybrid gateway, which issues no session.",
+            "title": "Maintenance Mode",
+            "type": "boolean"
+          },
           "management_url": {
             "anyOf": [
               {
@@ -2952,7 +2953,7 @@
             "type": "string"
           },
           "sign_in_methods": {
-            "description": "How POST /v1/auth/session may be authenticated right now, sorted. 'master_key' is the first-boot credential and is offered until some identity on this deployment has a password; 'password' replaces it from then on, and the master key stays the credential for the management API. Empty for a hybrid gateway, which issues no session. The login page renders from this rather than trying a credential to find out.",
+            "description": "How POST /v1/auth/session may be authenticated right now, sorted. 'master_key' is the first-boot credential and is offered until the operator identity has a password, which is what claiming the deployment means; 'password' replaces it from then on, and the master key stays the credential for the management API. Empty for a hybrid gateway, which issues no session. The login page renders from this rather than trying a credential to find out.",
             "items": {
               "enum": [
                 "master_key",
@@ -2978,6 +2979,7 @@
           "surfaces",
           "management_url",
           "sign_in_methods",
+          "maintenance_mode",
           "mail_ready"
         ],
         "title": "DeploymentBootstrap",
@@ -4333,6 +4335,21 @@
         "title": "MailSettings",
         "type": "object"
       },
+      "MaintenanceMode": {
+        "description": "Whether this deployment is currently refusing new dashboard sign-ins.",
+        "properties": {
+          "enabled": {
+            "description": "When true, POST /v1/auth/session refuses every credential with 503 so nobody starts a new dashboard session during a redeploy. Sessions already issued keep working, and the management API and the data plane are unaffected: a caller presenting the master key or an API key through the header is never frozen out.",
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "MaintenanceMode",
+        "type": "object"
+      },
       "ManagedTool": {
         "description": "One tool the gateway can run itself.",
         "properties": {
@@ -4543,6 +4560,7 @@
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 50,
                 "type": "array"
               },
               {
@@ -5901,7 +5919,7 @@
             "type": "string"
           },
           "master_key_sign_in_retired": {
-            "description": "Always true once this succeeds: some identity on this deployment now has a password, so POST /v1/auth/session no longer accepts the master key. It stays the credential for the management API.",
+            "description": "Whether POST /v1/auth/session has stopped accepting the master key as a dashboard login. True once the operator identity has a password, which is what claiming the deployment means; a member setting their own password leaves an unclaimed deployment on the master key. Either way the master key stays the credential for the management API.",
             "title": "Master Key Sign In Retired",
             "type": "boolean"
           }
@@ -6949,6 +6967,7 @@
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 50,
                 "type": "array"
               },
               {
@@ -7324,7 +7343,7 @@
         "type": "object"
       },
       "ScopedBudgetResponse": {
-        "description": "One scoped ceiling and its live counters.\n\nUnlike ``/v1/budgets``, the counters are the row's own: a scoped ceiling is\nenforced against ``current_spend + reserved_spend``, so there is no rollup\nover users to compute.",
+        "description": "One scoped ceiling and its live counters.\n\nUnlike ``/v1/budgets``, the counters are the row's own: a scoped ceiling is\nenforced against ``current_spend + reserved_spend``, so there is no rollup\nover users to compute.\n\n``max_budget``, ``budget_duration_sec`` and ``reset_alignment`` are read off\nthe budget rather than stored here, and are carried on the wire so a caller\ncan render a ceiling without fetching every budget to resolve one id.",
         "properties": {
           "budget_duration_sec": {
             "anyOf": [
@@ -7336,6 +7355,10 @@
               }
             ],
             "title": "Budget Duration Sec"
+          },
+          "budget_id": {
+            "title": "Budget Id",
+            "type": "string"
           },
           "created_at": {
             "title": "Created At",
@@ -7437,6 +7460,7 @@
           "scope_type",
           "scope_id",
           "provider_key_id",
+          "budget_id",
           "name",
           "max_budget",
           "current_spend",
@@ -8571,6 +8595,7 @@
           "max_budget": {
             "anyOf": [
               {
+                "maximum": 999999999999.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -8590,6 +8615,22 @@
               }
             ],
             "title": "Name"
+          },
+          "reset_alignment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "calendar_day",
+                  "calendar_week",
+                  "calendar_month"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Alignment"
           }
         },
         "title": "UpdateBudgetRequest",
@@ -8695,32 +8736,36 @@
         "title": "UpdateKeyRequest",
         "type": "object"
       },
+      "UpdateMaintenanceModeRequest": {
+        "description": "Turn the sign-in freeze on or off.",
+        "properties": {
+          "enabled": {
+            "description": "True to freeze new dashboard sign-ins, false to allow them again.",
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "UpdateMaintenanceModeRequest",
+        "type": "object"
+      },
       "UpdateScopedBudgetRequest": {
         "description": "Request model for updating a scoped budget.",
         "properties": {
-          "budget_duration_sec": {
+          "budget_id": {
             "anyOf": [
               {
-                "exclusiveMinimum": 0.0,
-                "type": "integer"
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Budget Duration Sec"
-          },
-          "max_budget": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Budget"
+            "title": "Budget Id"
           },
           "name": {
             "anyOf": [
@@ -8733,22 +8778,6 @@
               }
             ],
             "title": "Name"
-          },
-          "reset_alignment": {
-            "anyOf": [
-              {
-                "enum": [
-                  "calendar_day",
-                  "calendar_week",
-                  "calendar_month"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reset Alignment"
           }
         },
         "title": "UpdateScopedBudgetRequest",
@@ -10952,6 +10981,152 @@
         "title": "WorkspaceAssignmentRequest",
         "type": "object"
       },
+      "WorkspaceCodeExecutionPolicyPublic": {
+        "description": "A workspace's policy, or the unconfigured policy it has without one.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "default_purpose_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Purpose Hint"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "exec_timeout_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exec Timeout S"
+          },
+          "max_iterations": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Iterations"
+          },
+          "sandbox_configured": {
+            "title": "Sandbox Configured",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "configured",
+          "sandbox_configured",
+          "enabled",
+          "default_purpose_hint",
+          "max_iterations",
+          "exec_timeout_s",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WorkspaceCodeExecutionPolicyPublic",
+        "type": "object"
+      },
+      "WorkspaceCodeExecutionPolicyUpdate": {
+        "description": "The policy to store for a workspace, as a whole.\n\n``PUT`` semantics, ported from the hosted ``CodeExecutionConfigUpsert``:\nwhat is sent is what the workspace has afterwards, so an omitted limit is\ncleared rather than left as it was.",
+        "properties": {
+          "default_purpose_hint": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hint used when a request declares otari_code_execution without one of its own",
+            "title": "Default Purpose Hint"
+          },
+          "enabled": {
+            "description": "False refuses code execution for this workspace",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "exec_timeout_s": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ceiling on one execution's runtime in seconds; only ever lowers the effective limit, so at most 60",
+            "title": "Exec Timeout S"
+          },
+          "max_iterations": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 25.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ceiling on tool-loop iterations; only ever lowers the effective limit, so at most 25",
+            "title": "Max Iterations"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "WorkspaceCodeExecutionPolicyUpdate",
+        "type": "object"
+      },
       "WorkspaceCreate": {
         "properties": {
           "description": {
@@ -10978,6 +11153,242 @@
         "title": "WorkspaceCreate",
         "type": "object"
       },
+      "WorkspaceMcpServerCreate": {
+        "description": "Request body for registering a server.\n\n``authorization_token`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`entities.ProviderCredential` and `OrgProviderKey` already use.",
+        "properties": {
+          "allowed_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Allow-list of tool names; null exposes every tool the server offers",
+            "title": "Allowed Tools"
+          },
+          "authorization_token": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bearer token for the server; requires an https URL. Encrypted at rest, never returned",
+            "title": "Authorization Token"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Whether a request naming this server actually reaches it",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Label for the server, unique within the workspace",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "purpose_hint": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hint prepended to the system message to help the model choose",
+            "title": "Purpose Hint"
+          },
+          "url": {
+            "description": "Streamable HTTP MCP endpoint",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "url"
+        ],
+        "title": "WorkspaceMcpServerCreate",
+        "type": "object"
+      },
+      "WorkspaceMcpServerPublic": {
+        "description": "The API-facing shape. Never carries the token, only whether one is set.\n\nNo ``last4``-style prefix either, unlike `OrgProviderKeyPublic`: a provider\nkey's last four digits let an operator match a stored key against the one\nin their provider's console, and there is no equivalent workflow for an MCP\nbearer token.",
+        "properties": {
+          "allowed_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Tools"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "has_token": {
+            "title": "Has Token",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "purpose_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose Hint"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "name",
+          "url",
+          "purpose_hint",
+          "allowed_tools",
+          "enabled",
+          "has_token",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WorkspaceMcpServerPublic",
+        "type": "object"
+      },
+      "WorkspaceMcpServerUpdate": {
+        "description": "Partial update. Only the fields the caller sets are applied.\n\n``authorization_token`` has three states rather than two, which is what a\nwrite-only field needs: omit it to leave the stored token alone, send\n``\"\"`` to clear it, send a value to rotate it. An explicit ``null`` also\nleaves it alone, matching the platform: a client that serializes its whole\nform back, with an empty token box it never filled in, must not destroy a\ntoken it was never shown.",
+        "properties": {
+          "allowed_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Tools"
+          },
+          "authorization_token": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorization Token"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "purpose_hint": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose Hint"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "title": "WorkspaceMcpServerUpdate",
+        "type": "object"
+      },
+      "WorkspaceMcpServersPublic": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceMcpServerPublic"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data",
+          "count"
+        ],
+        "title": "WorkspaceMcpServersPublic",
+        "type": "object"
+      },
       "WorkspaceMemberBudgetPoliciesPublic": {
         "properties": {
           "count": {
@@ -11002,45 +11413,12 @@
       "WorkspaceMemberBudgetPolicyCreate": {
         "description": "Request body for creating a default.",
         "properties": {
-          "budget_duration_sec": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0.0,
-                "maximum": 315360000.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Period length in seconds; null never resets",
-            "title": "Budget Duration Sec"
-          },
-          "max_budget": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Maximum USD spend per member in the period",
-            "title": "Max Budget"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Admin-facing label",
-            "title": "Name"
+          "budget_id": {
+            "description": "The budget this workspace hands to every member",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Budget Id",
+            "type": "string"
           },
           "provider_key_id": {
             "anyOf": [
@@ -11056,6 +11434,9 @@
             "title": "Provider Key Id"
           }
         },
+        "required": [
+          "budget_id"
+        ],
         "title": "WorkspaceMemberBudgetPolicyCreate",
         "type": "object"
       },
@@ -11072,6 +11453,10 @@
               }
             ],
             "title": "Budget Duration Sec"
+          },
+          "budget_id": {
+            "title": "Budget Id",
+            "type": "string"
           },
           "created_at": {
             "title": "Created At",
@@ -11114,6 +11499,17 @@
             ],
             "title": "Provider Key Id"
           },
+          "reset_alignment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Alignment"
+          },
           "updated_at": {
             "title": "Updated At",
             "type": "string"
@@ -11127,10 +11523,12 @@
         "required": [
           "id",
           "workspace_id",
+          "budget_id",
           "provider_key_id",
           "name",
           "max_budget",
           "budget_duration_sec",
+          "reset_alignment",
           "created_at",
           "updated_at"
         ],
@@ -11138,46 +11536,18 @@
         "type": "object"
       },
       "WorkspaceMemberBudgetPolicyUpdate": {
-        "description": "Request body for updating a default.\n\nNot retroactive: a member already materialized from this default keeps\nthe value that was in effect when they were materialized. Only a member\nmaterialized after this update sees the new one.",
+        "description": "Request body for pointing a default at a different budget.\n\nMembers already materialized from this default keep the budget they were\ngiven: their ceiling names it directly, and this only changes what a member\njoining afterwards is handed. Editing the *budget* is the retroactive act,\nand it moves everyone naming it, in this workspace and outside it.",
         "properties": {
-          "budget_duration_sec": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0.0,
-                "maximum": 315360000.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Budget Duration Sec"
-          },
-          "max_budget": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Budget"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
+          "budget_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Budget Id",
+            "type": "string"
           }
         },
+        "required": [
+          "budget_id"
+        ],
         "title": "WorkspaceMemberBudgetPolicyUpdate",
         "type": "object"
       },
@@ -11470,6 +11840,212 @@
           }
         },
         "title": "WorkspaceUpdate",
+        "type": "object"
+      },
+      "WorkspaceWebSearchConfigPublic": {
+        "description": "A workspace's web-search configuration, or the unconfigured one it has without a row.",
+        "properties": {
+          "allowed_domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Domains"
+          },
+          "blocked_domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Domains"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_results": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Results"
+          },
+          "provider_options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Options"
+          },
+          "purpose_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose Hint"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "web_search_configured": {
+            "title": "Web Search Configured",
+            "type": "boolean"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "configured",
+          "web_search_configured",
+          "enabled",
+          "max_results",
+          "purpose_hint",
+          "allowed_domains",
+          "blocked_domains",
+          "provider_options",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WorkspaceWebSearchConfigPublic",
+        "type": "object"
+      },
+      "WorkspaceWebSearchConfigUpdate": {
+        "description": "The configuration to store for a workspace, as a whole.\n\n``PUT`` semantics, ported from the hosted ``WorkspaceWebSearchConfigUpdate``:\nwhat is sent is what the workspace has afterwards, so an omitted field is\ncleared rather than left as it was.",
+        "properties": {
+          "allowed_domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Results are kept only from these domains; intersected with any list the request sends",
+            "title": "Allowed Domains"
+          },
+          "blocked_domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Results from these domains are dropped; added to any list the request sends",
+            "title": "Blocked Domains"
+          },
+          "enabled": {
+            "description": "False refuses web search for this workspace, both the otari_web_search tool and POST /v1/search. The fields below narrow the tool only.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_results": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 20.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ceiling on results one search returns; only ever lowers the effective limit, so at most 20",
+            "title": "Max Results"
+          },
+          "provider_options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider-specific knobs forwarded to the search backend; a request's own keys win",
+            "title": "Provider Options"
+          },
+          "purpose_hint": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hint used when a request declares otari_web_search without one of its own",
+            "title": "Purpose Hint"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "WorkspaceWebSearchConfigUpdate",
         "type": "object"
       },
       "WorkspacesPublic": {
@@ -12421,7 +12997,7 @@
     },
     "/v1/auth/password": {
       "put": {
-        "description": "Set or change the password the caller signs in to the dashboard with.\n\nAlways the caller's own identity. Supply ``email`` when it has no sign-in\naddress yet, which is the state first boot leaves the operator in, and\n``current_password`` when it already has a password and the request is\nauthenticated by the session cookie. The master key in a header is what\nexcuses ``current_password``, which is how a forgotten password is\nrecovered; it does not excuse ``email``, because an identity with no address\nhas nothing to sign in with whoever is asking. Setting a password for the\nfirst time retires master-key sign-in on this deployment.\n\nEvery other session this identity holds ends, the caller's own excepted, so\na cookie stolen before the change does not outlive it.",
+        "description": "Set or change the password the caller signs in to the dashboard with.\n\nAlways the caller's own identity. Supply ``email`` when it has no sign-in\naddress yet, which is the state first boot leaves the operator in, and\n``current_password`` when it already has a password and the request is\nauthenticated by the session cookie. The master key in a header is what\nexcuses ``current_password``, which is how a forgotten password is\nrecovered; it does not excuse ``email``, because an identity with no address\nhas nothing to sign in with whoever is asking. The operator setting a password\nfor the first time retires master-key sign-in on this deployment.\n\nEvery other session this identity holds ends, the caller's own excepted, so\na cookie stolen before the change does not outlive it.",
         "operationId": "set_dashboard_password_v1_auth_password_put",
         "requestBody": {
           "content": {
@@ -12603,7 +13179,7 @@
         ]
       },
       "post": {
-        "description": "Verify a sign-in credential and set the HttpOnly session cookie.\n\nThe session is bound to the identity that authenticated, so every request it\nlater authenticates resolves a user and that user's active organization\nrather than only \"a credential was presented once\". The response names both,\nso a client knows who it is signed in as without a second call.\n\nThe rate-limit check deliberately runs only after a failed verification,\nnot before it: a pre-verification gate can't know whether *this* attempt\nwould have succeeded, so once an IP has used up its failure quota it\nwould end up blocking that IP's legitimate owner too, not just further\nattackers. Running after verification also means the throttle bounds how\nmany verdicts an IP gets, not how much work it can cause: a password attempt\npays for a bcrypt verification (cost 12, on the order of 200ms of CPU, and\none is burned against a stand-in hash even for an address nobody holds)\nbefore the limit is consulted, so a 429 costs the same as a 401. A gateway\nexposed to the internet should rate-limit this path at the proxy as well.",
+        "description": "Verify a sign-in credential and set the HttpOnly session cookie.\n\nThe session is bound to the identity that authenticated, so every request it\nlater authenticates resolves a user and that user's active organization\nrather than only \"a credential was presented once\". The response names both,\nso a client knows who it is signed in as without a second call.\n\nThe rate-limit check deliberately runs only after a failed verification,\nnot before it: a pre-verification gate can't know whether *this* attempt\nwould have succeeded, so once an IP has used up its failure quota it\nwould end up blocking that IP's legitimate owner too, not just further\nattackers. Running after verification also means the throttle bounds how\nmany verdicts an IP gets, not how much work it can cause: a password attempt\npays for a bcrypt verification (cost 12, on the order of 200ms of CPU, and\none is burned against a stand-in hash even for an address nobody holds)\nbefore the limit is consulted, so a 429 costs the same as a 401. A gateway\nexposed to the internet should rate-limit this path at the proxy as well.\n\nThe maintenance-mode check runs before either credential is verified, and\nrefuses both. Before, because a frozen deployment should not spend a bcrypt\nverification per attempt and the refusal is not about the credential\nanyway; both, because the way back out is the master key against\n``PATCH /v1/settings/maintenance-mode`` through the header, which never\npasses through this door. That is what keeps the way back out off the frozen\npath, and it is why no identity needs an exemption here; an operator who no\nlonger holds the master key recovers by setting ``OTARI_MASTER_KEY`` and\nrestarting, which is a restart rather than a click. It leaks nothing\neither: ``GET /v1/bootstrap`` already publishes the same flag\nunauthenticated, so the sign-in screen can render the right page.",
         "operationId": "create_session_v1_auth_session_post",
         "requestBody": {
           "content": {
@@ -13036,7 +13612,7 @@
     },
     "/v1/bootstrap": {
       "get": {
-        "description": "Return the deployment context the dashboard shell renders from.\n\nPublic: the shell fetches this before it knows whether it can authenticate.\nThat is also why ``sign_in_methods`` is answered here rather than behind a\ncredential, and it publishes nothing an unauthenticated caller could not\nalready learn by trying both credentials against the sign-in endpoint.\n\nThe one database read is a ``LIMIT 1`` probe for any identity holding a\npassword, over a table a standalone deployment keeps one row per person in.\nIt runs only in standalone mode: a hybrid gateway has no session to describe,\nand ``get_db_if_needed`` hands it no session to read one from.",
+        "description": "Return the deployment context the dashboard shell renders from.\n\nPublic: the shell fetches this before it knows whether it can authenticate.\nThat is also why ``sign_in_methods`` is answered here rather than behind a\ncredential, and it publishes nothing an unauthenticated caller could not\nalready learn by trying both credentials against the sign-in endpoint.\n\nThe database read is two primary-key lookups: the ``tenancy_bootstrap_user_id``\nmarker, and the identity it names, to answer whether *that* identity holds a\npassword (#702). It runs only in standalone mode: a hybrid gateway has no session to describe,\nand ``get_db_if_needed`` hands it no session to read one from.",
         "operationId": "get_bootstrap_v1_bootstrap_get",
         "responses": {
           "200": {
@@ -13175,7 +13751,7 @@
     },
     "/v1/budgets/{budget_id}": {
       "delete": {
-        "description": "Delete a budget.",
+        "description": "Delete a budget.\n\nRefused with 409 while anything still names this budget: a workspace handing\nit to its members, or a scoped ceiling enforcing it. Both foreign keys are\n``RESTRICT``, so the database would refuse either anyway, but as an\n``IntegrityError`` reported as \"Database error\" with nothing naming what to\ngo and change. Checked here so the refusal can say which, and where.",
         "operationId": "delete_budget_v1_budgets__budget_id__delete",
         "parameters": [
           {
@@ -17279,7 +17855,7 @@
         ]
       },
       "patch": {
-        "description": "Update a scoped budget's label, limit, or period.\n\nThe scope and the provider narrowing are not editable: changing either would\nmove the ceiling to a different identity while carrying its spend, which is\na delete and a create, not an update.",
+        "description": "Relabel a ceiling, or point it at a different budget.\n\nThe scope and the provider narrowing are not editable: changing either would\nmove the ceiling to a different identity while carrying its spend, which is\na delete and a create, not an update.\n\nThere is no limit or period to set here any more. Both are properties of the\nbudget, so changing what a ceiling allows is either editing that budget,\nwhich moves every ceiling naming it, or naming a different one.",
         "operationId": "update_scoped_budget_v1_scoped_budgets__budget_id__patch",
         "parameters": [
           {
@@ -17849,6 +18425,84 @@
           }
         ],
         "summary": "Send Test Mail",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/maintenance-mode": {
+      "get": {
+        "description": "Report whether new dashboard sign-ins are frozen.",
+        "operationId": "get_maintenance_mode_v1_settings_maintenance_mode_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceMode"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Maintenance Mode",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "description": "Freeze or unfreeze dashboard sign-ins, for this and every other replica.\n\nThe new state is persisted and nothing is applied to the running worker,\nbecause every reader goes back to the stored row. That is what makes one\ncall enough for a deployment running more than one of them.",
+        "operationId": "update_maintenance_mode_v1_settings_maintenance_mode_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMaintenanceModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceMode"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Maintenance Mode",
         "tags": [
           "settings"
         ]
@@ -20852,6 +21506,439 @@
         ]
       }
     },
+    "/v1/workspaces/{workspace_id}/code-execution-policy": {
+      "delete": {
+        "description": "Drop a workspace's policy, returning it to the deployment's behavior.\n\nIdempotent: a workspace that has no policy is already in the state this\nasks for, so it answers with the unconfigured policy rather than a 404.",
+        "operationId": "clear_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCodeExecutionPolicyPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Clear Workspace Code Execution Policy",
+        "tags": [
+          "workspace-code-execution-policy"
+        ]
+      },
+      "get": {
+        "description": "Read a workspace's code-execution policy.\n\nTakes the same role as setting it (an organization owner/admin, or an\nowner/admin of this workspace), because the policy describes the\nworkspace's security and billing posture rather than one member's\nallowance. A workspace with no policy answers with the unconfigured one\n(``configured: false``), which is the deployment's own behavior described\nin the same shape rather than a 404.",
+        "operationId": "get_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCodeExecutionPolicyPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Workspace Code Execution Policy",
+        "tags": [
+          "workspace-code-execution-policy"
+        ]
+      },
+      "put": {
+        "description": "Set a workspace's code-execution policy, replacing any existing one.\n\nAn organization owner/admin, or an owner/admin of this workspace, may\nwrite it. The policy can only narrow what the deployment permits: turning\ncode execution off for the workspace, and lowering the loop and execution\nceilings. It never turns a sandbox the deployment has not configured on.",
+        "operationId": "set_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCodeExecutionPolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCodeExecutionPolicyPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Set Workspace Code Execution Policy",
+        "tags": [
+          "workspace-code-execution-policy"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/mcp-servers": {
+      "get": {
+        "description": "List the MCP servers configured for a workspace.\n\nOrganization owners/admins or this workspace's owners/admins. Reads are\ngated like writes because these rows name the endpoints the gateway\nconnects to on the workspace's behalf. Authorization tokens are never\nincluded; each server reports only whether it has one.",
+        "operationId": "list_workspace_mcp_servers_v1_workspaces__workspace_id__mcp_servers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Number of records to skip",
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Number of records to skip",
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum number of records to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Maximum number of records to return",
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMcpServersPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Workspace Mcp Servers",
+        "tags": [
+          "mcp-servers"
+        ]
+      },
+      "post": {
+        "description": "Register an MCP server for a workspace. Organization owners/admins or this workspace's owners/admins.\n\nThe authorization token is encrypted at rest and never returned. The URL\nis checked for SSRF safety here as well as on the request path, and must\nuse https when a token is set. A name already used in this workspace is\nrefused with a 409.",
+        "operationId": "create_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMcpServerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMcpServerPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Create Workspace Mcp Server",
+        "tags": [
+          "mcp-servers"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/mcp-servers/{server_id}": {
+      "delete": {
+        "description": "Delete a server and the token stored with it. Organization owners/admins or this workspace's owners/admins.",
+        "operationId": "delete_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers__server_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Delete Workspace Mcp Server",
+        "tags": [
+          "mcp-servers"
+        ]
+      },
+      "patch": {
+        "description": "Update a server. Organization owners/admins or this workspace's owners/admins.\n\nOnly the fields sent are applied. Omit `authorization_token` to leave the\nstored token alone, send an empty string to clear it, or send a value to\nrotate it.",
+        "operationId": "update_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers__server_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMcpServerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMcpServerPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Workspace Mcp Server",
+        "tags": [
+          "mcp-servers"
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/member-budget-policies": {
       "get": {
         "description": "List the budget defaults attached to a workspace. Any member may read it.",
@@ -21801,6 +22888,168 @@
         "summary": "Remove Workspace Provider Key Model Restriction",
         "tags": [
           "provider-keys"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/web-search": {
+      "delete": {
+        "description": "Drop a workspace's configuration, returning it to the deployment's behavior.\n\nIdempotent: a workspace that has no configuration is already in the state\nthis asks for, so it answers with the unconfigured shape rather than a 404.",
+        "operationId": "clear_workspace_web_search_config_v1_workspaces__workspace_id__web_search_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceWebSearchConfigPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Clear Workspace Web Search Config",
+        "tags": [
+          "workspace-web-search"
+        ]
+      },
+      "get": {
+        "description": "Read a workspace's web-search configuration.\n\nTakes the same role as setting it (an organization owner/admin, or an\nowner/admin of this workspace), because the row describes the workspace's\nposture rather than one member's allowance. A workspace with no row answers\nwith the unconfigured shape (``configured: false``), which is the\ndeployment's own behavior described in the same shape rather than a 404.",
+        "operationId": "get_workspace_web_search_config_v1_workspaces__workspace_id__web_search_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceWebSearchConfigPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Workspace Web Search Config",
+        "tags": [
+          "workspace-web-search"
+        ]
+      },
+      "put": {
+        "description": "Set a workspace's web-search configuration, replacing any existing one.\n\nAn organization owner/admin, or an owner/admin of this workspace, may write\nit. The configuration can only narrow what the deployment permits: turning\nweb search off for the workspace, lowering the result ceiling, and adding to\nthe domains a search may not reach. It never turns on a backend the\ndeployment has not configured, and it carries no credential.",
+        "operationId": "set_workspace_web_search_config_v1_workspaces__workspace_id__web_search_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceWebSearchConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceWebSearchConfigPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Set Workspace Web Search Config",
+        "tags": [
+          "workspace-web-search"
         ]
       }
     }

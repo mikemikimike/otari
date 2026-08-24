@@ -51,6 +51,7 @@ def test_standalone_reports_a_local_operator_and_the_full_surface_set(tmp_path: 
         "surfaces": sorted(STANDALONE_SURFACES),
         "sign_in_methods": ["master_key"],
         "management_url": None,
+        "maintenance_mode": False,
         "mail_ready": False,
     }
 
@@ -67,7 +68,7 @@ def test_a_database_outage_reports_no_sign_in_rather_than_failing(
     async def _unavailable(_db: object) -> bool:
         raise SQLAlchemyError("database is down")
 
-    monkeypatch.setattr(bootstrap_route, "has_password_identity", _unavailable)
+    monkeypatch.setattr(bootstrap_route, "operator_has_password", _unavailable)
     app = create_app(_standalone(tmp_path))
 
     with TestClient(app) as client:
@@ -153,6 +154,7 @@ def test_hybrid_reports_no_session_no_surfaces_and_the_hosted_url(monkeypatch: p
         "surfaces": [],
         "sign_in_methods": [],
         "management_url": "https://otari.ai",
+        "maintenance_mode": False,
         "mail_ready": False,
     }
 

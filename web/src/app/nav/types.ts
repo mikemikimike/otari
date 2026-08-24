@@ -3,9 +3,9 @@
  *
  * Deliberately the same vocabulary as `otari-ai/frontend/src/app/nav/types.ts`,
  * because that tree's pages move into this one at M5 and the two registries have
- * to compose rather than be reconciled. Three fields, three independent gates:
- * `surface` is the deployment axis, `capability` the entitlement axis, and
- * `flag` the operational axis. See ARCHITECTURE.md.
+ * to compose rather than be reconciled. Two fields, two independent gates:
+ * `surface` is the deployment axis and `capability` the entitlement axis. See
+ * ARCHITECTURE.md.
  */
 
 import type { LinkProps } from "@tanstack/react-router"
@@ -40,33 +40,25 @@ interface NavItemBase {
    * reads whatever it is allowed to.
    */
   surface?: string
+  /**
+   * The capability this deployment must be entitled to. The licensing
+   * axis, resolved through `shared/hooks/useEntitlements`. A missing one is
+   * ungated, which is the ordinary case in this build.
+   */
+  capability?: string
 }
 
-/**
- * Entitlement and feature-flag gating for a sidebar link.
- *
- * A flag is a rollout switch beneath a capability, so it is only valid
- * alongside one: an item is either ungated on these two axes, or gated on a
- * `capability` and optionally narrowed further by a `flag`, composed as AND. A
- * flag without a capability is not representable. Copied from otari.ai's
- * registry, including this constraint.
- */
-type NavItemGating =
-  | { capability?: undefined; flag?: undefined }
-  | { capability: string; flag?: string }
-
-/** One sidebar link with its deployment, entitlement, and feature-flag gating. */
-export type NavItem = NavItemBase &
-  NavItemGating & {
-    /**
-     * Destinations nested under this one, rendered as a collapsible group.
-     *
-     * A child declares no gating of its own and inherits the parent's: the
-     * group exists because the pages belong together, and a deployment that
-     * hosts the surface hosts all of them.
-     */
-    children?: readonly NavChild[]
-  }
+/** One sidebar link with its deployment and entitlement gating. */
+export type NavItem = NavItemBase & {
+  /**
+   * Destinations nested under this one, rendered as a collapsible group.
+   *
+   * A child declares no gating of its own and inherits the parent's: the
+   * group exists because the pages belong together, and a deployment that
+   * hosts the surface hosts all of them.
+   */
+  children?: readonly NavChild[]
+}
 
 /** A destination nested under another, gated with its parent by default. */
 export interface NavChild {
@@ -100,6 +92,28 @@ export interface NavChild {
 export interface NavSection {
   id: string
   label?: string
+  items: readonly NavItem[]
+}
+
+/**
+ * Items an overlay adds to a section the base registry declares.
+ *
+ * The seam `overlaySections.ts` cannot cover: that one appends whole sections,
+ * and an overlay's destination does not always want one of its own. Billing
+ * belongs in "Cost & billing" beside `/budgets` and `/organization/pricing`, a
+ * section the base owns, so without this an overlay would have to edit
+ * `registry.ts` to place it, which cardinal rule 6 rules out.
+ *
+ * A contribution is appended to its section, after every row the base declares
+ * there, as `composeNavSections` appends a whole section after the base ones.
+ * The overlay orders its own items; it does not interleave them with the base's.
+ * A contribution naming a section this registry does not declare is dropped,
+ * the same way a stale `NavLabelOverride` is: a section renamed out from under
+ * an overlay costs it the rows it contributed, not the sidebar.
+ */
+export interface NavItemContribution {
+  /** Id of the base `NavSection` these items are appended to. */
+  sectionId: string
   items: readonly NavItem[]
 }
 

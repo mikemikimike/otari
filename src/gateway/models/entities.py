@@ -3,7 +3,19 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, Text, UniqueConstraint, Uuid, text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+    true,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlmodel import SQLModel
 
@@ -123,11 +135,32 @@ class Budget(Base):
     """Budget model for spending limits."""
 
     __tablename__ = "budgets"
+    __table_args__ = (
+        # A period comes from one place or the other, never both, matching the
+        # rule ``scoped_budgets`` already enforced when it carried its own. Without
+        # it the pair encodes one concept twice and ``(86400, calendar_month)`` is
+        # storable and meaningless.
+        CheckConstraint(
+            "NOT (budget_duration_sec IS NOT NULL AND reset_alignment IS NOT NULL)",
+            name="ck_budgets_single_period_source",
+        ),
+    )
 
     budget_id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str | None] = mapped_column(default=None)
-    max_budget: Mapped[float | None] = mapped_column()
+    # Exact, like the counters it is compared against: the gate is
+    # ``spend + reserved <= max_budget``, and a cap stored as a binary float
+    # would decide a 403 against an amount an operator never typed
+    # (mozilla-ai/otari#691).
+    max_budget: Mapped[Decimal | None] = mapped_column(UsdCost())
     budget_duration_sec: Mapped[int | None] = mapped_column()
+    # Snap the window to a UTC calendar boundary instead of counting a fixed
+    # number of seconds, which is the only way to express a calendar month (2592000
+    # seconds is a different, 1.5 percent more generous, product). It lives here
+    # rather than on the rows that enforce a budget because a limit and the period
+    # it is spent over are one product decision, and splitting them let a ceiling
+    # reset on a cadence the budget defining it had never heard of.
+    reset_alignment: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -145,6 +178,7 @@ class Budget(Base):
             "name": self.name,
             "max_budget": self.max_budget,
             "budget_duration_sec": self.budget_duration_sec,
+            "reset_alignment": self.reset_alignment,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -157,12 +191,17 @@ class User(Base):
 
     user_id: Mapped[str] = mapped_column(primary_key=True)
     alias: Mapped[str | None] = mapped_column()
-    spend: Mapped[float] = mapped_column(default=0.0)
+    # The spend ledger, exact to the micro-dollar like the ``usage_logs`` rows
+    # that sum into it (mozilla-ai/otari#691). As a float it drifted: four
+    # completions whose settled costs were each exact left this at
+    # 0.6619999999999999, and the drift accumulated across every reconcile until
+    # the budget reset.
+    spend: Mapped[Decimal] = mapped_column(UsdCost(), default=Decimal(0))
     # In-flight budget held by requests that have passed the budget gate but
     # whose actual cost is not yet known. The effective committed amount is
     # ``spend + reserved``; reservations are reconciled into ``spend`` (actual
     # cost) on success or released on failure. See gateway.services.budget_service.
-    reserved: Mapped[float] = mapped_column(default=0.0, server_default="0")
+    reserved: Mapped[Decimal] = mapped_column(UsdCost(), default=Decimal(0), server_default="0")
     # Indexed: the budgets list groups users by this column to build each budget's
     # usage rollup, so an unindexed FK turns that page into a users table scan.
     budget_id: Mapped[str | None] = mapped_column(ForeignKey("budgets.budget_id"), index=True)
@@ -599,6 +638,21 @@ class UsageLog(Base):
     cache_read_tokens: Mapped[int | None] = mapped_column()
     cache_write_tokens: Mapped[int | None] = mapped_column()
     cache_write_1h_tokens: Mapped[int | None] = mapped_column()
+    # Which cached-token convention the counts above were reported under: True
+    # when the cache buckets are already inside ``prompt_tokens`` (OpenAI shape),
+    # False when they are additive to it (Anthropic / Claude Code shape). Written
+    # by settlement from ``GatewayUsage.cache_tokens_in_prompt`` and by the
+    # external-usage ingest from the value the submitter sent, so a row can be
+    # repriced under the convention it was recorded with rather than one inferred
+    # from the numbers, which cannot tell the two apart.
+    #
+    # Nullable, and deliberately not defaulted: "not recorded" and "inclusive" are
+    # different answers. Rows written before this column existed are NULL, and
+    # repricing falls back to recovering the convention from ``billing_meters``
+    # for exactly those (see ``usage_admin_service._row_cache_tokens_included``).
+    # A default would make every historical row claim a convention nothing
+    # checked, and mis-price the half that were the other one.
+    cache_tokens_in_prompt: Mapped[bool | None] = mapped_column()
     billing_meters: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     pricing_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     # The settled amount, and the accounting truth for this row
@@ -668,6 +722,7 @@ class UsageLog(Base):
             "cache_read_tokens": self.cache_read_tokens,
             "cache_write_tokens": self.cache_write_tokens,
             "cache_write_1h_tokens": self.cache_write_1h_tokens,
+            "cache_tokens_in_prompt": self.cache_tokens_in_prompt,
             "billing_meters": self.billing_meters,
             "pricing_breakdown": self.pricing_breakdown,
             "cost": self.cost,
@@ -744,7 +799,9 @@ class FileObject(Base):
     bytes: Mapped[int] = mapped_column()
     purpose: Mapped[str] = mapped_column(default="user_data")
     storage_ref: Mapped[str] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, index=True)
 
@@ -787,7 +844,9 @@ class BatchRecord(Base):
     # this record is the strict ownership anchor, so it must always name an owner.
     # CASCADE: deleting the user drops the ownership record (the user's keys are
     # gone too, and usage_logs remain the billing history).
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True
+    )
     # SET NULL: a key may be revoked while its batch is still in flight.
     api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="SET NULL"), index=True)
     # The workspace this batch was CREATED in (otari#643 follow-up), so
@@ -924,7 +983,10 @@ class BudgetResetLog(Base):
     # Indexed: the reset-log drill-down filters on this column, and the table only
     # grows, so an unindexed FK degrades that endpoint to a full scan over time.
     budget_id: Mapped[str] = mapped_column(ForeignKey("budgets.budget_id"), index=True)
-    previous_spend: Mapped[float] = mapped_column()
+    # The ledger's record of a counter that is now exact, so it is exact too:
+    # a float snapshot of an exact ``users.spend`` would no longer equal the
+    # spend it claims to have recorded.
+    previous_spend: Mapped[Decimal] = mapped_column(UsdCost())
     reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     next_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -954,9 +1016,9 @@ class ScopedBudget(Base):
     counters and its own period window, unlike ``budgets``, where the window and
     the counters live on the user.
 
-    USD only. There are deliberately no token or request limits in this pass:
-    the gateway prices in dollars everywhere else, and a second enforced
-    dimension is a separate decision from having scopes at all.
+    Nothing here is denominated in dollars. A limit is a property of the budget
+    this names, which is the only place in the schema that maps a cap to an
+    amount.
 
     ``scope_type`` is a plain string rather than a database enum so a new scope
     needs no enum migration, and ``scope_id`` is a string so it holds both this
@@ -965,11 +1027,18 @@ class ScopedBudget(Base):
     different tables, and a provider instance may be configured in ``config.yml``
     and have no row at all.
 
-    This table does not replace ``budgets``. That one is many-to-one from
-    ``users`` and is enforced against ``users.spend + users.reserved``, so N
-    users sharing a budget each get the full limit; folding counters onto it
-    would silently turn that into a pooled cap. Both mechanisms are enforced,
-    side by side.
+    A row names a ``budgets`` row and holds the counters for spending it. The
+    limit and the period are read through the budget, never copied, so editing a
+    budget moves every ceiling that names it. That is deliberate: a budget is a
+    named thing an operator hands out, and the alternative was the same figure
+    typed once per place it applied.
+
+    This table does not replace ``budgets``, and the two enforce differently. A
+    budget reached through ``users.budget_id`` is checked against
+    ``users.spend + users.reserved``, so N users sharing one each get the full
+    limit. A budget reached through a row here is checked against *this row's*
+    counters, so everyone the scope names draws on one allowance. Same budget,
+    two enforcement shapes, which is why both mechanisms exist.
     """
 
     __tablename__ = "scoped_budgets"
@@ -1001,13 +1070,6 @@ class ScopedBudget(Base):
         # non-partial index: neither unique index above covers a scan that spans
         # narrowed and aggregate rows.
         Index("ix_scoped_budgets_scope", "scope_type", "scope_id"),
-        # A period comes from one place or the other, never both. Without this the
-        # two columns would encode one concept with an implicit "ignored when"
-        # rule, and ``(86400, calendar_month)`` would be storable and meaningless.
-        CheckConstraint(
-            "NOT (budget_duration_sec IS NOT NULL AND reset_alignment IS NOT NULL)",
-            name="ck_scoped_budgets_single_period_source",
-        ),
     )
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -1015,23 +1077,19 @@ class ScopedBudget(Base):
     scope_id: Mapped[str] = mapped_column()
     provider_key_id: Mapped[str | None] = mapped_column(default=None)
     name: Mapped[str | None] = mapped_column(default=None)
-    max_budget: Mapped[float | None] = mapped_column(default=None)
-    current_spend: Mapped[float] = mapped_column(default=0.0, server_default="0")
+    # The budget this ceiling enforces. NOT NULL: a ceiling with no budget caps
+    # nothing. The limit and the period are read through it rather than copied, so
+    # editing a budget moves every ceiling that names it, which is the point of a
+    # budget being a named thing rather than a number typed twice.
+    budget_id: Mapped[str] = mapped_column(
+        ForeignKey("budgets.budget_id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    current_spend: Mapped[Decimal] = mapped_column(UsdCost(), default=Decimal(0), server_default="0")
     # In-flight holds from reservations that have passed the gate but whose actual
     # cost is not known yet. Headroom is ``max_budget - current_spend -
     # reserved_spend``; a period roll zeroes ``current_spend`` only, so a hold
     # taken before the roll is still released correctly after it.
-    reserved_spend: Mapped[float] = mapped_column(default=0.0, server_default="0")
-    budget_duration_sec: Mapped[int | None] = mapped_column(default=None)
-    # Either this or ``budget_duration_sec``, and the CHECK above enforces that.
-    # A duration is a rolling window measured from the last reset; an alignment
-    # snaps the window to a UTC calendar boundary instead, which is the only way
-    # to express a calendar month (2592000 seconds is a different, 1.5 percent
-    # more generous, product). A plain string rather than a database enum, for the
-    # same reason ``scope_type`` is one. Boundaries are UTC only: a local calendar
-    # day is 23 or 25 hours across a DST transition, and a ``reset_timezone``
-    # column stays additive if that is ever wanted.
-    reset_alignment: Mapped[str | None] = mapped_column(default=None)
+    reserved_spend: Mapped[Decimal] = mapped_column(UsdCost(), default=Decimal(0), server_default="0")
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
@@ -1241,12 +1299,22 @@ class WorkspaceBudgetDefault(Base):
         Uuid, ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True
     )
     provider_key_id: Mapped[str | None] = mapped_column(default=None)
-    name: Mapped[str | None] = mapped_column(default=None)
-    max_budget: Mapped[float | None] = mapped_column(default=None)
-    budget_duration_sec: Mapped[int | None] = mapped_column(default=None)
+    # The budget this workspace hands to every member. NOT NULL: a default that
+    # names no budget is a template for nothing. ``RESTRICT`` because deleting a
+    # budget a workspace hands out should be refused and explained rather than
+    # silently withdraw the limit from every ceiling it materialized.
+    #
+    # The limit and the period live on the budget, not here, which is what lets
+    # the Budgets page say that a row is a workspace's default. ``provider_key_id``
+    # stays on this side: which provider a workspace applies the budget to is a
+    # property of the assignment, and two workspaces may narrow one budget
+    # differently.
+    budget_id: Mapped[str] = mapped_column(
+        ForeignKey("budgets.budget_id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     # ``UtcDateTime``, not ``DateTime(timezone=True)``: these two are serialized with
     # ``.isoformat()`` (``WorkspaceMemberBudgetPolicyPublic.from_model``) for the
-    # budget-defaults page, and on SQLite (this repo's default ``database_url``)
+    # dashboard, and on SQLite (this repo's default ``database_url``)
     # a plain ``DateTime(timezone=True)`` round-trips naive, so the wire value
     # would carry no offset and a browser would read it as local time.
     # ``UtcDateTime.impl`` is ``DateTime(timezone=True)``, so the DDL is unchanged.
@@ -1311,4 +1379,209 @@ class WorkspaceActivationState(Base):
         UtcDateTime(),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class WorkspaceMcpServer(Base):
+    """One MCP server a workspace has configured, referenced by id from a request.
+
+    Ported from otari-ai's ``mcp_server`` table (otari#658). A request names
+    stored servers with ``mcp_server_ids``; hybrid mode resolves those ids
+    through the platform and standalone mode resolves them here, against the
+    workspace the request's key belongs to. There is no deployment-wide MCP
+    server list for these rows to narrow, which is why MCP is the stated
+    exception to the "a workspace row never grants" rule in
+    ``src/gateway/AGENTS.md``.
+
+    ``encrypted_token`` holds the server's bearer token, Fernet-encrypted with
+    ``OTARI_SECRET_KEY`` (``services/secret_box.py``), the same treatment
+    ``ProviderCredential.encrypted_api_key`` gets. Nothing serializes it: the
+    public shape carries ``has_token`` and no prefix or suffix of the value,
+    because unlike a provider key's ``last4`` there is no operator workflow
+    here that needs to tell two tokens apart at a glance.
+
+    ``enabled`` is a workspace-level off switch that keeps the row and its
+    token: a disabled server is skipped at resolve rather than refusing the
+    request, so a caller whose stored id list outlives one server's
+    decommissioning still gets the rest.
+
+    CASCADE, not the ``RESTRICT`` the request-plane tables above use: this is a
+    workspace-owned configuration row, like ``workspace_budget_defaults``, with
+    no meaning once its workspace is gone.
+    """
+
+    __tablename__ = "workspace_mcp_servers"
+    __table_args__ = (
+        # Duplicate names within one workspace are rejected at the database, not
+        # only in the service layer, so two concurrent creates cannot both land
+        # (otari#658's third Definition-of-Done item). The name is what an
+        # operator recognizes a server by and what the tool loop labels its
+        # tools with, so collapsing two onto one name would silently hide a
+        # server.
+        UniqueConstraint("workspace_id", "name", name="uq_workspace_mcp_servers_workspace_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("workspace.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(nullable=False)
+    url: Mapped[str] = mapped_column(nullable=False)
+    encrypted_token: Mapped[str | None] = mapped_column(Text, default=None)
+    purpose_hint: Mapped[str | None] = mapped_column(Text, default=None)
+    allowed_tools: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # ``UtcDateTime`` for the same reason ``WorkspaceBudgetDefault``'s are: these
+    # go over the wire and a naive SQLite round-trip would drop the offset.
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class WorkspaceCodeExecutionPolicy(Base):
+    """A workspace's policy over the deployment-wide code-execution sandbox.
+
+    The sandbox itself stays deployment-wide (``sandbox_url`` and its
+    credential are operator concerns and never move here, see
+    ``src/gateway/AGENTS.md``); this row says who on that deployment may ask
+    for it and within which limits. Resolved at admission by
+    ``prepare_gateway_tools`` and applied to the tool loop, the standalone
+    counterpart of the hybrid path's ``/gateway/code-execution/resolve``.
+
+    A row may only *narrow*: ``enabled=False`` refuses the tool for this
+    workspace, and the two limits are floored against the values a request
+    would otherwise get. No row means no narrowing, which is what keeps a
+    deployment that configures nothing behaving as it did (#655/#678).
+
+    ``workspace_id`` is the primary key: a workspace has one policy or none,
+    so there is nothing else to identify a row by. It is a real foreign key
+    with ``CASCADE``, like ``workspace_budget_defaults``: nothing else names
+    the row, so it rides the workspace's own delete.
+
+    There is deliberately no per-tool allow-list, which the hosted policy
+    carries as ``tools``: the gateway's own sandbox backend exposes exactly one
+    tool (``code_execution``), so a list here would be either a no-op or a
+    second spelling of ``enabled``. The hosted proxy, which fronts more than
+    one, keeps enforcing its own.
+    """
+
+    __tablename__ = "workspace_code_execution_policies"
+    __table_args__ = (
+        # Both limits are ceilings that get floored into an effective value, so
+        # zero or negative is a storage error rather than a stricter policy: it
+        # would floor the loop to nothing runnable while reading as configured.
+        # The request schemas refuse it first; these are the backstop for a
+        # writer that is not the service.
+        CheckConstraint(
+            "max_iterations IS NULL OR max_iterations > 0",
+            name="ck_workspace_code_execution_policies_max_iterations_positive",
+        ),
+        CheckConstraint(
+            "exec_timeout_s IS NULL OR exec_timeout_s > 0",
+            name="ck_workspace_code_execution_policies_exec_timeout_positive",
+        ),
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("workspace.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # NULL means "no workspace default": the request's own hint, then the
+    # deployment's, then the backend's built-in, exactly as today.
+    default_purpose_hint: Mapped[str | None] = mapped_column(Text, default=None)
+    # Both NULL-able ceilings, applied with ``min`` against what the request
+    # would otherwise get, so a value above the deployment ceiling narrows
+    # nothing rather than raising it.
+    max_iterations: Mapped[int | None] = mapped_column(default=None)
+    exec_timeout_s: Mapped[int | None] = mapped_column(default=None)
+    # ``UtcDateTime`` for the same reason ``WorkspaceBudgetDefault`` uses it:
+    # these are serialized with ``.isoformat()`` for the dashboard, and a plain
+    # ``DateTime(timezone=True)`` round-trips naive on SQLite.
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class WorkspaceWebSearchConfig(Base):
+    """A workspace's configuration over the deployment-wide web-search backend.
+
+    The backend itself stays deployment-wide (``web_search_url`` and the
+    credential the adapter in front of it holds are operator concerns and never
+    move here, see ``src/gateway/AGENTS.md``); this row says which workspaces
+    may reach it and how their searches are constrained. Resolved at admission
+    by ``prepare_gateway_tools``, the standalone counterpart of the hybrid
+    path's ``/gateway/web-search/resolve``.
+
+    A row may only *narrow*: ``enabled=False`` refuses ``otari_web_search`` for
+    the workspace, ``max_results`` is floored against what the request asked
+    for, ``blocked_domains`` is added to the request's own block-list, and
+    ``allowed_domains`` intersects the request's. No row means no narrowing,
+    which is what keeps a deployment that configures nothing behaving as it did
+    (#655/#678).
+
+    ``workspace_id`` is the primary key, and a real foreign key with
+    ``CASCADE``, for the same reasons as :class:`WorkspaceCodeExecutionPolicy`
+    next door: one row per workspace, and nothing else names it.
+
+    There is deliberately no ``provider`` column, which the hosted config
+    carries: on this deployment the operator picks the backend by pointing
+    ``web_search_url`` somewhere, so a provider named here would either be inert
+    or would ask the gateway to reach an endpoint the operator did not choose,
+    which is the one thing the narrowing rule forbids.
+    """
+
+    __tablename__ = "workspace_web_search_configs"
+    __table_args__ = (
+        # ``max_results`` is floored into an effective value, so zero or less is
+        # a storage error rather than a stricter policy: it would ask for a
+        # search that can return nothing while reading as configured. The
+        # request schema refuses it first; this is the backstop for a writer
+        # that is not the service.
+        CheckConstraint(
+            "max_results IS NULL OR max_results > 0",
+            name="ck_workspace_web_search_configs_max_results_positive",
+        ),
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("workspace.id", ondelete="CASCADE"), primary_key=True
+    )
+    # ``server_default`` mirrors the migration so autogenerate sees no drift, and
+    # so a row written by anything other than this mapping still gets a value.
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False, server_default=true())
+    # NULL means "no workspace ceiling": the request's own value, then the
+    # deployment's, then the backend's built-in, exactly as today.
+    max_results: Mapped[int | None] = mapped_column(default=None)
+    # NULL means "no workspace default": the request's own hint, then the
+    # deployment's, then the backend's built-in.
+    purpose_hint: Mapped[str | None] = mapped_column(Text, default=None)
+    # Two domain lists and an opaque provider bag, stored as JSON for the same
+    # reason the hosted table does: they are short, they are read whole, and
+    # nothing queries into them. ``JSON`` rather than ``JSONB`` to match every
+    # other JSON column here, which has to work on SQLite too.
+    allowed_domains: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    blocked_domains: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    # Provider-specific knobs (Tavily's ``search_depth``, say). Opaque here and
+    # forwarded to the backend, which is what lets a new provider need no
+    # migration; the adapter in front of it whitelists what it understands.
+    provider_options: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # ``UtcDateTime`` for the same reason ``WorkspaceCodeExecutionPolicy`` uses
+    # it: these are serialized with ``.isoformat()`` for the dashboard, and a
+    # plain ``DateTime(timezone=True)`` round-trips naive on SQLite. The Python
+    # default is what every write here uses; ``server_default`` is the backstop
+    # for a writer that is not this mapping, matching ``workspace`` itself.
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        server_default=func.now(),
     )

@@ -1,6 +1,7 @@
 import {
   keepPreviousData,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
@@ -18,6 +19,7 @@ import type {
   CreateOrganizationMemberRequest,
   CreateOrganizationMemberResult,
   CreateOrganizationPricingOverride,
+  CreateScopedBudgetRequest,
   CreateSearchToolRequest,
   CreateStoredProviderRequest,
   CreateUserRequest,
@@ -36,6 +38,7 @@ import type {
   KnownProvider,
   KnownProviderSummary,
   MailSettings,
+  MaintenanceMode,
   ModelListResponse,
   ModelMetadataResponse,
   OrganizationContext,
@@ -49,9 +52,13 @@ import type {
   RankCandidatesRequest,
   RankCandidatesResponse,
   ReencryptProviderCredentialsResult,
+  RequestPasswordResetResponse,
+  ResendVerificationResponse,
+  ResetPasswordRequest,
   RotateMasterKeyResponse,
   RouterStatus,
   RoutingPolicyResponse,
+  ScopedBudget,
   SearchProviderInfo,
   SearchToolsResponse,
   SendTestMailRequest,
@@ -59,6 +66,8 @@ import type {
   SetPasswordRequest,
   SetPricingRequest,
   SetRoutingPolicyRequest,
+  SignupRequest,
+  SignupResponse,
   StoredProvider,
   StoredSearchTool,
   SummaryDimension,
@@ -71,13 +80,16 @@ import type {
   UpdateOrganizationMemberRequest,
   UpdateOrganizationPricingOverride,
   UpdateOrganizationRequest,
+  UpdateScopedBudgetRequest,
   UpdateSearchToolRequest,
   UpdateSettingsRequest,
   UpdateStoredProviderRequest,
   UpdateToolSettingsRequest,
   UpdateUserRequest,
   UpdateWorkspaceBudgetDefaultRequest,
+  UpdateWorkspaceCodeExecutionPolicyRequest,
   UpdateWorkspaceRequest,
+  UpdateWorkspaceWebSearchConfigRequest,
   UsageBucket,
   UsageCount,
   UsageDeleteResult,
@@ -90,11 +102,14 @@ import type {
   UsageSetPriceResult,
   UsageSummary,
   User,
+  VerifyEmailResponse,
   Workspace,
   WorkspaceActivation,
   WorkspaceBudgetDefault,
+  WorkspaceCodeExecutionPolicy,
   WorkspaceMember,
   WorkspaceMemberRole,
+  WorkspaceWebSearchConfig,
 } from "@/client"
 import { ApiError, apiFetch, longRequestSignal } from "@/shared/api/client"
 import { isoAgo } from "@/shared/helpers/timeRange"
@@ -103,6 +118,9 @@ const MODELS = "models"
 const PRICING = "pricing"
 const SETTINGS = "settings"
 const MAIL_SETTINGS = "mail-settings"
+const MAINTENANCE_MODE = "maintenance-mode"
+// One indexed single-row read, and only while the settings page is mounted.
+const MAINTENANCE_MODE_POLL_MS = 30_000
 const TOOL_SETTINGS = "tool-settings"
 const TOOLS = "tools"
 const SEARCH_TOOLS = "search-tools"
@@ -122,6 +140,7 @@ const BUILD = "build"
 const HEALTH = "health"
 const KEYS = "keys"
 const BUDGETS = "budgets"
+const SCOPED_BUDGETS = "scoped-budgets"
 const USERS = "users"
 const USAGE = "usage"
 const ORGANIZATIONS = "organizations"
@@ -607,6 +626,53 @@ export function useUpdateSettings() {
   })
 }
 
+/**
+ * Whether this deployment is refusing new dashboard sign-ins.
+ *
+ * Not read from the bootstrap, which carries the same flag: that one is fetched
+ * once per page load and cached for the life of the tab, which is right for the
+ * sign-in screen (it renders before there is anything to poll with) and wrong
+ * for the switch that changes it. This is the live value the card renders.
+ */
+export function useMaintenanceMode() {
+  return useQuery({
+    queryKey: [MAINTENANCE_MODE],
+    queryFn: () => apiFetch<MaintenanceMode>("/v1/settings/maintenance-mode"),
+    // Polled and refreshed on focus, unlike every other settings read here.
+    // A `staleTime` alone schedules nothing, and this app turns
+    // `refetchOnWindowFocus` off globally, so a card left open would keep
+    // showing whatever it fetched on mount. That is the one wrong answer this
+    // card can give: another operator or an API client can flip the freeze, and
+    // reporting a deployment open when it is frozen (or frozen when it is back)
+    // is worse than a moment's blank. Same treatment as `useDashboardBuild`,
+    // for the same reason: the value changes underneath the tab.
+    refetchInterval: MAINTENANCE_MODE_POLL_MS,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
+/**
+ * Freeze or unfreeze dashboard sign-ins.
+ *
+ * Nothing else is invalidated: the freeze changes no data any other page shows,
+ * and it deliberately does not touch the caller's own session, so the tab that
+ * flipped it keeps working either way.
+ */
+export function useSetMaintenanceMode() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiFetch<MaintenanceMode>("/v1/settings/maintenance-mode", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData([MAINTENANCE_MODE], data)
+    },
+  })
+}
+
 export function useRotateMasterKey() {
   return useMutation({
     mutationFn: () =>
@@ -1057,6 +1123,82 @@ export function useDeleteBudget() {
       }),
     onSuccess: () =>
       void queryClient.invalidateQueries({ queryKey: [BUDGETS] }),
+  })
+}
+
+// The tenancy-scoped ceilings, which are a different mechanism from the budgets
+// above rather than a view over them: each row carries its own counters, so one
+// row is a pooled cap over whatever its scope names. See `client/index.ts`.
+//
+// The list route returns a bare array (not the `Paged` envelope the tenancy
+// routes use) and caps `limit` at 1000 server-side, so it pages like budgets and
+// keys do, with the same guard against a backend that ignores `skip`.
+const SCOPED_BUDGETS_PAGE_SIZE = 1000
+const SCOPED_BUDGETS_MAX_PAGES = 100
+
+async function fetchAllScopedBudgets(): Promise<ScopedBudget[]> {
+  const all: ScopedBudget[] = []
+  for (let page = 0; page < SCOPED_BUDGETS_MAX_PAGES; page += 1) {
+    const rows = await apiFetch<ScopedBudget[]>(
+      `/v1/scoped-budgets?skip=${page * SCOPED_BUDGETS_PAGE_SIZE}&limit=${SCOPED_BUDGETS_PAGE_SIZE}`,
+    )
+    all.push(...rows)
+    if (rows.length < SCOPED_BUDGETS_PAGE_SIZE) {
+      break
+    }
+  }
+  return all
+}
+
+export function useScopedBudgets() {
+  return useQuery({
+    queryKey: [SCOPED_BUDGETS],
+    queryFn: fetchAllScopedBudgets,
+    staleTime: 60_000,
+  })
+}
+
+export function useCreateScopedBudget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: CreateScopedBudgetRequest) =>
+      apiFetch<ScopedBudget>("/v1/scoped-budgets", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: [SCOPED_BUDGETS] }),
+  })
+}
+
+export function useUpdateScopedBudget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string
+      body: UpdateScopedBudgetRequest
+    }) =>
+      apiFetch<ScopedBudget>(`/v1/scoped-budgets/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: [SCOPED_BUDGETS] }),
+  })
+}
+
+export function useDeleteScopedBudget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<void>(`/v1/scoped-budgets/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: [SCOPED_BUDGETS] }),
   })
 }
 
@@ -1658,6 +1800,105 @@ export function useAcceptInvitation() {
   })
 }
 
+// The public auth flows (otari#650). Same shape as the two invitation calls
+// above and for the same reason: nothing here is gated on a session or the
+// master key, because a caller completing a signup or opening an emailed link
+// holds neither. The gateway answers 400 for a bad token, 429 when the shared
+// sign-in limiter fires, and 503 when this deployment cannot send mail, so
+// apiFetch's session-bounce on 401/403 never triggers on any of them.
+//
+// None of them invalidates anything. They write to an identity this
+// unauthenticated caller cannot read back, and the cache they would touch
+// belongs to a session that does not exist yet.
+
+// Claims a roster identity by setting its password, then mails a verification
+// link. The response is the same sentence whether the address was unknown,
+// already claimed, or genuinely just claimed, so nothing here may branch on it.
+export function useSignup() {
+  return useMutation({
+    mutationFn: (body: SignupRequest) =>
+      apiFetch<SignupResponse>("/v1/auth/signup", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  })
+}
+
+// A query rather than a mutation, the same shape `useValidateInvitation` takes
+// and for a reason that outranks the fact that this one does write: the page
+// verifies on arrival rather than behind a button, so *whatever* fires it has
+// to fire exactly once per token, and a query keyed on the token is the only
+// one of the two that the cache makes idempotent for free. A mutation fired
+// from an effect is not: `main.tsx` runs under StrictMode, whose
+// mount/unmount/mount would spend a single-use token twice and land the second
+// call's `400` over the first call's success.
+//
+// The knobs are what keep it a one-shot, and they are spelled out here rather
+// than leaning on the provider's defaults, because "fires once" is this hook's
+// contract and not a coincidence of how the app is configured. Never stale and
+// never collected, so a remount reads the answer back instead of asking again.
+// No retry, because a spent token's `400` is the final answer and not a blip.
+// And the three automatic refetches are off by name: staleness alone does not
+// hold them back once a query has failed, since a failure leaves no data for
+// `staleTime` to keep fresh, so without these a reconnect or a remount would
+// re-POST a token that is already gone.
+//
+// POST with the token in the body rather than a GET with it in the URL, the
+// same reasoning `useValidateInvitation` gives: the token is a bearer
+// credential and a URL is what an access log or an intermediate proxy
+// routinely retains.
+export function useVerifyEmail(token: string) {
+  return useQuery({
+    queryKey: ["verify-email", token],
+    queryFn: () =>
+      apiFetch<VerifyEmailResponse>("/v1/auth/verify-email", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    // A malformed link is never worth a round trip; the page says so itself.
+    enabled: token.length > 0,
+    retry: false,
+    retryOnMount: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+  })
+}
+
+export function useResendVerification() {
+  return useMutation({
+    mutationFn: (email: string) =>
+      apiFetch<ResendVerificationResponse>("/v1/auth/resend-verification", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      }),
+  })
+}
+
+export function useRequestPasswordReset() {
+  return useMutation({
+    mutationFn: (email: string) =>
+      apiFetch<RequestPasswordResetResponse>("/v1/auth/password/reset", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      }),
+  })
+}
+
+// 204, so there is nothing to read back: the caller learns it worked by the
+// call not raising, and signs in with the new password from the sign-in screen.
+export function useResetPassword() {
+  return useMutation({
+    mutationFn: (body: ResetPasswordRequest) =>
+      apiFetch<void>("/v1/auth/password/reset/confirm", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  })
+}
+
 export function useWorkspaces() {
   return useQuery({
     queryKey: [WORKSPACES],
@@ -1801,6 +2042,84 @@ export function useWorkspaceBudgetDefaults(workspaceId: string | null) {
   })
 }
 
+/**
+ * Every workspace's roster, as one list, each row paired with its workspace.
+ *
+ * Same fan-out as `useAllWorkspaceBudgetDefaults` and for the same reason: a
+ * roster is only served per workspace, and a standalone deployment has few. It
+ * is what lets the organization roster answer "which workspaces is this person
+ * in", which is otherwise only answerable one workspace at a time.
+ */
+export function useAllWorkspaceMembers(workspaceIds: string[]) {
+  return useQueries({
+    queries: workspaceIds.map((workspaceId) => ({
+      queryKey: [WORKSPACES, workspaceId, "members"],
+      queryFn: () =>
+        fetchAllPaged<WorkspaceMember>(
+          `/v1/workspaces/${encodeURIComponent(workspaceId)}/members`,
+        ),
+      staleTime: 60_000,
+    })),
+    combine: (results) => ({
+      data: results.flatMap((result, index) =>
+        (result.data ?? []).map((row) => ({
+          workspaceId: workspaceIds[index],
+          member: row,
+        })),
+      ),
+      isLoading: results.some((result) => result.isLoading),
+      // The first failure, surfaced rather than swallowed: a rejected read
+      // contributes nothing to `data`, so without this the caller cannot tell a
+      // workspace with no rows from one whose read failed, and a lost membership
+      // or a lost ceiling looks exactly like a deliberate absence.
+      error: results.find((result) => result.error)?.error ?? null,
+      isSuccess: results.every((result) => result.isSuccess),
+    }),
+  })
+}
+
+/**
+ * Every workspace's budget defaults, as one list.
+ *
+ * A fan-out rather than one call: defaults are only served per workspace
+ * (`/v1/workspaces/{id}/member-budget-policies`), and a standalone deployment
+ * has few workspaces, so N small cached reads beat adding a route. Each shares
+ * the cache entry `useWorkspaceBudgetDefaults` uses, so opening a workspace
+ * afterwards costs nothing.
+ *
+ * This is what lets the budgets list say a budget is a workspace's default:
+ * without it the page would know the budget and not the assignment.
+ */
+export function useAllWorkspaceBudgetDefaults(workspaceIds: string[]) {
+  return useQueries({
+    queries: workspaceIds.map((workspaceId) => ({
+      queryKey: [WORKSPACES, workspaceId, "budget-defaults"],
+      queryFn: () =>
+        fetchAllPaged<WorkspaceBudgetDefault>(
+          `/v1/workspaces/${encodeURIComponent(workspaceId)}/member-budget-policies`,
+        ),
+      staleTime: 60_000,
+    })),
+    combine: (results) => ({
+      // Paired with its workspace on the way out: a default names a workspace by
+      // id, and the caller wants the name.
+      data: results.flatMap((result, index) =>
+        (result.data ?? []).map((row) => ({
+          workspaceId: workspaceIds[index],
+          default: row,
+        })),
+      ),
+      isLoading: results.some((result) => result.isLoading),
+      // The first failure, surfaced rather than swallowed: a rejected read
+      // contributes nothing to `data`, so without this the caller cannot tell a
+      // workspace with no rows from one whose read failed, and a lost membership
+      // or a lost ceiling looks exactly like a deliberate absence.
+      error: results.find((result) => result.error)?.error ?? null,
+      isSuccess: results.every((result) => result.isSuccess),
+    }),
+  })
+}
+
 export function useCreateWorkspaceBudgetDefault() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1864,6 +2183,119 @@ export function useDeleteWorkspaceBudgetDefault() {
     onSuccess: (_data, { workspaceId }) => {
       void queryClient.invalidateQueries({
         queryKey: [WORKSPACES, workspaceId, "budget-defaults"],
+      })
+    },
+  })
+}
+
+// A workspace's code-execution policy over the deployment-wide sandbox. One
+// object or none, so it is a plain read rather than a paged list, and it is
+// nested under the workspaces key for the same reason the budget defaults are.
+export function useWorkspaceCodeExecutionPolicy(workspaceId: string | null) {
+  return useQuery({
+    queryKey: [WORKSPACES, workspaceId, "code-execution-policy"],
+    queryFn: () =>
+      apiFetch<WorkspaceCodeExecutionPolicy>(
+        `/v1/workspaces/${encodeURIComponent(workspaceId as string)}/code-execution-policy`,
+      ),
+    enabled: workspaceId !== null,
+    staleTime: 60_000,
+  })
+}
+
+export function useSetWorkspaceCodeExecutionPolicy() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      workspaceId,
+      body,
+    }: {
+      workspaceId: string
+      body: UpdateWorkspaceCodeExecutionPolicyRequest
+    }) =>
+      apiFetch<WorkspaceCodeExecutionPolicy>(
+        `/v1/workspaces/${encodeURIComponent(workspaceId)}/code-execution-policy`,
+        { method: "PUT", body: JSON.stringify(body) },
+      ),
+    onSuccess: (_data, { workspaceId }) => {
+      void queryClient.invalidateQueries({
+        queryKey: [WORKSPACES, workspaceId, "code-execution-policy"],
+      })
+    },
+  })
+}
+
+// Drops the row, which returns the workspace to the deployment's own behavior.
+// Not the same as saving `enabled: true`: that is a stored decision not to
+// narrow, while this is no decision at all.
+export function useClearWorkspaceCodeExecutionPolicy() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ workspaceId }: { workspaceId: string }) =>
+      apiFetch<WorkspaceCodeExecutionPolicy>(
+        `/v1/workspaces/${encodeURIComponent(workspaceId)}/code-execution-policy`,
+        { method: "DELETE" },
+      ),
+    onSuccess: (_data, { workspaceId }) => {
+      void queryClient.invalidateQueries({
+        queryKey: [WORKSPACES, workspaceId, "code-execution-policy"],
+      })
+    },
+  })
+}
+
+// A workspace's web-search configuration over the deployment-wide backend. One
+// object or none, so it is a plain read rather than a paged list, and it is
+// nested under the workspaces key for the same reason the code-execution policy
+// next door is.
+export function useWorkspaceWebSearchConfig(workspaceId: string | null) {
+  return useQuery({
+    queryKey: [WORKSPACES, workspaceId, "web-search"],
+    queryFn: () =>
+      apiFetch<WorkspaceWebSearchConfig>(
+        `/v1/workspaces/${encodeURIComponent(workspaceId as string)}/web-search`,
+      ),
+    enabled: workspaceId !== null,
+    staleTime: 60_000,
+  })
+}
+
+export function useSetWorkspaceWebSearchConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      workspaceId,
+      body,
+    }: {
+      workspaceId: string
+      body: UpdateWorkspaceWebSearchConfigRequest
+    }) =>
+      apiFetch<WorkspaceWebSearchConfig>(
+        `/v1/workspaces/${encodeURIComponent(workspaceId)}/web-search`,
+        { method: "PUT", body: JSON.stringify(body) },
+      ),
+    onSuccess: (_data, { workspaceId }) => {
+      void queryClient.invalidateQueries({
+        queryKey: [WORKSPACES, workspaceId, "web-search"],
+      })
+    },
+  })
+}
+
+// Drops the row, which returns the workspace to the deployment's own behavior.
+// Not the same as saving `enabled: true`: that is a stored decision not to
+// narrow, while this is no decision at all.
+export function useClearWorkspaceWebSearchConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ workspaceId }: { workspaceId: string }) =>
+      apiFetch<WorkspaceWebSearchConfig>(
+        `/v1/workspaces/${encodeURIComponent(workspaceId)}/web-search`,
+        { method: "DELETE" },
+      ),
+    onSuccess: (_data, { workspaceId }) => {
+      void queryClient.invalidateQueries({
+        queryKey: [WORKSPACES, workspaceId, "web-search"],
       })
     },
   })

@@ -321,8 +321,8 @@ export interface paths {
          *     authenticated by the session cookie. The master key in a header is what
          *     excuses ``current_password``, which is how a forgotten password is
          *     recovered; it does not excuse ``email``, because an identity with no address
-         *     has nothing to sign in with whoever is asking. Setting a password for the
-         *     first time retires master-key sign-in on this deployment.
+         *     has nothing to sign in with whoever is asking. The operator setting a password
+         *     for the first time retires master-key sign-in on this deployment.
          *
          *     Every other session this identity holds ends, the caller's own excepted, so
          *     a cookie stolen before the change does not outlive it.
@@ -423,6 +423,18 @@ export interface paths {
          *     one is burned against a stand-in hash even for an address nobody holds)
          *     before the limit is consulted, so a 429 costs the same as a 401. A gateway
          *     exposed to the internet should rate-limit this path at the proxy as well.
+         *
+         *     The maintenance-mode check runs before either credential is verified, and
+         *     refuses both. Before, because a frozen deployment should not spend a bcrypt
+         *     verification per attempt and the refusal is not about the credential
+         *     anyway; both, because the way back out is the master key against
+         *     ``PATCH /v1/settings/maintenance-mode`` through the header, which never
+         *     passes through this door. That is what keeps the way back out off the frozen
+         *     path, and it is why no identity needs an exemption here; an operator who no
+         *     longer holds the master key recovers by setting ``OTARI_MASTER_KEY`` and
+         *     restarting, which is a restart rather than a click. It leaks nothing
+         *     either: ``GET /v1/bootstrap`` already publishes the same flag
+         *     unauthenticated, so the sign-in screen can render the right page.
          */
         post: operations["create_session_v1_auth_session_post"];
         /**
@@ -594,9 +606,9 @@ export interface paths {
          *     credential, and it publishes nothing an unauthenticated caller could not
          *     already learn by trying both credentials against the sign-in endpoint.
          *
-         *     The one database read is a ``LIMIT 1`` probe for any identity holding a
-         *     password, over a table a standalone deployment keeps one row per person in.
-         *     It runs only in standalone mode: a hybrid gateway has no session to describe,
+         *     The database read is two primary-key lookups: the ``tenancy_bootstrap_user_id``
+         *     marker, and the identity it names, to answer whether *that* identity holds a
+         *     password (#702). It runs only in standalone mode: a hybrid gateway has no session to describe,
          *     and ``get_db_if_needed`` hands it no session to read one from.
          */
         get: operations["get_bootstrap_v1_bootstrap_get"];
@@ -649,6 +661,12 @@ export interface paths {
         /**
          * Delete Budget
          * @description Delete a budget.
+         *
+         *     Refused with 409 while anything still names this budget: a workspace handing
+         *     it to its members, or a scoped ceiling enforcing it. Both foreign keys are
+         *     ``RESTRICT``, so the database would refuse either anyway, but as an
+         *     ``IntegrityError`` reported as "Database error" with nothing naming what to
+         *     go and change. Checked here so the refusal can say which, and where.
          */
         delete: operations["delete_budget_v1_budgets__budget_id__delete"];
         options?: never;
@@ -2126,11 +2144,15 @@ export interface paths {
         head?: never;
         /**
          * Update Scoped Budget
-         * @description Update a scoped budget's label, limit, or period.
+         * @description Relabel a ceiling, or point it at a different budget.
          *
          *     The scope and the provider narrowing are not editable: changing either would
          *     move the ceiling to a different identity while carrying its spend, which is
          *     a delete and a create, not an update.
+         *
+         *     There is no limit or period to set here any more. Both are properties of the
+         *     budget, so changing what a ceiling allows is either editing that budget,
+         *     which moves every ceiling naming it, or naming a different one.
          */
         patch: operations["update_scoped_budget_v1_scoped_budgets__budget_id__patch"];
         trace?: never;
@@ -2381,6 +2403,34 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/maintenance-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Maintenance Mode
+         * @description Report whether new dashboard sign-ins are frozen.
+         */
+        get: operations["get_maintenance_mode_v1_settings_maintenance_mode_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Maintenance Mode
+         * @description Freeze or unfreeze dashboard sign-ins, for this and every other replica.
+         *
+         *     The new state is persisted and nothing is applied to the running worker,
+         *     because every reader goes back to the stored row. That is what makes one
+         *     call enough for a deployment running more than one of them.
+         */
+        patch: operations["update_maintenance_mode_v1_settings_maintenance_mode_patch"];
         trace?: never;
     };
     "/v1/settings/master-key/rotate": {
@@ -2958,6 +3008,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace_id}/code-execution-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Code Execution Policy
+         * @description Read a workspace's code-execution policy.
+         *
+         *     Takes the same role as setting it (an organization owner/admin, or an
+         *     owner/admin of this workspace), because the policy describes the
+         *     workspace's security and billing posture rather than one member's
+         *     allowance. A workspace with no policy answers with the unconfigured one
+         *     (``configured: false``), which is the deployment's own behavior described
+         *     in the same shape rather than a 404.
+         */
+        get: operations["get_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_get"];
+        /**
+         * Set Workspace Code Execution Policy
+         * @description Set a workspace's code-execution policy, replacing any existing one.
+         *
+         *     An organization owner/admin, or an owner/admin of this workspace, may
+         *     write it. The policy can only narrow what the deployment permits: turning
+         *     code execution off for the workspace, and lowering the loop and execution
+         *     ceilings. It never turns a sandbox the deployment has not configured on.
+         */
+        put: operations["set_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_put"];
+        post?: never;
+        /**
+         * Clear Workspace Code Execution Policy
+         * @description Drop a workspace's policy, returning it to the deployment's behavior.
+         *
+         *     Idempotent: a workspace that has no policy is already in the state this
+         *     asks for, so it answers with the unconfigured policy rather than a 404.
+         */
+        delete: operations["clear_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace_id}/mcp-servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Workspace Mcp Servers
+         * @description List the MCP servers configured for a workspace.
+         *
+         *     Organization owners/admins or this workspace's owners/admins. Reads are
+         *     gated like writes because these rows name the endpoints the gateway
+         *     connects to on the workspace's behalf. Authorization tokens are never
+         *     included; each server reports only whether it has one.
+         */
+        get: operations["list_workspace_mcp_servers_v1_workspaces__workspace_id__mcp_servers_get"];
+        put?: never;
+        /**
+         * Create Workspace Mcp Server
+         * @description Register an MCP server for a workspace. Organization owners/admins or this workspace's owners/admins.
+         *
+         *     The authorization token is encrypted at rest and never returned. The URL
+         *     is checked for SSRF safety here as well as on the request path, and must
+         *     use https when a token is set. A name already used in this workspace is
+         *     refused with a 409.
+         */
+        post: operations["create_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace_id}/mcp-servers/{server_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Workspace Mcp Server
+         * @description Delete a server and the token stored with it. Organization owners/admins or this workspace's owners/admins.
+         */
+        delete: operations["delete_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers__server_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Workspace Mcp Server
+         * @description Update a server. Organization owners/admins or this workspace's owners/admins.
+         *
+         *     Only the fields sent are applied. Omit `authorization_token` to leave the
+         *     stored token alone, send an empty string to clear it, or send a value to
+         *     rotate it.
+         */
+        patch: operations["update_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers__server_id__patch"];
+        trace?: never;
+    };
     "/v1/workspaces/{workspace_id}/member-budget-policies": {
         parameters: {
             query?: never;
@@ -3153,6 +3308,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace_id}/web-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Web Search Config
+         * @description Read a workspace's web-search configuration.
+         *
+         *     Takes the same role as setting it (an organization owner/admin, or an
+         *     owner/admin of this workspace), because the row describes the workspace's
+         *     posture rather than one member's allowance. A workspace with no row answers
+         *     with the unconfigured shape (``configured: false``), which is the
+         *     deployment's own behavior described in the same shape rather than a 404.
+         */
+        get: operations["get_workspace_web_search_config_v1_workspaces__workspace_id__web_search_get"];
+        /**
+         * Set Workspace Web Search Config
+         * @description Set a workspace's web-search configuration, replacing any existing one.
+         *
+         *     An organization owner/admin, or an owner/admin of this workspace, may write
+         *     it. The configuration can only narrow what the deployment permits: turning
+         *     web search off for the workspace, lowering the result ceiling, and adding to
+         *     the domains a search may not reach. It never turns on a backend the
+         *     deployment has not configured, and it carries no credential.
+         */
+        put: operations["set_workspace_web_search_config_v1_workspaces__workspace_id__web_search_put"];
+        post?: never;
+        /**
+         * Clear Workspace Web Search Config
+         * @description Drop a workspace's configuration, returning it to the deployment's behavior.
+         *
+         *     Idempotent: a workspace that has no configuration is already in the state
+         *     this asks for, so it answers with the unconfigured shape rather than a 404.
+         */
+        delete: operations["clear_workspace_web_search_config_v1_workspaces__workspace_id__web_search_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3309,9 +3507,9 @@ export interface components {
          *     ``POST /v1/keys`` to give this member a key. It is null when no usable row
          *     exists (nobody minted one, or it was soft-deleted through
          *     ``DELETE /v1/users``), which is the signal not to offer this member as a key
-         *     owner: key creation would refuse. The two ids converge when the request plane
-         *     re-parents onto tenancy (M4), and this field is what lets that happen without
-         *     the dashboard changing.
+         *     owner: key creation would refuse. How the two ids converge is the open
+         *     question in otari-ai#1727; this field is the join until it is answered, and
+         *     is what lets either answer land without the dashboard changing.
          */
         ActiveOrganizationMemberPublic: {
             /** Attribution User Id */
@@ -3824,6 +4022,8 @@ export interface components {
             max_budget: number | null;
             /** Name */
             name: string | null;
+            /** Reset Alignment */
+            reset_alignment: string | null;
             /**
              * Total Reserved
              * @default 0
@@ -4122,6 +4322,11 @@ export interface components {
              * @description Admin-facing label for the budget
              */
             name?: string | null;
+            /**
+             * Reset Alignment
+             * @description Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec
+             */
+            reset_alignment?: ("calendar_day" | "calendar_week" | "calendar_month") | null;
         };
         /**
          * CreateKeyRequest
@@ -4217,18 +4422,13 @@ export interface components {
          */
         CreateScopedBudgetRequest: {
             /**
-             * Budget Duration Sec
-             * @description Period length in seconds (e.g. 86400 for daily); null never resets
+             * Budget Id
+             * @description The budget this ceiling enforces; its limit and period are read through it
              */
-            budget_duration_sec?: number | null;
-            /**
-             * Max Budget
-             * @description Maximum USD spend in the period
-             */
-            max_budget?: number | null;
+            budget_id: string;
             /**
              * Name
-             * @description Admin-facing label for the budget
+             * @description Admin-facing label for this ceiling
              */
             name?: string | null;
             /**
@@ -4236,11 +4436,6 @@ export interface components {
              * @description Narrow the cap to one provider instance; null caps spend across every provider
              */
             provider_key_id?: string | null;
-            /**
-             * Reset Alignment
-             * @description Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec
-             */
-            reset_alignment?: ("calendar_day" | "calendar_week" | "calendar_month") | null;
             /**
              * Scope Id
              * @description Id of the capped identity: an organization, workspace, membership row, or API key
@@ -4321,7 +4516,7 @@ export interface components {
             email?: string | null;
             /**
              * Master Key
-             * @description The gateway master key; verified once and never stored by the browser. Accepted only while no identity on this deployment has a password (see GET /v1/bootstrap).
+             * @description The gateway master key; verified once and never stored by the browser. Accepted only while the operator identity has no password, which is to say while nobody has claimed this deployment (see GET /v1/bootstrap).
              */
             master_key?: string | null;
             /**
@@ -4413,6 +4608,11 @@ export interface components {
              */
             mail_ready: boolean;
             /**
+             * Maintenance Mode
+             * @description Whether this deployment is refusing new dashboard sign-ins while an operator redeploys it. The sign-in screen says so rather than presenting a form whose only outcome is a 503. Sessions already issued keep working, and the management API and the data plane are unaffected. False for a hybrid gateway, which issues no session.
+             */
+            maintenance_mode: boolean;
+            /**
              * Management Url
              * @description Where the authoritative control plane lives when it is not this deployment. Set for a hybrid gateway so its landing page can link to otari.ai; null otherwise.
              */
@@ -4425,7 +4625,7 @@ export interface components {
             session_type: "local_operator" | "hosted_user" | "none";
             /**
              * Sign In Methods
-             * @description How POST /v1/auth/session may be authenticated right now, sorted. 'master_key' is the first-boot credential and is offered until some identity on this deployment has a password; 'password' replaces it from then on, and the master key stays the credential for the management API. Empty for a hybrid gateway, which issues no session. The login page renders from this rather than trying a credential to find out.
+             * @description How POST /v1/auth/session may be authenticated right now, sorted. 'master_key' is the first-boot credential and is offered until the operator identity has a password, which is what claiming the deployment means; 'password' replaces it from then on, and the master key stays the credential for the management API. Empty for a hybrid gateway, which issues no session. The login page renders from this rather than trying a credential to find out.
              */
             sign_in_methods: ("master_key" | "password")[];
             /**
@@ -5092,6 +5292,17 @@ export interface components {
              * @description The transport a send would use: 'smtp', 'console' (logged, not delivered), or 'none'.
              */
             transport: string;
+        };
+        /**
+         * MaintenanceMode
+         * @description Whether this deployment is currently refusing new dashboard sign-ins.
+         */
+        MaintenanceMode: {
+            /**
+             * Enabled
+             * @description When true, POST /v1/auth/session refuses every credential with 503 so nobody starts a new dashboard session during a redeploy. Sessions already issued keep working, and the management API and the data plane are unaffected: a caller presenting the master key or an API key through the header is never frozen out.
+             */
+            enabled: boolean;
         };
         /**
          * ManagedTool
@@ -5777,7 +5988,7 @@ export interface components {
             email: string;
             /**
              * Master Key Sign In Retired
-             * @description Always true once this succeeds: some identity on this deployment now has a password, so POST /v1/auth/session no longer accepts the master key. It stays the credential for the management API.
+             * @description Whether POST /v1/auth/session has stopped accepting the master key as a dashboard login. True once the operator identity has a password, which is what claiming the deployment means; a member setting their own password leaves an unclaimed deployment on the master key. Either way the master key stays the credential for the management API.
              */
             master_key_sign_in_retired: boolean;
         };
@@ -6381,10 +6592,16 @@ export interface components {
          *     Unlike ``/v1/budgets``, the counters are the row's own: a scoped ceiling is
          *     enforced against ``current_spend + reserved_spend``, so there is no rollup
          *     over users to compute.
+         *
+         *     ``max_budget``, ``budget_duration_sec`` and ``reset_alignment`` are read off
+         *     the budget rather than stored here, and are carried on the wire so a caller
+         *     can render a ceiling without fetching every budget to resolve one id.
          */
         ScopedBudgetResponse: {
             /** Budget Duration Sec */
             budget_duration_sec: number | null;
+            /** Budget Id */
+            budget_id: string;
             /** Created At */
             created_at: string;
             /** Current Spend */
@@ -6985,6 +7202,8 @@ export interface components {
             max_budget?: number | null;
             /** Name */
             name?: string | null;
+            /** Reset Alignment */
+            reset_alignment?: ("calendar_day" | "calendar_week" | "calendar_month") | null;
         };
         /**
          * UpdateKeyRequest
@@ -7011,18 +7230,25 @@ export interface components {
             reject_user_mismatch?: boolean | null;
         };
         /**
+         * UpdateMaintenanceModeRequest
+         * @description Turn the sign-in freeze on or off.
+         */
+        UpdateMaintenanceModeRequest: {
+            /**
+             * Enabled
+             * @description True to freeze new dashboard sign-ins, false to allow them again.
+             */
+            enabled: boolean;
+        };
+        /**
          * UpdateScopedBudgetRequest
          * @description Request model for updating a scoped budget.
          */
         UpdateScopedBudgetRequest: {
-            /** Budget Duration Sec */
-            budget_duration_sec?: number | null;
-            /** Max Budget */
-            max_budget?: number | null;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Name */
             name?: string | null;
-            /** Reset Alignment */
-            reset_alignment?: ("calendar_day" | "calendar_week" | "calendar_month") | null;
         };
         /**
          * UpdateSearchToolRequest
@@ -7770,12 +7996,179 @@ export interface components {
              */
             workspace_id: string;
         };
+        /**
+         * WorkspaceCodeExecutionPolicyPublic
+         * @description A workspace's policy, or the unconfigured policy it has without one.
+         */
+        WorkspaceCodeExecutionPolicyPublic: {
+            /** Configured */
+            configured: boolean;
+            /** Created At */
+            created_at: string | null;
+            /** Default Purpose Hint */
+            default_purpose_hint: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Exec Timeout S */
+            exec_timeout_s: number | null;
+            /** Max Iterations */
+            max_iterations: number | null;
+            /** Sandbox Configured */
+            sandbox_configured: boolean;
+            /** Updated At */
+            updated_at: string | null;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
+        /**
+         * WorkspaceCodeExecutionPolicyUpdate
+         * @description The policy to store for a workspace, as a whole.
+         *
+         *     ``PUT`` semantics, ported from the hosted ``CodeExecutionConfigUpsert``:
+         *     what is sent is what the workspace has afterwards, so an omitted limit is
+         *     cleared rather than left as it was.
+         */
+        WorkspaceCodeExecutionPolicyUpdate: {
+            /**
+             * Default Purpose Hint
+             * @description Hint used when a request declares otari_code_execution without one of its own
+             */
+            default_purpose_hint?: string | null;
+            /**
+             * Enabled
+             * @description False refuses code execution for this workspace
+             */
+            enabled: boolean;
+            /**
+             * Exec Timeout S
+             * @description Ceiling on one execution's runtime in seconds; only ever lowers the effective limit, so at most 60
+             */
+            exec_timeout_s?: number | null;
+            /**
+             * Max Iterations
+             * @description Ceiling on tool-loop iterations; only ever lowers the effective limit, so at most 25
+             */
+            max_iterations?: number | null;
+        };
         /** WorkspaceCreate */
         WorkspaceCreate: {
             /** Description */
             description?: string | null;
             /** Name */
             name: string;
+        };
+        /**
+         * WorkspaceMcpServerCreate
+         * @description Request body for registering a server.
+         *
+         *     ``authorization_token`` is never stored as sent: it is encrypted with
+         *     ``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention
+         *     `entities.ProviderCredential` and `OrgProviderKey` already use.
+         */
+        WorkspaceMcpServerCreate: {
+            /**
+             * Allowed Tools
+             * @description Allow-list of tool names; null exposes every tool the server offers
+             */
+            allowed_tools?: string[] | null;
+            /**
+             * Authorization Token
+             * @description Bearer token for the server; requires an https URL. Encrypted at rest, never returned
+             */
+            authorization_token?: string | null;
+            /**
+             * Enabled
+             * @description Whether a request naming this server actually reaches it
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Name
+             * @description Label for the server, unique within the workspace
+             */
+            name: string;
+            /**
+             * Purpose Hint
+             * @description Hint prepended to the system message to help the model choose
+             */
+            purpose_hint?: string | null;
+            /**
+             * Url
+             * @description Streamable HTTP MCP endpoint
+             */
+            url: string;
+        };
+        /**
+         * WorkspaceMcpServerPublic
+         * @description The API-facing shape. Never carries the token, only whether one is set.
+         *
+         *     No ``last4``-style prefix either, unlike `OrgProviderKeyPublic`: a provider
+         *     key's last four digits let an operator match a stored key against the one
+         *     in their provider's console, and there is no equivalent workflow for an MCP
+         *     bearer token.
+         */
+        WorkspaceMcpServerPublic: {
+            /** Allowed Tools */
+            allowed_tools: string[] | null;
+            /** Created At */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Has Token */
+            has_token: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Purpose Hint */
+            purpose_hint: string | null;
+            /** Updated At */
+            updated_at: string;
+            /** Url */
+            url: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
+        /**
+         * WorkspaceMcpServerUpdate
+         * @description Partial update. Only the fields the caller sets are applied.
+         *
+         *     ``authorization_token`` has three states rather than two, which is what a
+         *     write-only field needs: omit it to leave the stored token alone, send
+         *     ``""`` to clear it, send a value to rotate it. An explicit ``null`` also
+         *     leaves it alone, matching the platform: a client that serializes its whole
+         *     form back, with an empty token box it never filled in, must not destroy a
+         *     token it was never shown.
+         */
+        WorkspaceMcpServerUpdate: {
+            /** Allowed Tools */
+            allowed_tools?: string[] | null;
+            /** Authorization Token */
+            authorization_token?: string | null;
+            /** Enabled */
+            enabled?: boolean;
+            /** Name */
+            name?: string;
+            /** Purpose Hint */
+            purpose_hint?: string | null;
+            /** Url */
+            url?: string;
+        };
+        /** WorkspaceMcpServersPublic */
+        WorkspaceMcpServersPublic: {
+            /** Count */
+            count: number;
+            /** Data */
+            data: components["schemas"]["WorkspaceMcpServerPublic"][];
         };
         /** WorkspaceMemberBudgetPoliciesPublic */
         WorkspaceMemberBudgetPoliciesPublic: {
@@ -7790,20 +8183,10 @@ export interface components {
          */
         WorkspaceMemberBudgetPolicyCreate: {
             /**
-             * Budget Duration Sec
-             * @description Period length in seconds; null never resets
+             * Budget Id
+             * @description The budget this workspace hands to every member
              */
-            budget_duration_sec?: number | null;
-            /**
-             * Max Budget
-             * @description Maximum USD spend per member in the period
-             */
-            max_budget?: number | null;
-            /**
-             * Name
-             * @description Admin-facing label
-             */
-            name?: string | null;
+            budget_id: string;
             /**
              * Provider Key Id
              * @description Narrow the default to one provider instance; null applies to every provider
@@ -7817,6 +8200,8 @@ export interface components {
         WorkspaceMemberBudgetPolicyPublic: {
             /** Budget Duration Sec */
             budget_duration_sec: number | null;
+            /** Budget Id */
+            budget_id: string;
             /** Created At */
             created_at: string;
             /** Id */
@@ -7827,6 +8212,8 @@ export interface components {
             name: string | null;
             /** Provider Key Id */
             provider_key_id: string | null;
+            /** Reset Alignment */
+            reset_alignment: string | null;
             /** Updated At */
             updated_at: string;
             /**
@@ -7837,19 +8224,16 @@ export interface components {
         };
         /**
          * WorkspaceMemberBudgetPolicyUpdate
-         * @description Request body for updating a default.
+         * @description Request body for pointing a default at a different budget.
          *
-         *     Not retroactive: a member already materialized from this default keeps
-         *     the value that was in effect when they were materialized. Only a member
-         *     materialized after this update sees the new one.
+         *     Members already materialized from this default keep the budget they were
+         *     given: their ceiling names it directly, and this only changes what a member
+         *     joining afterwards is handed. Editing the *budget* is the retroactive act,
+         *     and it moves everyone naming it, in this workspace and outside it.
          */
         WorkspaceMemberBudgetPolicyUpdate: {
-            /** Budget Duration Sec */
-            budget_duration_sec?: number | null;
-            /** Max Budget */
-            max_budget?: number | null;
-            /** Name */
-            name?: string | null;
+            /** Budget Id */
+            budget_id: string;
         };
         /** WorkspaceMemberPublic */
         WorkspaceMemberPublic: {
@@ -7981,6 +8365,81 @@ export interface components {
             description?: string | null;
             /** Name */
             name?: string | null;
+        };
+        /**
+         * WorkspaceWebSearchConfigPublic
+         * @description A workspace's web-search configuration, or the unconfigured one it has without a row.
+         */
+        WorkspaceWebSearchConfigPublic: {
+            /** Allowed Domains */
+            allowed_domains: string[] | null;
+            /** Blocked Domains */
+            blocked_domains: string[] | null;
+            /** Configured */
+            configured: boolean;
+            /** Created At */
+            created_at: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Max Results */
+            max_results: number | null;
+            /** Provider Options */
+            provider_options: {
+                [key: string]: unknown;
+            } | null;
+            /** Purpose Hint */
+            purpose_hint: string | null;
+            /** Updated At */
+            updated_at: string | null;
+            /** Web Search Configured */
+            web_search_configured: boolean;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
+        /**
+         * WorkspaceWebSearchConfigUpdate
+         * @description The configuration to store for a workspace, as a whole.
+         *
+         *     ``PUT`` semantics, ported from the hosted ``WorkspaceWebSearchConfigUpdate``:
+         *     what is sent is what the workspace has afterwards, so an omitted field is
+         *     cleared rather than left as it was.
+         */
+        WorkspaceWebSearchConfigUpdate: {
+            /**
+             * Allowed Domains
+             * @description Results are kept only from these domains; intersected with any list the request sends
+             */
+            allowed_domains?: string[] | null;
+            /**
+             * Blocked Domains
+             * @description Results from these domains are dropped; added to any list the request sends
+             */
+            blocked_domains?: string[] | null;
+            /**
+             * Enabled
+             * @description False refuses web search for this workspace, both the otari_web_search tool and POST /v1/search. The fields below narrow the tool only.
+             */
+            enabled: boolean;
+            /**
+             * Max Results
+             * @description Ceiling on results one search returns; only ever lowers the effective limit, so at most 20
+             */
+            max_results?: number | null;
+            /**
+             * Provider Options
+             * @description Provider-specific knobs forwarded to the search backend; a request's own keys win
+             */
+            provider_options?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Purpose Hint
+             * @description Hint used when a request declares otari_web_search without one of its own
+             */
+            purpose_hint?: string | null;
         };
         /** WorkspacesPublic */
         WorkspacesPublic: {
@@ -11703,6 +12162,59 @@ export interface operations {
             };
         };
     };
+    get_maintenance_mode_v1_settings_maintenance_mode_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceMode"];
+                };
+            };
+        };
+    };
+    update_maintenance_mode_v1_settings_maintenance_mode_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMaintenanceModeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceMode"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     rotate_master_key_v1_settings_master_key_rotate_post: {
         parameters: {
             query?: never;
@@ -12735,6 +13247,242 @@ export interface operations {
             };
         };
     };
+    get_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCodeExecutionPolicyPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceCodeExecutionPolicyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCodeExecutionPolicyPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_workspace_code_execution_policy_v1_workspaces__workspace_id__code_execution_policy_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCodeExecutionPolicyPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workspace_mcp_servers_v1_workspaces__workspace_id__mcp_servers_get: {
+        parameters: {
+            query?: {
+                /** @description Number of records to skip */
+                skip?: number;
+                /** @description Maximum number of records to return */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMcpServersPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceMcpServerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMcpServerPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers__server_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_workspace_mcp_server_v1_workspaces__workspace_id__mcp_servers__server_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceMcpServerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMcpServerPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_workspace_budget_defaults_v1_workspaces__workspace_id__member_budget_policies_get: {
         parameters: {
             query?: {
@@ -13199,6 +13947,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_web_search_config_v1_workspaces__workspace_id__web_search_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceWebSearchConfigPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_workspace_web_search_config_v1_workspaces__workspace_id__web_search_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceWebSearchConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceWebSearchConfigPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_workspace_web_search_config_v1_workspaces__workspace_id__web_search_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceWebSearchConfigPublic"];
                 };
             };
             /** @description Validation Error */

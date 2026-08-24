@@ -64,6 +64,28 @@ export type SetPasswordRequest = Schemas["SetPasswordRequest"]
 export type PasswordResponse = Schemas["PasswordResponse"]
 
 // ---------------------------------------------------------------------------
+// The public auth flows (otari#650): signup, email verification, and password
+// recovery. Every one of them answers a caller who holds neither the master key
+// nor a session, so the address or the token in the request is the whole of
+// what the gateway has to go on, and each response is deliberately the same
+// whether or not there was anything to act on.
+//
+// `terms_accepted` carries a schema default, which the generator emits as
+// required; the signup form omits it when this deployment publishes no terms,
+// so `Defaulted` puts that back.
+// ---------------------------------------------------------------------------
+export type SignupRequest = Defaulted<
+  Schemas["SignupRequest"],
+  "terms_accepted"
+>
+export type SignupResponse = Schemas["SignupResponse"]
+export type VerifyEmailResponse = Schemas["VerifyEmailResponse"]
+export type ResendVerificationResponse = Schemas["ResendVerificationResponse"]
+export type RequestPasswordResetResponse =
+  Schemas["RequestPasswordResetResponse"]
+export type ResetPasswordRequest = Schemas["ResetPasswordRequest"]
+
+// ---------------------------------------------------------------------------
 // Usage and analytics
 // ---------------------------------------------------------------------------
 export type UsageEntry = Schemas["UsageEntry"]
@@ -178,6 +200,29 @@ export type CreateBudgetRequest = Schemas["CreateBudgetRequest"]
 export type UpdateBudgetRequest = Schemas["UpdateBudgetRequest"]
 export type BudgetResetLog = Schemas["BudgetResetLogResponse"]
 
+// A ceiling names a `Budget` and holds the counters for spending it. It is not a
+// variant of a budget: a budget is the only shape that maps a cap to an amount,
+// and the two differ in what they enforce against. A budget reached through
+// `User.budget_id` is checked against that person's own spend, so N people on one
+// budget each get the full amount. A budget reached through a ceiling is checked
+// against the ceiling's counters, so everyone the scope names shares one
+// allowance. `max_budget` and the cadence travel on a ceiling's wire shape but
+// are read off the budget, never stored on it.
+//
+// `provider_key_id` is the odd name here and it is the wire's, not ours: the
+// column holds a provider *instance* name (`openai`, or a configured instance),
+// which is what `scoped_budget_service` matches a request's resolved provider
+// against. Anything picking a value for it wants `ProviderInfo["instance"]`.
+export type ScopedBudget = Schemas["ScopedBudgetResponse"]
+export type CreateScopedBudgetRequest = Schemas["CreateScopedBudgetRequest"]
+export type UpdateScopedBudgetRequest = Schemas["UpdateScopedBudgetRequest"]
+export type BudgetScopeType = CreateScopedBudgetRequest["scope_type"]
+// The cadence moved onto the budget with the limit, so it is derived from the
+// budget request now rather than from the ceiling's.
+export type BudgetResetAlignment = NonNullable<
+  CreateBudgetRequest["reset_alignment"]
+>
+
 // ---------------------------------------------------------------------------
 // Models, pricing and providers
 // ---------------------------------------------------------------------------
@@ -269,6 +314,9 @@ export type RotateMasterKeyResponse = Schemas["RotateMasterKeyResponse"]
 export type MailSettings = Schemas["MailSettings"]
 export type SendTestMailRequest = Schemas["SendTestMailRequest"]
 export type SendTestMailResponse = Schemas["SendTestMailResponse"]
+export type MaintenanceMode = Schemas["MaintenanceMode"]
+export type UpdateMaintenanceModeRequest =
+  Schemas["UpdateMaintenanceModeRequest"]
 export type ManagedTool = Schemas["ManagedTool"]
 export type ToolsResponse = Schemas["ToolsResponse"]
 export type ToolSettingField = Schemas["ToolSettingField"]
@@ -383,5 +431,18 @@ export type ActivationApiKey = Schemas["ActivationApiKeyPublic"]
 export type ActivationErrorCategory = NonNullable<
   ActivationAttempt["error_category"]
 >
+
+// The per-workspace code-execution policy over the deployment-wide sandbox; see
+// `src/gateway/services/tenancy/workspace_code_execution_policy_service.py`.
+export type WorkspaceCodeExecutionPolicy =
+  Schemas["WorkspaceCodeExecutionPolicyPublic"]
+export type UpdateWorkspaceCodeExecutionPolicyRequest =
+  Schemas["WorkspaceCodeExecutionPolicyUpdate"]
+
+// The per-workspace web-search configuration over the deployment-wide backend;
+// see `src/gateway/services/tenancy/workspace_web_search_service.py`.
+export type WorkspaceWebSearchConfig = Schemas["WorkspaceWebSearchConfigPublic"]
+export type UpdateWorkspaceWebSearchConfigRequest =
+  Schemas["WorkspaceWebSearchConfigUpdate"]
 
 export type * from "./local"

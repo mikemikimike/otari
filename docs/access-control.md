@@ -2,7 +2,7 @@
 
 Standalone Otari decides three things about every request: who is calling (the **user**), what credential they presented (the **API key**), and whether they have room to spend (the **budget**). This guide is a task-oriented tour of those three, with the management endpoints that drive them. Everything here is standalone-only; hybrid mode delegates identity and spend to otari.ai.
 
-The user, key, and budget endpoints in this guide all require the master key (some other management endpoints, such as read-only pricing lookups, also accept a regular API key; see the [API reference](api-reference.md)). Send the master key as `Otari-Key: <master-key>` or `Authorization: Bearer <master-key>`. The same actions are available in the dashboard's **Access** section; see the [Admin dashboard guide](dashboard.md).
+The user, key, and budget endpoints in this guide all require the master key (some other management endpoints, such as read-only pricing lookups, also accept a regular API key; see the [API reference](api-reference.md)). Send the master key as `Otari-Key: <master-key>` or `Authorization: Bearer <master-key>`. Most of these actions have a dashboard equivalent; see the [Admin dashboard guide](dashboard.md). Creating and deleting a user is the exception: the dashboard mints one when a member is added or a key is issued, and has no page for it, so the endpoints below are the way to do it directly.
 
 **The master key authenticates this API. It is not, for long, how you sign in to the dashboard.** It bootstraps a new deployment and stays the deployment-wide API credential, which is what every script, CI job, and `curl` example here uses. The browser sign-in moves to an email address and a password once an operator claims the deployment, and [Dashboard sessions and identity](#dashboard-sessions-and-identity) below is where that happens. Retiring a login is not retiring a credential: nothing in this guide stops working when it does.
 
@@ -72,7 +72,9 @@ Either way spend stays bound to the key's own user and the client value is forwa
 
 ## Budgets
 
-A budget is a spending cap with an optional reset period. `max_budget` is the limit **per user**, so a budget shared by several users caps each of them at that amount rather than in aggregate.
+A budget is a spending cap with an optional reset period, and the only place in Otari that maps a cap to an amount. Everything that enforces a limit names a budget rather than restating the figure, so editing one moves every place it applies.
+
+How it is enforced depends on what names it. Assigned to a user (`users.budget_id`), `max_budget` is the limit **per user**, so a budget shared by several users caps each of them at that amount rather than in aggregate. Named by a scoped ceiling ([Organizations and workspaces](#organizations-and-workspaces)), it is a single allowance everyone under that scope draws on together.
 
 ```bash
 curl -X POST http://localhost:8000/v1/budgets \
@@ -86,9 +88,11 @@ curl -X POST http://localhost:8000/v1/budgets \
 ```
 
 - `max_budget` is the per-user ceiling in your pricing currency. Otari reserves an estimated cost before each call and reconciles it after, so a request that would exceed the cap is rejected before it runs.
-- `budget_duration_sec` is the reset period in seconds (for example `86400` for daily, `604800` for weekly). Omit it for a cap that never resets. On each period boundary the user's spend rolls back to zero and a reset is recorded.
+- `budget_duration_sec` is a rolling reset period in seconds (for example `86400` for daily, `604800` for weekly), counted from the last reset. On each period boundary the user's spend rolls back to zero and a reset is recorded.
+- `reset_alignment` is the other way to say a period, snapping the window to a UTC calendar boundary: `calendar_day`, `calendar_week`, or `calendar_month`. It is the only way to express a calendar month, since 2592000 seconds is a different and slightly more generous product. Mutually exclusive with `budget_duration_sec`; sending both is refused with a 400.
+- Omit both for a cap that never resets.
 
-Assign a budget to a user by setting `budget_id` on the user (at create time or via `PATCH /v1/users/{user_id}`). Manage budgets with `GET /v1/budgets`, `GET /v1/budgets/{budget_id}`, `PATCH /v1/budgets/{budget_id}`, and `DELETE /v1/budgets/{budget_id}`. A budget's response rolls up the users assigned to it: `user_count`, `total_spend`, and `total_reserved`. `GET /v1/budgets/{budget_id}/reset-logs` returns the per-user reset history.
+Assign a budget to a user by setting `budget_id` on the user (at create time or via `PATCH /v1/users/{user_id}`); sending an explicit `null` detaches it. Manage budgets with `GET /v1/budgets`, `GET /v1/budgets/{budget_id}`, `PATCH /v1/budgets/{budget_id}`, and `DELETE /v1/budgets/{budget_id}`. A delete is refused with a 409 while a workspace hands the budget to its members or a scoped ceiling enforces it; the message names which, and where to change it. A budget's response rolls up the users assigned to it: `user_count`, `total_spend`, and `total_reserved`. `GET /v1/budgets/{budget_id}/reset-logs` returns the per-user reset history.
 
 The enforcement strategy is configurable with `OTARI_BUDGET_STRATEGY` (`for_update` row-lock, `cas` compare-and-swap, or `disabled`); see [Configuration](configuration.md).
 
@@ -124,14 +128,14 @@ Granting the `owner` role is an owner's to give. An admin manages members, works
 
 Signing in to the dashboard exchanges a credential for a session: an opaque token in an HttpOnly cookie, stored only as a SHA-256 hash, revocable server-side, expiring on `dashboard_session_ttl_hours`. Each session names the identity it was minted for, so a cookie-authenticated request resolves a user and, through that user's `active_organization_id`, the organization it is acting in. `POST /v1/auth/session` returns both ids alongside the expiry.
 
-**Which credential signs in depends on whether the deployment has been claimed.** A deployment where no identity has a password yet accepts the master key, which is what makes first boot work with nothing configured. The moment an identity has one, the master key stops being accepted at the sign-in endpoint and email and password is the login. `GET /v1/bootstrap` publishes which of the two applies right now, in `sign_in_methods`, so the sign-in page asks for the credential that will work:
+**Which credential signs in depends on whether the deployment has been claimed.** A deployment whose operator identity has no password yet accepts the master key, which is what makes first boot work with nothing configured. The moment that identity has one, the master key stops being accepted at the sign-in endpoint and email and password is the login. It is the operator's own password that decides this and nobody else's: a member who [signs up](#signup-claiming-a-roster-identity) or resets theirs claims their account, not the deployment, and an identity that arrived from a migration carrying a password has claimed nothing at all. `GET /v1/bootstrap` publishes which of the two applies right now, in `sign_in_methods`, so the sign-in page asks for the credential that will work:
 
 ```bash
 curl http://localhost:8000/v1/bootstrap        # no credential needed
 # {"deployment_type":"standalone", ..., "sign_in_methods":["master_key"]}
 ```
 
-Nothing schedules the switch and nothing expires. A deployment that never claims goes on signing in with the master key indefinitely, which is a reasonable end state for a single-operator gateway that only ever talks to itself.
+Nothing schedules the switch and nothing expires. A deployment that never claims goes on signing in with the master key indefinitely, which is a reasonable end state for a single-operator gateway that only ever talks to itself. One consequence is worth knowing, and it has two halves. While a deployment is unclaimed, the sign-in screen offers the master key and not the password form, so a member who has signed up there signs in by calling `POST /v1/auth/session` directly until the operator claims it; and if they do reach the dashboard, **Account settings** offers them the claim form rather than the change-password form, which the endpoint then refuses for the missing `current_password`. Both follow from the same thing: `sign_in_methods` describes the deployment, and the dashboard has no route yet for asking what the signed-in identity itself holds. Claiming before you add anyone avoids both.
 
 #### Claiming the deployment
 
@@ -148,7 +152,7 @@ curl -X PUT http://localhost:8000/v1/auth/password \
 - The address is stored lower-cased and matched case-insensitively at sign-in. Claiming through the master key does not deliver to it or verify it: the master key is what proves the claim, and `email_verified_at` is stamped as a consequence rather than checked. A roster member proves their own address by [signing up](#signup-claiming-a-roster-identity) instead, which does send and check a verification link.
 - The same endpoint changes a password later, and the same **Account settings** page is where the dashboard does it. From a session it needs `current_password`; sent with the master key in a header it does not, which is the recovery path (see below) and the one form of this call the dashboard cannot make, since reaching the page needs a session. Changing the address afterwards is refused rather than half-supported.
 - Every other session that identity holds is revoked, so a cookie minted under the old password does not outlive it. The caller's own session is spared when the change came from the browser, and is not when it came from the master key, since a header caller has no session to keep.
-- **Claiming is one-way.** No endpoint clears a password, so a deployment that has been claimed cannot be returned to master-key sign-in. The sign-in screen follows `sign_in_methods` and asks for the address and password from then on, and the master key still authenticates the whole management API, so the step costs you nothing you cannot reach; it is simply not reversible. See the [Admin dashboard guide](dashboard.md).
+- **Claiming is one-way.** No endpoint clears a password, so a deployment whose operator has set one cannot be returned to master-key sign-in. The sign-in screen follows `sign_in_methods` and asks for the address and password from then on, and the master key still authenticates the whole management API, so the step costs you nothing you cannot reach; it is simply not reversible. See the [Admin dashboard guide](dashboard.md).
 
 After that, sign in with the address:
 
@@ -159,6 +163,23 @@ curl -X POST http://localhost:8000/v1/auth/session \
 ```
 
 A failed sign-in answers `401 Incorrect email or password` whichever part was wrong, and takes the same time to do it, so the endpoint cannot be used to find out which addresses hold an account. A master key presented after the deployment is claimed answers `403` naming the password login, which is a different answer from a wrong master key's `401` on purpose: the credential is fine, that use of it is over.
+
+#### Freezing sign-ins for a redeploy
+
+An operator can stop the gateway issuing new dashboard sessions while it is being updated, so nobody signs in mid-migration:
+
+```bash
+curl -X PATCH http://localhost:8000/v1/settings/maintenance-mode \
+  -H "Otari-Key: $OTARI_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+`POST /v1/auth/session` then answers `503` for every credential, including the master key on a deployment still using it to sign in, and `GET /v1/bootstrap` reports `maintenance_mode: true` so the sign-in screen says what is happening rather than presenting a form that can only be refused. Three things it deliberately does not do: it does not revoke sessions already issued, so the operator who set it stays signed in; it does not touch the data plane or the rest of the management API, so API keys and completions carry on serving; and it does not exempt any identity, because it does not need to. The switch is master-key gated and reachable through the header, which never passes through the door the freeze closes, so the way back out does not depend on signing in. `PATCH` it back to `false`, or read the current state with `GET /v1/settings/maintenance-mode`.
+
+**Keep your master key to hand before you set this.** The header is what lifts the freeze from a browser holding no session, so an operator on a claimed deployment who no longer has the generated key, has signed out, and has frozen sign-ins has no route back in through the app. It is recoverable, by setting `OTARI_MASTER_KEY` and restarting, which is within reach of anyone already redeploying, but it is a restart rather than a click.
+
+It is stored rather than held in memory, so a deployment running several replicas freezes all of them from one call, and the freeze survives a restart.
 
 #### What the master key still does
 
@@ -188,6 +209,8 @@ curl -X POST http://localhost:8000/v1/auth/resend-verification \
   -d '{"email": "erin@example.com"}'
 ```
 
+The dashboard offers the whole of this without `curl`: **Added to this gateway? Claim your account** on the sign-in screen is the signup form, the verification link lands on a page that confirms the address on arrival, and **Need a new verification link?** resends. Those links are absent on a deployment that cannot send mail, since none of the three routes can work there.
+
 A verification token is single-use: presenting it again, or presenting an unknown, expired, or deactivated identity's token, answers `400` without saying which is true. Resending answers the same message whether the address is unregistered, already verified, or genuinely waiting, and only the last case actually sends anything, so the endpoint cannot be used to learn which addresses exist. All three routes share the sign-in endpoint's rate limiter (`dashboard_login_rate_limit_per_minute`) and answer `503` naming what is missing when this deployment cannot send mail (`GET /v1/bootstrap`'s `mail_ready` says so in advance).
 
 #### Password reset
@@ -204,7 +227,7 @@ curl -X POST http://localhost:8000/v1/auth/password/reset/confirm \
   -d '{"token": "<the token from the link>", "new_password": "<a new password>"}'
 ```
 
-The request answers the same message whether or not the address holds a password, for the same enumeration-safety reason resending a verification link does. The reset token expires (`password_reset_expiry_hours`, default 2) and is single-use: unlike a stateless token, it is cleared the moment it is spent, so it cannot be replayed even inside its own expiry window. It is also cleared the moment the identity's password changes through any other channel (an ordinary self-service change, an operator recovery through the master key) while it is still live, so a reset link generated and then overtaken elsewhere cannot undo that change later. Completing a reset revokes every other session the identity holds, the same as an ordinary password change. Both routes share the sign-in rate limiter and the same `503`-when-unconfigured behavior signup does.
+**Forgot your password?** on the dashboard's sign-in screen is the same pair of calls, and the reset link lands on a page that asks for the new password. The request answers the same message whether or not the address holds a password, for the same enumeration-safety reason resending a verification link does. The reset token expires (`password_reset_expiry_hours`, default 2) and is single-use: unlike a stateless token, it is cleared the moment it is spent, so it cannot be replayed even inside its own expiry window. It is also cleared the moment the identity's password changes through any other channel (an ordinary self-service change, an operator recovery through the master key) while it is still live, so a reset link generated and then overtaken elsewhere cannot undo that change later. Completing a reset revokes every other session the identity holds, the same as an ordinary password change. Both routes share the sign-in rate limiter and the same `503`-when-unconfigured behavior signup does.
 
 #### Who can sign in
 
@@ -274,6 +297,6 @@ Identities and the request plane are still two tables (`user` for tenancy, `user
 
 ## See also
 
-- [Admin dashboard](dashboard.md): the same users, keys, and budgets in the browser UI.
+- [Admin dashboard](dashboard.md): the same keys and budgets in the browser UI, with a user shown as a member of the organization.
 - [Configuration](configuration.md): `reject_user_mismatch`, `budget_strategy`, and related settings.
 - [API reference](api-reference.md): the full endpoint and schema listing.

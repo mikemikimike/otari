@@ -14,7 +14,6 @@ import { Route as SplatRouteImport } from './routes/$'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as AliasesRouteImport } from './routes/aliases'
-import { Route as BudgetDefaultsRouteImport } from './routes/budget-defaults'
 import { Route as BudgetsRouteImport } from './routes/budgets'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as KeysRouteImport } from './routes/keys'
@@ -26,11 +25,8 @@ import { Route as RoutingRouteImport } from './routes/routing'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as UsageRouteImport } from './routes/usage'
-import { Route as UsersRouteImport } from './routes/users'
 import { Route as WorkspacesRouteImport } from './routes/workspaces'
 import { Route as OrganizationIndexRouteImport } from './routes/organization.index'
-import { Route as OrganizationBillingRouteImport } from './routes/organization.billing'
-import { Route as OrganizationGatewaysRouteImport } from './routes/organization.gateways'
 import { Route as OrganizationGuardrailsRouteImport } from './routes/organization.guardrails'
 import { Route as OrganizationMembersRouteImport } from './routes/organization.members'
 import { Route as OrganizationPricingRouteImport } from './routes/organization.pricing'
@@ -63,11 +59,6 @@ const ActivityRoute = ActivityRouteImport.update({
 const AliasesRoute = AliasesRouteImport.update({
   id: '/aliases',
   path: '/aliases',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BudgetDefaultsRoute = BudgetDefaultsRouteImport.update({
-  id: '/budget-defaults',
-  path: '/budget-defaults',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BudgetsRoute = BudgetsRouteImport.update({
@@ -125,11 +116,6 @@ const UsageRoute = UsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => rootRouteImport,
 } as any)
-const UsersRoute = UsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const WorkspacesRoute = WorkspacesRouteImport.update({
   id: '/workspaces',
   path: '/workspaces',
@@ -138,16 +124,6 @@ const WorkspacesRoute = WorkspacesRouteImport.update({
 const OrganizationIndexRoute = OrganizationIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => OrganizationRoute,
-} as any)
-const OrganizationBillingRoute = OrganizationBillingRouteImport.update({
-  id: '/billing',
-  path: '/billing',
-  getParentRoute: () => OrganizationRoute,
-} as any)
-const OrganizationGatewaysRoute = OrganizationGatewaysRouteImport.update({
-  id: '/gateways',
-  path: '/gateways',
   getParentRoute: () => OrganizationRoute,
 } as any)
 const OrganizationGuardrailsRoute = OrganizationGuardrailsRouteImport.update({
@@ -198,7 +174,6 @@ export interface FileRoutesByFullPath {
   '/account': typeof AccountRoute
   '/activity': typeof ActivityRoute
   '/aliases': typeof AliasesRoute
-  '/budget-defaults': typeof BudgetDefaultsRoute
   '/budgets': typeof BudgetsRoute
   '/docs': typeof DocsRoute
   '/keys': typeof KeysRoute
@@ -210,10 +185,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/tools': typeof ToolsRouteWithChildren
   '/usage': typeof UsageRoute
-  '/users': typeof UsersRoute
   '/workspaces': typeof WorkspacesRoute
-  '/organization/billing': typeof OrganizationBillingRoute
-  '/organization/gateways': typeof OrganizationGatewaysRoute
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/pricing': typeof OrganizationPricingRoute
@@ -230,7 +202,6 @@ export interface FileRoutesByTo {
   '/account': typeof AccountRoute
   '/activity': typeof ActivityRoute
   '/aliases': typeof AliasesRoute
-  '/budget-defaults': typeof BudgetDefaultsRoute
   '/budgets': typeof BudgetsRoute
   '/docs': typeof DocsRoute
   '/keys': typeof KeysRoute
@@ -240,10 +211,7 @@ export interface FileRoutesByTo {
   '/routing': typeof RoutingRoute
   '/settings': typeof SettingsRoute
   '/usage': typeof UsageRoute
-  '/users': typeof UsersRoute
   '/workspaces': typeof WorkspacesRoute
-  '/organization/billing': typeof OrganizationBillingRoute
-  '/organization/gateways': typeof OrganizationGatewaysRoute
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/pricing': typeof OrganizationPricingRoute
@@ -261,7 +229,6 @@ export interface FileRoutesById {
   '/account': typeof AccountRoute
   '/activity': typeof ActivityRoute
   '/aliases': typeof AliasesRoute
-  '/budget-defaults': typeof BudgetDefaultsRoute
   '/budgets': typeof BudgetsRoute
   '/docs': typeof DocsRoute
   '/keys': typeof KeysRoute
@@ -273,10 +240,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/tools': typeof ToolsRouteWithChildren
   '/usage': typeof UsageRoute
-  '/users': typeof UsersRoute
   '/workspaces': typeof WorkspacesRoute
-  '/organization/billing': typeof OrganizationBillingRoute
-  '/organization/gateways': typeof OrganizationGatewaysRoute
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
   '/organization/pricing': typeof OrganizationPricingRoute
@@ -295,7 +259,6 @@ export interface FileRouteTypes {
     | '/account'
     | '/activity'
     | '/aliases'
-    | '/budget-defaults'
     | '/budgets'
     | '/docs'
     | '/keys'
@@ -307,10 +270,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/tools'
     | '/usage'
-    | '/users'
     | '/workspaces'
-    | '/organization/billing'
-    | '/organization/gateways'
     | '/organization/guardrails'
     | '/organization/members'
     | '/organization/pricing'
@@ -327,7 +287,6 @@ export interface FileRouteTypes {
     | '/account'
     | '/activity'
     | '/aliases'
-    | '/budget-defaults'
     | '/budgets'
     | '/docs'
     | '/keys'
@@ -337,10 +296,7 @@ export interface FileRouteTypes {
     | '/routing'
     | '/settings'
     | '/usage'
-    | '/users'
     | '/workspaces'
-    | '/organization/billing'
-    | '/organization/gateways'
     | '/organization/guardrails'
     | '/organization/members'
     | '/organization/pricing'
@@ -357,7 +313,6 @@ export interface FileRouteTypes {
     | '/account'
     | '/activity'
     | '/aliases'
-    | '/budget-defaults'
     | '/budgets'
     | '/docs'
     | '/keys'
@@ -369,10 +324,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/tools'
     | '/usage'
-    | '/users'
     | '/workspaces'
-    | '/organization/billing'
-    | '/organization/gateways'
     | '/organization/guardrails'
     | '/organization/members'
     | '/organization/pricing'
@@ -390,7 +342,6 @@ export interface RootRouteChildren {
   AccountRoute: typeof AccountRoute
   ActivityRoute: typeof ActivityRoute
   AliasesRoute: typeof AliasesRoute
-  BudgetDefaultsRoute: typeof BudgetDefaultsRoute
   BudgetsRoute: typeof BudgetsRoute
   DocsRoute: typeof DocsRoute
   KeysRoute: typeof KeysRoute
@@ -402,7 +353,6 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   ToolsRoute: typeof ToolsRouteWithChildren
   UsageRoute: typeof UsageRoute
-  UsersRoute: typeof UsersRoute
   WorkspacesRoute: typeof WorkspacesRoute
 }
 
@@ -441,13 +391,6 @@ declare module '@tanstack/react-router' {
       path: '/aliases'
       fullPath: '/aliases'
       preLoaderRoute: typeof AliasesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/budget-defaults': {
-      id: '/budget-defaults'
-      path: '/budget-defaults'
-      fullPath: '/budget-defaults'
-      preLoaderRoute: typeof BudgetDefaultsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/budgets': {
@@ -527,13 +470,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UsageRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/users': {
-      id: '/users'
-      path: '/users'
-      fullPath: '/users'
-      preLoaderRoute: typeof UsersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/workspaces': {
       id: '/workspaces'
       path: '/workspaces'
@@ -546,20 +482,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/organization/'
       preLoaderRoute: typeof OrganizationIndexRouteImport
-      parentRoute: typeof OrganizationRoute
-    }
-    '/organization/billing': {
-      id: '/organization/billing'
-      path: '/billing'
-      fullPath: '/organization/billing'
-      preLoaderRoute: typeof OrganizationBillingRouteImport
-      parentRoute: typeof OrganizationRoute
-    }
-    '/organization/gateways': {
-      id: '/organization/gateways'
-      path: '/gateways'
-      fullPath: '/organization/gateways'
-      preLoaderRoute: typeof OrganizationGatewaysRouteImport
       parentRoute: typeof OrganizationRoute
     }
     '/organization/guardrails': {
@@ -622,8 +544,6 @@ declare module '@tanstack/react-router' {
 }
 
 interface OrganizationRouteChildren {
-  OrganizationBillingRoute: typeof OrganizationBillingRoute
-  OrganizationGatewaysRoute: typeof OrganizationGatewaysRoute
   OrganizationGuardrailsRoute: typeof OrganizationGuardrailsRoute
   OrganizationMembersRoute: typeof OrganizationMembersRoute
   OrganizationPricingRoute: typeof OrganizationPricingRoute
@@ -632,8 +552,6 @@ interface OrganizationRouteChildren {
 }
 
 const OrganizationRouteChildren: OrganizationRouteChildren = {
-  OrganizationBillingRoute: OrganizationBillingRoute,
-  OrganizationGatewaysRoute: OrganizationGatewaysRoute,
   OrganizationGuardrailsRoute: OrganizationGuardrailsRoute,
   OrganizationMembersRoute: OrganizationMembersRoute,
   OrganizationPricingRoute: OrganizationPricingRoute,
@@ -667,7 +585,6 @@ const rootRouteChildren: RootRouteChildren = {
   AccountRoute: AccountRoute,
   ActivityRoute: ActivityRoute,
   AliasesRoute: AliasesRoute,
-  BudgetDefaultsRoute: BudgetDefaultsRoute,
   BudgetsRoute: BudgetsRoute,
   DocsRoute: DocsRoute,
   KeysRoute: KeysRoute,
@@ -679,7 +596,6 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   ToolsRoute: ToolsRouteWithChildren,
   UsageRoute: UsageRoute,
-  UsersRoute: UsersRoute,
   WorkspacesRoute: WorkspacesRoute,
 }
 export const routeTree = rootRouteImport

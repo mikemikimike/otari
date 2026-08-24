@@ -2,7 +2,7 @@
 
 Otari ships with a web admin dashboard for operators. It browses the model
 catalog, sets model pricing, manages routing policies, adds and edits provider API
-keys, manages users, keys, and budgets, and toggles runtime settings, all
+keys, manages members, keys, and budgets, and toggles runtime settings, all
 against the local management API.
 
 The management pages are a **standalone-mode** feature. In standalone mode Otari
@@ -114,11 +114,13 @@ the logs.
 
 ### 5. (Optional) Claim the deployment with an email and a password
 
-The master key signs you in because nobody here has a password yet. Giving the
-operator identity an address and a password makes that pair the sign-in from then
-on, which is what you want as soon as more than one person needs the dashboard,
-or as soon as you would rather not paste a deployment-wide credential into a
-browser.
+The master key signs you in because the operator identity has no password yet.
+Giving it an address and a password makes that pair the sign-in from then on,
+which is what you want as soon as more than one person needs the dashboard, or
+as soon as you would rather not paste a deployment-wide credential into a
+browser. Do it before you add anyone: until you claim, the sign-in screen offers
+the master key rather than the password form, so a member who has signed up
+cannot reach the dashboard from it.
 
 In the dashboard, open the account control at the foot of the sidebar and select
 **Account settings**. While the deployment is unclaimed that page asks for an
@@ -154,10 +156,13 @@ Three more things to know before you do it:
 - **It signs out every browser holding a session for that identity**, including
   the one you claimed from if you claimed with `curl`.
 
-Password reset by email, signup, and OAuth and passkey sign-in are the rest of
-this track and are not here yet, so today only the operator identity can hold a
-password. See [Access control](access-control.md#dashboard-sessions-and-identity)
-for the full picture.
+Signup and password reset by email have since landed, so a member an admin adds
+by address can set a password of their own; OAuth and passkey sign-in are the
+rest of this track and are not here yet. Setting one claims that member's
+account and not the deployment, so it does not retire master-key sign-in: only
+the operator identity's own password does that. See
+[Access control](access-control.md#dashboard-sessions-and-identity) for the full
+picture.
 
 ### 6. Add a provider
 
@@ -200,12 +205,13 @@ gateway with an Otari API key (or the master key) and a model in
 [The setup guide](#the-setup-guide) for what it records and how to turn it
 off.
 
-### 9. (Optional) Set up keys, users, and budgets
+### 9. (Optional) Set up keys, people, and budgets
 
 For multi-user or multi-app deployments, hand out scoped API keys from
-**Access** on the workspace rail, then define users and attach budgets on the
-organization rail, so spend is enforced before each call. These are optional: a
-single-operator setup can run on the master key alone.
+**Access** on the workspace rail, then define budgets on the organization rail
+and attach them to people or to a whole workspace, so spend is enforced before
+each call. These are optional: a single-operator setup can run on the master key
+alone.
 
 ## Page-by-page reference
 
@@ -218,7 +224,7 @@ the switcher's own popover says which is which.
 
 The **organization rail** holds what belongs to the tenant rather than to one
 workspace. It is reached from the **Organization** entry at the foot of the
-workspace rail, and left by the link at its top. Users, budgets, and settings
+workspace rail, and left by the link at its top. Members, budgets, and settings
 live there.
 
 At the very bottom sits the account control, which holds **Account settings**
@@ -482,9 +488,11 @@ hand.
   A workspace's members are always a subset of the organization's, so someone
   joins the organization first, on the organization rail.
 
-Users and budgets moved to the organization rail; see below. For how users,
-keys, and budgets fit together and the management endpoints behind these pages,
-see [Access control](access-control.md).
+Budgets moved to the organization rail; see below. For how people, keys, and
+budgets fit together and the management endpoints behind these pages, see
+[Access control](access-control.md). The API still calls a person a `user`,
+which is the field name a caller sends and the one those endpoints use; the
+dashboard shows that person as a member of the organization.
 
 ### Tools
 
@@ -536,18 +544,40 @@ every later request resolves that same operator. Giving that operator an email
 address and a password is what turns it into a sign-in rather than a label, and
 what retires the master key as the dashboard login (step 5 of the walkthrough
 above). Members added after that hold a role and can be placed in workspaces, but
-cannot sign in from here yet: nothing here sets a password for someone else,
-and the dashboard has no signup or reset page of its own. The API underneath
-already supports both (`POST /v1/auth/signup`, `POST /v1/auth/password/reset`;
-see [Access control](access-control.md#signup-claiming-a-roster-identity)), so
-a member can claim their own address today without this UI; the dashboard
-pages that would let them do it from here are a fast follow. The address they
-are added by is the handle signup matches them on.
+nothing here sets a password for someone else: a member claims their own
+address from the sign-in screen instead, through **Added to this gateway?
+Claim your account**, and confirms it by following the emailed link. The
+address they are added by is the handle that claims it. **Forgot your
+password?** on the same screen mails a reset link. Both need this deployment
+to be able to send mail, and with none configured the links are absent and
+neither flow has a fallback: a member cannot claim an address or recover a
+password on a gateway that cannot mail them a link. The master-key recovery in
+[Access control](access-control.md#dashboard-sessions-and-identity) is not that
+fallback, because `PUT /v1/auth/password` always acts on the caller's own
+identity: it is how the operator gets back in, and it sets nobody else's
+password. Configure mail before you expect members to sign in.
 
 ### People & access
 
-- **Workspaces**: create, rename, and delete workspaces, and manage each
-  roster. The last workspace cannot be deleted.
+- **Workspaces**: create, rename, and delete workspaces. The last workspace
+  cannot be deleted. Rosters are not managed here: a workspace's members are
+  **Members** on the workspace rail, for whichever workspace the switcher has
+  selected, and the organization's are **Members & roles**. Two roster pages,
+  one per scope, and each picks the roles for its own.
+
+  The create and edit forms carry a **Default member budget**, and the list has
+  a column naming it: pick a budget and every member of that workspace is held
+  to it, each with an allowance of their own rather than a shared pool. Someone
+  in two workspaces therefore holds two, one per workspace. A budget is optional
+  here and everywhere, and a key can be marked exempt from budget enforcement
+  entirely, so neither a workspace default nor a person's own budget is a
+  guarantee that every request is capped.
+
+  Changing the default applies to members who join afterwards; members already
+  there keep the budget they were given. Editing that *budget* is the retroactive
+  act, and it moves everyone held to it. The edit form also manages defaults
+  narrowed to one provider, which apply on that provider instead of the one
+  above.
 - **Members & roles**: who belongs to the organization, their role
   (owner, admin, member, viewer), and their status. Adding someone directly
   takes an email address and optionally the workspaces to put them in straight
@@ -557,15 +587,44 @@ are added by is the handle signup matches them on.
   send); with none configured, the invite is still created and the dashboard
   hands you the link to share yourself. A pending invitation can be revoked
   before it is accepted.
-- **Users**: the principals that keys and budgets attach to, including the
-  default model access for a user's keys. Distinct from members: a member is a
-  person who signs in, a user is what spend is attributed to, and the two merge
-  once the request plane is re-parented onto tenancy.
+
+  The roster also carries what a person may spend and what their keys may call.
+  **Model access** is the default a key issued to them inherits, which that key
+  can narrow but never exceed; **Workspaces** names the ones they are in and the
+  budget, if any, they hold in each; **Spend** is what they have spent, plus
+  anything held in flight by a request whose cost is not settled yet; and
+  **Block** stops their keys making requests without removing them from the
+  organization or touching their history.
+
+  All of that lives on a gateway identity the member is linked to, and the link
+  is optional: a member added by address before any key was issued to them has
+  none yet, and one whose identity was deleted has none any more. Those rows show
+  a role and a status, empty access and spend cells rather than zeros, and cannot
+  own a key until an identity exists for them.
+
+  **Edit** opens all of it at once: model access, which workspaces they are in
+  and at what role, and the budget they hold in each. A budget is picked, never
+  an amount: what a cap is worth and how often it resets are properties of the
+  budget, so editing one moves everyone held to it, and giving one person a
+  different limit means giving them a different budget. Those are three tables
+  underneath, so saving is several writes, and they are ordered: a workspace
+  budget is attached to the membership, so joining a workspace happens before the
+  budget for it can be set. Adding someone to a workspace that has a default
+  member budget gives them that budget unless another is chosen.
 
 ### Cost & billing
 
-- **Spend & budgets**: spending limits callers are held to, with per-period
-  resets.
+- **Spend & budgets**: the only page that says what a limit is worth. A budget
+  is an amount and a reset period, and everything that enforces one names it
+  rather than restating the figure, so editing a budget moves every place it
+  applies.
+
+  How it is enforced depends on what it is attached to. Assigned to people from
+  this page, everyone on it is held to the full amount separately, so five people
+  on one budget hold five allowances. Attached to a workspace or to one person's
+  membership of one, it is a single allowance everyone under that scope draws on
+  together. **Default for** names any workspace that hands this budget to its
+  members, which is set on the workspace rather than here.
 - **Model pricing**: what the gateway meters a request at, which is one rate per
   model for the whole deployment. The page opens with what an *unpriced* model
   costs, because that decides what the table under it means: with default pricing
@@ -599,6 +658,17 @@ are added by is the handle signup matches them on.
   ready to log. Mail is optional, so a gateway with none configured says which
   settings would turn it on (see [Configuration](configuration.md#mail)) and
   disables the test send rather than offering one that would fail.
+  **Maintenance mode**, below it, freezes new dashboard sign-ins so you can
+  redeploy without anyone starting a session mid-migration. It is deliberately
+  narrow: sessions already open keep working, so it never signs you out of the
+  tab you flipped it in, and it does not touch the API, so keys and completions
+  carry on serving. The switch is stored rather than held in memory, so one
+  toggle freezes every replica at once and the freeze survives a restart. The
+  way back out does not depend on signing in: the master key still authenticates
+  the management API through the header, so you can turn it off from a fresh
+  browser even while sign-ins are frozen. Keep that key to hand before you set
+  this, because it is what lifts the freeze once your own session is gone;
+  without it the recovery is setting `OTARI_MASTER_KEY` and restarting.
 
 ## Install it on your phone
 

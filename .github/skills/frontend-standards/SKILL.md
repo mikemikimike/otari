@@ -8,7 +8,10 @@ description: Guidelines for the otari admin dashboard (`web/`), React 19 + TypeS
 `web/` is the standalone admin dashboard: a React SPA that talks to the gateway's management
 API with the master key. It is an operator tool, not a general-purpose app; keep its footprint
 small and its conventions consistent with what is already there. There is no analytics and no
-marketing surface here; do not add either to match some other repo.
+marketing surface here; do not add either to match some other repo. `src/shared/telemetry/`
+is not a counterexample: it is a no-op seam an overlay build replaces, it declares no vendor
+dependency, and the base tracker records nothing. Wiring a call site to it is fine; giving it
+an implementation here is not.
 
 Stack: React 19 (with the React Compiler), TypeScript (`strict`), HeroUI v3 (`@heroui/react`),
 Tailwind CSS v4, TanStack Query, TanStack Router (file-based, `web/src/routes/`), Vite,
@@ -75,8 +78,8 @@ can link Vite's esbuild binary at all.
   that knows which deployment served the page. Mind the vocabulary: a *surface* is the
   deployment axis, a *capability* is the entitlement axis.
 - Declare a new **rail** destination in the nav registry (`web/src/app/nav/registry.ts`), never
-  as a hand-written link, with whichever of the three gates it needs (`surface`, `capability`,
-  `flag`). `EntitlementGate` is the component form for wrapping a page. See
+  as a hand-written link, with whichever of the two gates it needs (`surface`, `capability`).
+  `EntitlementGate` is the component form for wrapping a page. See
   [web/AGENTS.md](../../../web/AGENTS.md) for how the gates compose and where a capability
   the base build ships has to be declared. A route the *chrome* reaches is the exception and
   is a hand-written `Link` on purpose: `/docs` from the top bar and the account menu, and

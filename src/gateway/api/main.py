@@ -20,6 +20,7 @@ from gateway.api.routes import (
     invitations,
     keys,
     mail,
+    maintenance_mode,
     messages,
     models,
     moderations,
@@ -42,7 +43,10 @@ from gateway.api.routes import (
     usage,
     users,
     workspace_activation,
+    workspace_code_execution_policy,
+    workspace_mcp_servers,
     workspace_member_budget_policies,
+    workspace_web_search,
     workspaces,
 )
 from gateway.core.config import GatewayConfig
@@ -86,6 +90,9 @@ def register_routers(app: FastAPI, config: GatewayConfig) -> None:
     app.include_router(invitations.router)
     app.include_router(workspace_member_budget_policies.router)
     app.include_router(workspace_activation.router)
+    app.include_router(workspace_mcp_servers.router)
+    app.include_router(workspace_code_execution_policy.router)
+    app.include_router(workspace_web_search.router)
     app.include_router(org_provider_keys.org_router)
     app.include_router(org_provider_keys.workspace_router)
     app.include_router(budgets.router)
@@ -99,6 +106,7 @@ def register_routers(app: FastAPI, config: GatewayConfig) -> None:
     app.include_router(otlp.router)
     app.include_router(settings.router)
     app.include_router(mail.router)
+    app.include_router(maintenance_mode.router)
     app.include_router(tool_settings.router)
     app.include_router(search_tools.router)
     app.include_router(tools.router)
