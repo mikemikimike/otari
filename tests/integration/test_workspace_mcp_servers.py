@@ -94,6 +94,11 @@ def _secret_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("OTARI_SECRET_KEY", generate_secret_key())
     yield
 
+# The billed identity's stored id, which a request context carries alongside
+# the handle since otari-ai#1727.
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-0000000000dd")
+
+
 
 def _create(**overrides: object) -> WorkspaceMcpServerCreate:
     fields: dict[str, object] = {"name": "github", "url": PUBLIC_URL}
@@ -583,6 +588,7 @@ def _request_context(
         user_token=None,
         api_key_id="key-1",
         user_id="user-1",
+        identity_id=_IDENTITY,
         rate_limit_info=None,
         reservation=None,
         started_at=time.monotonic(),

@@ -114,6 +114,28 @@ async def default_workspace_id(db: AsyncSession) -> uuid.UUID:
     return resolved
 
 
+async def default_organization_id(db: AsyncSession) -> uuid.UUID:
+    """The organization a deployment-wide identity belongs to.
+
+    ``user.active_organization_id`` is NOT NULL, so minting a request-plane
+    identity (``POST /v1/users``, the shared ``default`` owner a bare
+    ``POST /v1/keys`` falls back to) needs a scope the same way a key needs a
+    workspace. It is the default workspace's organization, which is what makes a
+    master-key-created user land in the same place as a master-key-created key
+    rather than in an organization of its own.
+
+    Resolved through :func:`default_workspace_id` rather than by slug so the
+    fallbacks it already carries (an operator who renamed the default, a schema
+    built by ``create_all``) apply here too and the two cannot disagree.
+    """
+    workspace_id = await default_workspace_id(db)
+    organization_id = await organization_for_workspace_id(db, workspace_id)
+    if organization_id is None:  # pragma: no cover - the workspace was just resolved or created
+        msg = "The default workspace names no organization"
+        raise RuntimeError(msg)
+    return organization_id
+
+
 async def _create_default_workspace(db: AsyncSession) -> uuid.UUID:
     """Create the default organization and workspace, and return the workspace id.
 
@@ -225,6 +247,7 @@ async def organization_for_key_id(db: AsyncSession, api_key_id: str | None) -> u
 
 
 __all__ = [
+    "default_organization_id",
     "default_workspace_id",
     "lookup_default_workspace_id",
     "organization_for_key_id",

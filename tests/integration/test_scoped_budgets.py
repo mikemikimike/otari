@@ -18,8 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from gateway.models.entities import APIKey, Budget, ScopedBudget, User
-from gateway.models.tenancy import Organization, OrganizationMember, Workspace, WorkspaceMember
+from gateway.models.entities import APIKey, Budget, ScopedBudget
+from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.tenancy import User as TenancyUser
 from gateway.services.budget_service import (
     ReservationHandle,

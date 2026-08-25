@@ -10,7 +10,8 @@ from any_llm.types.completion import ChatCompletion, ChatCompletionMessage, Choi
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from gateway.models.entities import UsageLog, User
+from gateway.models.entities import UsageLog
+from gateway.models.tenancy import User
 
 from .conftest import MODEL_NAME
 

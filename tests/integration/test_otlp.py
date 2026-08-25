@@ -17,7 +17,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from gateway.models.entities import UsageLog, User
+from gateway.models.entities import UsageLog
+from gateway.models.tenancy import User
 
 
 def _usd(tokens: int, rate_per_million: str) -> Decimal:

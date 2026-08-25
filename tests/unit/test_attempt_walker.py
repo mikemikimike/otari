@@ -6,6 +6,7 @@ response. The tests pin that boundary, ordering, and exhausted-plan status.
 """
 
 import asyncio
+import uuid
 from typing import Any, Literal, cast
 
 import httpx
@@ -23,6 +24,11 @@ from gateway.api.routes._attempts import (
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
 from gateway.services.sandbox_backend import SandboxNotReachableError
 from gateway.types.attempt import Attempt
+
+# The billed identity's stored id, which a request context carries alongside
+# the handle since otari-ai#1727.
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-0000000000dd")
+
 
 
 def _http_error(status: int) -> httpx.HTTPStatusError:
@@ -391,6 +397,7 @@ def _request_context(plan: Any) -> Any:
         user_token=None,
         api_key_id=None,
         user_id=None,
+        identity_id=_IDENTITY,
         rate_limit_info=None,
         reservation=None,
         started_at=time.monotonic(),

@@ -34,7 +34,7 @@ async def normalize_request_messages(
     model: str,
     db: AsyncSession | None,
     raw_request: Request,
-    user_id: str | None,
+    user_id: uuid.UUID | None,
     instance: str | None = None,
     workspace_id: uuid.UUID | None = None,
 ) -> tuple[list[dict[str, Any]], NormalizationStats]:

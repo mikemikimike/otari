@@ -4,7 +4,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
@@ -12,11 +12,11 @@ from sqlmodel import col
 from gateway.api.deps import get_config, get_db, verify_master_key
 from gateway.auth.models import generate_api_key, hash_key, key_prefix
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import APIKey, User
-from gateway.models.tenancy import Workspace
-from gateway.repositories.users_repository import get_or_create_default_user
+from gateway.models.entities import APIKey
+from gateway.models.tenancy import User, Workspace
+from gateway.repositories.users_repository import external_id_for, get_or_create_default_user
 from gateway.services.model_access import is_allowlist_subset, validate_allowed_models
-from gateway.services.workspace_scope import default_workspace_id
+from gateway.services.workspace_scope import default_organization_id, default_workspace_id
 
 # A key inherits its user's default allow-list and may narrow it, never broaden
 # it, so a key list that is not a subset of the user's is rejected on write.
@@ -26,6 +26,17 @@ _KEY_EXCEEDS_USER_DETAIL = (
 )
 
 router = APIRouter(prefix="/v1/keys", tags=["keys"])
+
+
+def _keys_with_owner() -> "Select[tuple[APIKey, str]]":
+    """Key rows paired with their owner's handle.
+
+    An outer join rather than a lookup per row: ``api_keys.user_id`` stores
+    ``user.id`` and the wire carries ``user.external_id``, so a listing would
+    otherwise be one query per key. Outer, not inner, because the column is
+    nullable and a key with no owner still lists.
+    """
+    return select(APIKey, col(User.external_id)).outerjoin(User, col(User.id) == APIKey.user_id)
 
 
 class CreateKeyRequest(BaseModel):
@@ -109,13 +120,20 @@ class KeyInfo(BaseModel):
     metadata: dict[str, Any]
 
     @classmethod
-    def from_model(cls, key: APIKey) -> "KeyInfo":
+    def from_model(cls, key: APIKey, owner: str | None) -> "KeyInfo":
+        """Render a key row. ``owner`` is the handle ``key.user_id`` resolves to.
+
+        Passed in rather than read off the row: the column stores ``user.id``
+        since otari-ai#1727, while the wire has always carried the
+        operator-defined handle, so every caller joins the two rather than
+        letting a listing fall into a lookup per row.
+        """
         return cls(
             id=str(key.id),
             workspace_id=key.workspace_id,
             key_prefix=str(key.key_prefix) if key.key_prefix else None,
             key_name=str(key.key_name) if key.key_name else None,
-            user_id=str(key.user_id) if key.user_id else None,
+            user_id=owner,
             created_at=key.created_at.isoformat(),
             last_used_at=key.last_used_at.isoformat() if key.last_used_at else None,
             expires_at=key.expires_at.isoformat() if key.expires_at else None,
@@ -177,26 +195,32 @@ async def create_key(
     key_id = uuid.uuid4()
 
     if request.user_id:
-        result = await db.execute(select(User).where(User.user_id == request.user_id))
+        result = await db.execute(select(User).where(col(User.external_id) == request.user_id))
         user = result.scalar_one_or_none()
         if not user:
             user = User(
-                user_id=request.user_id,
+                external_id=request.user_id,
                 alias=f"User {request.user_id}",
+                # A handle nobody has claimed yet belongs to the deployment's
+                # default organization, which is the scope a master-key write
+                # lands in everywhere else in this route.
+                active_organization_id=await default_organization_id(db),
             )
             db.add(user)
+            await db.flush()
         elif user.deleted_at is not None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User '{request.user_id}' has been deleted. Recreate via POST /v1/users first.",
             )
-        user_id = request.user_id
+        owner = request.user_id
     else:
         # No owner given: attach to the shared "default" user rather than minting a
         # throwaway per-key user, so the key still has a real, visible, budgetable
         # owner and nothing is untracked.
-        user = await get_or_create_default_user(db)
-        user_id = user.user_id
+        user = await get_or_create_default_user(db, organization_id=await default_organization_id(db))
+        await db.flush()
+        owner = user.external_id
 
     # A key must not grant more than its user's default (a freshly created user
     # has no default, so this only bites when attaching to a restricted user).
@@ -223,7 +247,7 @@ async def create_key(
         key_hash=key_hash,
         key_prefix=key_prefix(api_key),
         key_name=request.key_name,
-        user_id=user_id,
+        user_id=user.id,
         expires_at=request.expires_at,
         allowed_models=allowed_models,
         exclude_from_budget=request.exclude_from_budget,
@@ -243,7 +267,7 @@ async def create_key(
         ) from None
     await db.refresh(db_key)
 
-    key_info = KeyInfo.from_model(db_key)
+    key_info = KeyInfo.from_model(db_key, owner)
     return CreateKeyResponse(
         **key_info.model_dump(exclude={"last_used_at"}),
         key=api_key,
@@ -262,13 +286,12 @@ async def list_keys(
     Requires master key authentication. An unset ``workspace_id`` lists every key
     on the deployment, which keeps the pre-workspace view working unchanged.
     """
-    statement = select(APIKey)
+    statement = _keys_with_owner()
     if workspace_id is not None:
         statement = statement.where(APIKey.workspace_id == workspace_id)
     result = await db.execute(statement.offset(skip).limit(limit))
-    keys = result.scalars().all()
 
-    return [KeyInfo.from_model(key) for key in keys]
+    return [KeyInfo.from_model(key, owner) for key, owner in result.all()]
 
 
 @router.get("/{key_id}", dependencies=[Depends(verify_master_key)])
@@ -280,16 +303,16 @@ async def get_key(
 
     Requires master key authentication.
     """
-    result = await db.execute(select(APIKey).where(APIKey.id == key_id))
-    key = result.scalar_one_or_none()
+    result = await db.execute(_keys_with_owner().where(APIKey.id == key_id))
+    row = result.one_or_none()
 
-    if not key:
+    if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"API key with id '{key_id}' not found",
         )
 
-    return KeyInfo.from_model(key)
+    return KeyInfo.from_model(*row)
 
 
 @router.patch("/{key_id}", dependencies=[Depends(verify_master_key)])
@@ -334,7 +357,7 @@ async def update_key(
         # Enforce narrow-only against the key's user default (see create_key).
         if key.user_id is not None:
             user_default = (
-                await db.execute(select(User.allowed_models).where(User.user_id == key.user_id))
+                await db.execute(select(col(User.allowed_models)).where(col(User.id) == key.user_id))
             ).scalar_one_or_none()
             if not is_allowlist_subset(new_allowed, user_default):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_KEY_EXCEEDS_USER_DETAIL)
@@ -352,7 +375,7 @@ async def update_key(
         ) from None
     await db.refresh(key)
 
-    return KeyInfo.from_model(key)
+    return KeyInfo.from_model(key, await external_id_for(db, key.user_id))
 
 
 @router.post("/{key_id}/rotate", dependencies=[Depends(verify_master_key)])
@@ -393,7 +416,7 @@ async def rotate_key(
         ) from None
     await db.refresh(key)
 
-    key_info = KeyInfo.from_model(key)
+    key_info = KeyInfo.from_model(key, await external_id_for(db, key.user_id))
     return CreateKeyResponse(
         **key_info.model_dump(exclude={"last_used_at"}),
         key=new_api_key,

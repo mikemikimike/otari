@@ -26,10 +26,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.core.metered_pricing import BillableUsage, ChargeLine, billable_usage, price_billable_usage
 from gateway.log_config import logger
-from gateway.models.entities import APIKey, ModelPricing, UsageLog, User
+from gateway.models.entities import APIKey, ModelPricing, UsageLog
+from gateway.models.tenancy import User
+from gateway.repositories.users_repository import external_id_for
 from gateway.services.pricing_service import (
     OverridePeriod,
     default_model_pricing,
@@ -349,7 +352,7 @@ def _build_usage(event: ExternalUsageEvent) -> BillableUsage:
 
 def _build_row(
     source: str,
-    user_id: str,
+    user_id: uuid.UUID,
     event: ExternalUsageEvent,
     pricing: ModelPricing | None,
     api_key_id: str | None,
@@ -483,7 +486,9 @@ async def ingest_external_events(
     # key's own user, never to the one the request named.
     key_override = api_key.reject_user_mismatch if api_key is not None else None
     reject_mismatch = reject_user_mismatch if key_override is None else key_override
-    key_user = str(api_key.user_id) if api_key and api_key.user_id else None
+    # The handle, because that is what a caller names in ``user_id`` and what
+    # the mismatch message has to quote back (otari-ai#1727).
+    key_user = await external_id_for(db, api_key.user_id) if api_key is not None else None
     api_key_id = api_key.id if api_key else None
     seen_in_batch: set[str] = set()
     # The key names the workspace; an imported batch under the master key is a
@@ -497,16 +502,20 @@ async def ingest_external_events(
     # attribution targets are the batch default, any per-event override, and the key's
     # own user; pricing is loaded for every distinct (provider, model) at once.
     candidate_users = sorted(u for u in ({request.user_id, key_user} | {e.user_id for e in request.events}) if u)
-    active_users: set[str] = set()
+    # Handle -> stored id, resolved in the same pass that decides whether the
+    # handle names a live identity: the row needs the id and the rejection
+    # message needs the handle.
+    active_users: dict[str, uuid.UUID] = {}
     # Chunked like the event-id and pricing lookups: a full batch with per-event
     # user_ids can carry more candidates than SQLite's bind-variable limit.
     for start in range(0, len(candidate_users), _IN_CHUNK):
         chunk = candidate_users[start : start + _IN_CHUNK]
-        active_users.update(
-            (
-                await db.execute(select(User.user_id).where(User.user_id.in_(chunk), User.deleted_at.is_(None)))
-            ).scalars().all()
+        rows_chunk = await db.execute(
+            select(col(User.external_id), col(User.id)).where(
+                col(User.external_id).in_(chunk), col(User.deleted_at).is_(None)
+            )
         )
+        active_users.update({handle: identity_id for handle, identity_id in rows_chunk.all()})
     # The organization comes off the workspace the key named, never off the
     # request: the organization decides what an event costs, so taking it from
     # something the importer controls would let one import at another
@@ -546,7 +555,9 @@ async def ingest_external_events(
         # there is no budget to protect here. A model with no configured price simply
         # records cost=null (the row still lands); add pricing later to see the cost.
         pricing = _resolve_pricing(pricing_index, event.provider, event.model, event.timestamp)
-        rows.append(_build_row(request.source, target_user, event, pricing, api_key_id, usage_workspace_id))
+        rows.append(
+            _build_row(request.source, active_users[target_user], event, pricing, api_key_id, usage_workspace_id)
+        )
 
     # Drop events already imported in a prior batch before inserting.
     if rows:

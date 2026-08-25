@@ -344,7 +344,14 @@ def test_a_first_sign_in_provisions_the_identity_it_binds_to(tmp_path: Path) -> 
     with TestClient(create_app(config)) as client:
         engine = create_engine(config.database_url)
         with engine.connect() as connection:
-            assert connection.execute(text('SELECT COUNT(*) FROM "user"')).scalar_one() == 0
+            # Excluding the shared ``default`` request-plane owner, which the
+            # bootstrap key mints on first boot and which has been an identity
+            # row since otari-ai#1727. It is nobody's login and no
+            # organization's member; the identity provisioning stages is.
+            no_tenancy_identity = text(
+                'SELECT COUNT(*) FROM "user" WHERE external_id <> :default_owner'
+            )
+            assert connection.execute(no_tenancy_identity, {"default_owner": "default"}).scalar_one() == 0
 
         signed_in = client.post("/v1/auth/session", json={"master_key": MASTER_KEY})
         assert signed_in.status_code == 200, signed_in.text

@@ -315,7 +315,7 @@ async def chat_completions(
         )
 
     async def _normalize(
-        user_id: str,
+        user_id: uuid.UUID | None,
         provider: LLMProvider | None,
         model: str,
         instance: str | None,

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db, get_log_writer, verify_api_key_or_master_key
-from gateway.api.routes._helpers import resolve_user_id
+from gateway.api.routes._helpers import resolve_billed_identity
 from gateway.api.routes._pipeline import _raise_for_unresolvable_model, failure_status_code
 from gateway.api.routes.chat import rate_limit_headers
 from gateway.core.config import GatewayConfig
@@ -26,6 +26,7 @@ from gateway.core.usage import cache_read_tokens_of
 from gateway.log_config import logger
 from gateway.models.entities import APIKey, BatchRecord, UsageLog
 from gateway.rate_limit import check_rate_limit
+from gateway.repositories.users_repository import external_id_for, resolve_identity_id
 from gateway.services.batch_service import (
     claim_batch_accounting,
     get_batch_record,
@@ -88,7 +89,7 @@ async def log_batch_usage(
     model: str,
     provider: str,
     endpoint: str,
-    user_id: str | None = None,
+    user_id: uuid.UUID | None = None,
     error: str | None = None,
     status_code: int | None = None,
     prompt_tokens: int | None = None,
@@ -197,20 +198,24 @@ async def _lifecycle_workspace_id(
     return await resolve_workspace_id(db, api_key)
 
 
-def _owns_batch(batch: Batch, api_key: APIKey | None, is_master_key: bool) -> bool:
+def _owns_batch(batch: Batch, requester: str | None, is_master_key: bool) -> bool:
     """Whether the requester may access ``batch``.
 
     Ownership is anchored on the :data:`_OWNER_METADATA_KEY` metadata entry
     stamped at creation time. Batches without the marker (created before
     stamping existed, or via providers that do not round-trip metadata) remain
     accessible to any authenticated key. The master key may access any batch.
+
+    ``requester`` is the caller's handle (``user.external_id``), because that is
+    what the marker holds: it travels to the provider and back, and every batch
+    stamped before otari-ai#1727 carries the same spelling, so the comparison
+    stays valid across the convergence without rewriting provider-side metadata.
     """
     if is_master_key:
         return True
     owner = (batch.metadata or {}).get(_OWNER_METADATA_KEY)
     if owner is None:
         return True
-    requester = str(api_key.user_id) if api_key and api_key.user_id else None
     return owner == requester
 
 
@@ -246,8 +251,7 @@ def _authorize_record(
     """
     if is_master_key:
         return
-    requester = str(api_key.user_id) if api_key and api_key.user_id else None
-    denied = record.user_id != requester or (
+    denied = record.user_id != (api_key.user_id if api_key else None) or (
         record.workspace_id is not None
         and api_key is not None
         and record.workspace_id != api_key.workspace_id
@@ -259,7 +263,8 @@ def _authorize_record(
         )
 
 
-def _authorize_legacy_batch(
+async def _authorize_legacy_batch(
+    db: AsyncSession,
     batch: Batch,
     batch_id: str,
     api_key: APIKey | None,
@@ -272,7 +277,8 @@ def _authorize_legacy_batch(
     (the metadata marker lives on the provider's own object); see
     :func:`_authorize_record` for why that ordering is safe only in this case.
     """
-    if not _owns_batch(batch, api_key, is_master_key):
+    requester = None if is_master_key or api_key is None else await external_id_for(db, api_key.user_id)
+    if not _owns_batch(batch, requester, is_master_key):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Batch '{batch_id}' not found",
@@ -329,7 +335,8 @@ async def create_batch(
     api_key, is_master_key = auth_result
     api_key_id = api_key.id if api_key else None
 
-    user_id = resolve_user_id(
+    user_id, identity_id = await resolve_billed_identity(
+        db,
         user_id_from_request=request.user,
         api_key=api_key,
         is_master_key=is_master_key,
@@ -351,6 +358,16 @@ async def create_batch(
         ),
         reject_mismatch=config.reject_user_mismatch,
     )
+    if identity_id is None:
+        # ``batches.user_id`` is NOT NULL, so a handle naming no identity is
+        # refused here rather than at the constraint, which would answer 500 for
+        # a value the caller supplied. ``reserve_budget`` below would say the
+        # same thing; saying it up front keeps the ownership record's invariant
+        # local to the route that writes it.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{user_id}' not found",
+        )
 
     rate_limit_info = check_rate_limit(raw_request, user_id)
 
@@ -456,7 +473,7 @@ async def create_batch(
             model=model,
             provider=resolved.instance,
             endpoint="/v1/batches",
-            user_id=user_id,
+            user_id=identity_id,
             error=str(e),
             status_code=failure_status_code(e),
             counts_toward_budget=not budget_exempt,
@@ -480,7 +497,7 @@ async def create_batch(
         model=model,
         provider=resolved.instance,
         endpoint="/v1/batches",
-        user_id=user_id,
+        user_id=identity_id,
         prompt_tokens=0,
         completion_tokens=0,
         total_tokens=0,
@@ -496,7 +513,7 @@ async def create_batch(
         db,
         batch_id=batch.id,
         provider=resolved.instance,
-        user_id=user_id,
+        user_id=identity_id,
         api_key_id=api_key_id,
         model=model,
         workspace_id=workspace_id,
@@ -531,7 +548,7 @@ async def retrieve_batch(
 
     batch = await _retrieve_batch_or_502(provider_enum, batch_id, provider, provider_kwargs)
     if record is None:
-        _authorize_legacy_batch(batch, batch_id, api_key, is_master_key)
+        await _authorize_legacy_batch(db, batch, batch_id, api_key, is_master_key)
 
     response_data = batch.model_dump()
     response_data["provider"] = provider
@@ -558,7 +575,7 @@ async def cancel_batch(
 
     existing = await _retrieve_batch_or_502(provider_enum, batch_id, provider, provider_kwargs)
     if record is None:
-        _authorize_legacy_batch(existing, batch_id, api_key, is_master_key)
+        await _authorize_legacy_batch(db, existing, batch_id, api_key, is_master_key)
 
     try:
         batch: Batch = await acancel_batch(
@@ -625,7 +642,7 @@ async def list_batches(
     # Prefer the local records (strict) and fall back to the metadata marker for
     # legacy batches. One bulk lookup avoids a per-batch query.
     records = {} if is_master_key else await get_batch_records(db, [batch.id for batch in batches])
-    requester = str(api_key.user_id) if api_key and api_key.user_id else None
+    requester = None if is_master_key or api_key is None else await external_id_for(db, api_key.user_id)
 
     def _visible(batch: Batch) -> bool:
         if is_master_key:
@@ -640,8 +657,8 @@ async def list_batches(
                 or api_key is None
                 or record.workspace_id == api_key.workspace_id
             )
-            return record.user_id == requester and in_workspace
-        return _owns_batch(batch, api_key, is_master_key)
+            return record.user_id == (api_key.user_id if api_key else None) and in_workspace
+        return _owns_batch(batch, requester, is_master_key)
 
     return {"data": [{**batch.model_dump(), "provider": provider} for batch in batches if _visible(batch)]}
 
@@ -679,13 +696,17 @@ async def retrieve_batch_results(
 
     batch = await _retrieve_batch_or_502(provider_enum, batch_id, provider, provider_kwargs)
     if record is None:
-        _authorize_legacy_batch(batch, batch_id, api_key, is_master_key)
+        await _authorize_legacy_batch(db, batch, batch_id, api_key, is_master_key)
 
     # Attribute usage to the batch owner: the stored record when present (strict,
     # so a master-key retrieval bills the true owner), else the metadata marker
     # stamped at creation, else the key's own user for legacy batches with neither.
+    # The marker holds a handle, so a legacy batch resolves through it to the
+    # identity the row and the spend both key on.
     metadata_owner = (batch.metadata or {}).get(_OWNER_METADATA_KEY)
-    user_id = (record.user_id if record else None) or metadata_owner or (api_key.user_id if api_key else None)
+    identity_id = (record.user_id if record else None) or (
+        (await resolve_identity_id(db, metadata_owner)) if metadata_owner else None
+    ) or (api_key.user_id if api_key else None)
 
     # Budget exemption follows the key that CREATED the batch (billing attributes to
     # its owner), not the retriever. Resolve it from the stored record; a deleted
@@ -828,7 +849,7 @@ async def retrieve_batch_results(
             model=batch_model,
             provider=provider,
             endpoint="/v1/batches/results",
-            user_id=user_id,
+            user_id=identity_id,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
@@ -840,9 +861,10 @@ async def retrieve_batch_results(
             workspace_id=origin_workspace_id,
         )
         if record is not None:
-            if cost and user_id and not batch_exempt:
+            owner_handle = await external_id_for(db, identity_id)
+            if cost and owner_handle and not batch_exempt:
                 # Folds the spend and commits the claim in one transaction.
-                await record_external_spend(db, user_id, cost)
+                await record_external_spend(db, owner_handle, cost)
             else:
                 # Nothing to fold (no cost/owner, or the originating key is
                 # budget-exempt); still persist the one-time accounting claim.

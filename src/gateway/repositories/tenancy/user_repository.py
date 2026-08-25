@@ -60,6 +60,7 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         full_name: str | None,
         active_organization_id: uuid.UUID,
         email: str | None = None,
+        alias: str | None = None,
         is_active: bool = True,
         is_superuser: bool = False,
     ) -> User:
@@ -68,10 +69,16 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         A standalone operator is an operator-defined label rather than a
         sign-in address, so the row is stored with no email by default; the
         nullable column tolerates that where a create schema requiring an address
-        would not. Any gateway users a future convergence brings onto this table
-        (otari-ai#1727) are the same shape. An identity an admin adds by address carries it from the start, as
+        would not. An identity an admin adds by address carries it from the start, as
         the handle the claim flow will match on, but it is unverified and grants
         nothing until that flow exists.
+
+        ``external_id`` is left to ``User.__init__`` to derive from the id, which
+        is what makes this row usable by the request plane the moment it exists
+        (otari-ai#1727) and is exactly the value
+        ``ActiveOrganizationMemberPublic.attribution_user_id`` published while
+        the request plane still had a table of its own, so nothing downstream saw
+        the convergence.
 
         ``is_active`` is a parameter rather than a constant because the M5
         in-place upgrade needs it: the reconciliation spec maps a soft-deleted
@@ -92,6 +99,7 @@ class UserRepository(BaseRepository[User, UserCreate, UserBase]):
         the reconciliation ledger rather than being found during a cutover.
         """
         user = User(
+            alias=alias,
             email=email,
             full_name=full_name,
             is_active=is_active,

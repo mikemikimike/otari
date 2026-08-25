@@ -135,30 +135,22 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value.replace(tzinfo=UTC)
 
 
-def _identity_uuid(user_id: str) -> uuid.UUID | None:
-    """The tenancy identity behind a billed user, when there is one.
-
-    ``users.user_id`` is a free-form string, and the attribution row minted for a
-    tenancy member is keyed on that member's UUID rendered as a string (see
-    ``repositories.users_repository.get_or_create_attribution_user``). Anything
-    that does not parse is a plain gateway user with no membership rows, which
-    resolves to the workspace and organization ceilings alone.
-    """
-    try:
-        return uuid.UUID(user_id)
-    except ValueError:
-        return None
-
-
 async def _resolve_identities(
     db: AsyncSession,
     *,
-    user_id: str,
+    identity_id: uuid.UUID | None,
     scope: BudgetScopeRequest,
 ) -> list[tuple[str, str]]:
-    """The ``(scope_type, scope_id)`` pairs a request bills to."""
+    """The ``(scope_type, scope_id)`` pairs a request bills to.
+
+    ``identity_id`` is the billed identity's primary key, which since
+    otari-ai#1727 is the same row a membership hangs off, so there is no longer
+    anything to parse: the member ceilings either exist for it or they do not.
+    ``None`` is a request with no resolvable owner, which bills to the workspace
+    and organization ceilings alone.
+    """
     workspace_id = await resolve_workspace_id(db, scope.api_key)
-    identity = _identity_uuid(user_id)
+    identity = identity_id
     workspace_member_id: uuid.UUID | None = None
     org_member_id: uuid.UUID | None = None
 
@@ -256,7 +248,7 @@ async def _roll_expired_periods(
 async def applicable_budgets(
     db: AsyncSession,
     *,
-    user_id: str,
+    identity_id: uuid.UUID | None,
     scope: BudgetScopeRequest,
 ) -> tuple[ApplicableBudget, ...]:
     """Every ceiling this request must pass, in reservation order.
@@ -266,7 +258,7 @@ async def applicable_budgets(
     window that has run out is rolled here, before the reservation reads the
     counters, so a request at the boundary is gated on the new period.
     """
-    identities = await _resolve_identities(db, user_id=user_id, scope=scope)
+    identities = await _resolve_identities(db, identity_id=identity_id, scope=scope)
     if not identities:
         return ()
 

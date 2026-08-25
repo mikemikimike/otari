@@ -254,7 +254,12 @@ def test_claiming_an_identity_that_already_has_an_address_stamps_it_verified(tmp
     with engine.begin() as connection:
         # Stand in for the adopted identity: an address, and nothing else.
         connection.execute(
-            text('UPDATE "user" SET email = :email, email_verified_at = NULL'),
+            # Scoped past the shared ``default`` request-plane owner, an
+            # identity row since otari-ai#1727 and never a sign-in.
+            text(
+                'UPDATE "user" SET email = :email, email_verified_at = NULL '
+                "WHERE external_id <> 'default'"
+            ),
             {"email": EMAIL},
         )
 
@@ -267,7 +272,12 @@ def test_claiming_an_identity_that_already_has_an_address_stamps_it_verified(tmp
         assert response.status_code == 200, response.text
 
     with engine.begin() as connection:
-        verified = connection.execute(text('SELECT email_verified_at FROM "user"')).scalar_one()
+        verified = connection.execute(
+            # The operator, not the shared ``default`` request-plane owner beside
+            # it: that one has been an identity row since otari-ai#1727.
+            text('SELECT email_verified_at FROM "user" WHERE external_id <> :default_owner'),
+            {"default_owner": "default"},
+        ).scalar_one()
     assert verified is not None
 
 
@@ -299,7 +309,12 @@ def test_an_ordinary_password_change_does_not_stamp_the_address_verified(tmp_pat
         )
 
     with engine.begin() as connection:
-        verified = connection.execute(text('SELECT email_verified_at FROM "user"')).scalar_one()
+        verified = connection.execute(
+            # The operator, not the shared ``default`` request-plane owner beside
+            # it: that one has been an identity row since otari-ai#1727.
+            text('SELECT email_verified_at FROM "user" WHERE external_id <> :default_owner'),
+            {"default_owner": "default"},
+        ).scalar_one()
     assert verified is None
 
 
@@ -846,9 +861,9 @@ def test_an_identity_that_arrived_with_a_password_does_not_claim_the_deployment(
             )
             connection.execute(
                 text(
-                    'INSERT INTO "user" (id, email, hashed_password, is_active, is_superuser, '
+                    'INSERT INTO "user" (id, external_id, email, hashed_password, is_active, is_superuser, '
                     "active_organization_id, created_at, updated_at) "
-                    "VALUES (:id, :email, :hashed, 1, 0, :organization_id, :now, :now)"
+                    "VALUES (:id, :id, :email, :hashed, 1, 0, :organization_id, :now, :now)"
                 ),
                 {
                     "id": uuid.uuid4().hex,

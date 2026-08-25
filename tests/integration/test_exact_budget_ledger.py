@@ -24,7 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_KEY_HEADER
-from gateway.models.entities import Budget, ScopedBudget, UsageLog, User
+from gateway.models.entities import Budget, ScopedBudget, UsageLog
+from gateway.models.tenancy import User
 from gateway.services.budget_service import ReservationHandle, reconcile_reservation, reserve_budget
 from gateway.services.scoped_budget_service import ApplicableBudget, reserve, settle
 

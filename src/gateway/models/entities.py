@@ -79,7 +79,9 @@ class APIKey(Base):
     # column existed cannot be back-filled (the plaintext is unrecoverable).
     key_prefix: Mapped[str | None] = mapped_column()
     key_name: Mapped[str | None] = mapped_column()
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -110,7 +112,6 @@ class APIKey(Base):
 
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
-    user = relationship("User", back_populates="api_keys")
     usage_logs = relationship("UsageLog", back_populates="api_key", passive_deletes=True)
 
     def to_dict(self) -> dict[str, Any]:
@@ -169,7 +170,6 @@ class Budget(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
-    users = relationship("User", back_populates="budget")
     reset_logs = relationship("BudgetResetLog", back_populates="budget")
 
     def to_dict(self) -> dict[str, Any]:
@@ -182,67 +182,6 @@ class Budget(Base):
             "reset_alignment": self.reset_alignment,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-
-class User(Base):
-    """User/Customer model for end-user tracking."""
-
-    __tablename__ = "users"
-
-    user_id: Mapped[str] = mapped_column(primary_key=True)
-    alias: Mapped[str | None] = mapped_column()
-    # The spend ledger, exact to the micro-dollar like the ``usage_logs`` rows
-    # that sum into it (mozilla-ai/otari#691). As a float it drifted: four
-    # completions whose settled costs were each exact left this at
-    # 0.6619999999999999, and the drift accumulated across every reconcile until
-    # the budget reset.
-    spend: Mapped[Decimal] = mapped_column(UsdCost(), default=Decimal(0))
-    # In-flight budget held by requests that have passed the budget gate but
-    # whose actual cost is not yet known. The effective committed amount is
-    # ``spend + reserved``; reservations are reconciled into ``spend`` (actual
-    # cost) on success or released on failure. See gateway.services.budget_service.
-    reserved: Mapped[Decimal] = mapped_column(UsdCost(), default=Decimal(0), server_default="0")
-    # Indexed: the budgets list groups users by this column to build each budget's
-    # usage rollup, so an unindexed FK turns that page into a users table scan.
-    budget_id: Mapped[str | None] = mapped_column(ForeignKey("budgets.budget_id"), index=True)
-    # Default model access-list every one of this user's keys inherits when the
-    # key has no list of its own. null = unrestricted, [] = deny all, else
-    # canonical instance:model entries (see services/model_access.py). A key may
-    # narrow this default but never broaden it (validated on key write).
-    allowed_models: Mapped[list[str] | None] = mapped_column(JSON)
-    budget_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    next_budget_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    blocked: Mapped[bool] = mapped_column(default=False)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
-
-    budget = relationship("Budget", back_populates="users")
-    api_keys = relationship("APIKey", back_populates="user", passive_deletes=True)
-    usage_logs = relationship("UsageLog", back_populates="user", passive_deletes=True)
-    reset_logs = relationship("BudgetResetLog", back_populates="user", passive_deletes=True)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert model to dictionary."""
-        return {
-            "user_id": self.user_id,
-            "alias": self.alias,
-            "spend": self.spend,
-            "reserved": self.reserved,
-            "budget_id": self.budget_id,
-            "allowed_models": self.allowed_models,
-            "budget_started_at": self.budget_started_at.isoformat() if self.budget_started_at else None,
-            "next_budget_reset_at": self.next_budget_reset_at.isoformat() if self.next_budget_reset_at else None,
-            "blocked": self.blocked,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "metadata": self.metadata_,
         }
 
 
@@ -294,7 +233,9 @@ class ModelAlias(Base):
     # since resolution goes through the process-wide alias cache.
     name: Mapped[str] = mapped_column()
     target: Mapped[str] = mapped_column()
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), index=True
+    )
     # The workspace this row belongs to; see `APIKey.workspace_id` for why.
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False, index=True
@@ -356,7 +297,9 @@ class RoutingPolicy(Base):
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column()
     spec: Mapped[dict[str, Any]] = mapped_column(JSON)
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), index=True
+    )
     # The workspace this row belongs to; see `APIKey.workspace_id` for why.
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False, index=True
@@ -615,7 +558,9 @@ class UsageLog(Base):
         Uuid, ForeignKey("workspace.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="SET NULL"), index=True)
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="SET NULL"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), index=True
+    )
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
 
     model: Mapped[str] = mapped_column()
@@ -736,7 +681,6 @@ class UsageLog(Base):
     latency_ms: Mapped[int | None] = mapped_column()
 
     api_key = relationship("APIKey", back_populates="usage_logs")
-    user = relationship("User", back_populates="usage_logs")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert model to dictionary."""
@@ -785,7 +729,9 @@ class AgentTelemetry(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
     api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="SET NULL"), index=True)
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="SET NULL"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), index=True
+    )
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     name: Mapped[str] = mapped_column()
     tool_name: Mapped[str | None] = mapped_column()
@@ -830,7 +776,9 @@ class FileObject(Base):
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: f"file-{uuid.uuid4().hex}")
     # Always set to the authenticated user; non-null enforces the user-scoping
     # contract at the schema level. CASCADE removes a user's files on delete.
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     # The workspace this row belongs to; see `APIKey.workspace_id` for why it is
     # NOT NULL and RESTRICT rather than nullable and cascading. Existing rows were
     # backfilled onto the deployment's default workspace, which is also where a
@@ -888,8 +836,8 @@ class BatchRecord(Base):
     # this record is the strict ownership anchor, so it must always name an owner.
     # CASCADE: deleting the user drops the ownership record (the user's keys are
     # gone too, and usage_logs remain the billing history).
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # SET NULL: a key may be revoked while its batch is still in flight.
     api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="SET NULL"), index=True)
@@ -960,8 +908,8 @@ class RoutingMemory(Base):
     )
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # The workspace this row belongs to; see `APIKey.workspace_id` for why.
     workspace_id: Mapped[uuid.UUID] = mapped_column(
@@ -1014,8 +962,8 @@ class RouterPreference(Base):
     )
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # The workspace this row belongs to; see `APIKey.workspace_id` for why.
     workspace_id: Mapped[uuid.UUID] = mapped_column(
@@ -1049,7 +997,9 @@ class BudgetResetLog(Base):
     __tablename__ = "budget_reset_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id", ondelete="SET NULL"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), index=True
+    )
     # Indexed: the reset-log drill-down filters on this column, and the table only
     # grows, so an unindexed FK degrades that endpoint to a full scan over time.
     budget_id: Mapped[str] = mapped_column(ForeignKey("budgets.budget_id"), index=True)
@@ -1060,7 +1010,6 @@ class BudgetResetLog(Base):
     reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     next_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    user = relationship("User", back_populates="reset_logs")
     budget = relationship("Budget", back_populates="reset_logs")
 
     def to_dict(self) -> dict[str, Any]:

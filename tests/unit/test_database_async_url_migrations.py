@@ -50,7 +50,7 @@ async def test_auto_migrate_accepts_async_sqlite_url(tmp_path: Path) -> None:
         # Migrations ran against the same database the app engine is pointed at,
         # so a table the schema defines is queryable rather than missing.
         async with create_session() as db:
-            assert (await db.execute(text("SELECT COUNT(*) FROM users"))).scalar_one() == 0
+            assert (await db.execute(text('SELECT COUNT(*) FROM "user"'))).scalar_one() == 0
     finally:
         reset_db()
     assert db_path.exists()

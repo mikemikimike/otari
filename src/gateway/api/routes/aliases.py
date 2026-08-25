@@ -26,13 +26,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.api.deps import get_config, get_db, verify_master_key
 from gateway.api.routes._helpers import resolve_managed_workspace_id
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.models.entities import ModelAlias
-from gateway.repositories.users_repository import get_active_user
+from gateway.models.tenancy import User
+from gateway.repositories.users_repository import get_active_user, resolve_identity_id
 from gateway.services.alias_service import all_alias_names, refresh_alias_cache
 from gateway.services.policy_store import all_policy_names
 
@@ -80,12 +82,18 @@ class AliasResponse(BaseModel):
     updated_at: str | None = None
 
     @classmethod
-    def from_model(cls, alias: ModelAlias) -> "AliasResponse":
+    def from_model(cls, alias: ModelAlias, user_id: str | None) -> "AliasResponse":
+        """Render a stored alias. ``user_id`` is the handle its scope resolves to.
+
+        Passed in rather than read off the row: the column stores ``user.id``
+        since otari-ai#1727, and the scope a caller reads and writes is the
+        operator-defined handle.
+        """
         return cls(
             name=alias.name,
             target=alias.target,
             source="stored",
-            user_id=alias.user_id,
+            user_id=user_id,
             workspace_id=alias.workspace_id,
             created_at=alias.created_at.isoformat() if alias.created_at else None,
             updated_at=alias.updated_at.isoformat() if alias.updated_at else None,
@@ -136,8 +144,8 @@ def _validate(config: GatewayConfig, name: str, target: str, user_id: str | None
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-async def _require_user(db: AsyncSession, user_id: str) -> None:
-    """404 unless ``user_id`` names a live user.
+async def _require_user(db: AsyncSession, user_id: str) -> uuid.UUID:
+    """Return the identity ``user_id`` names, 404 unless it is a live one.
 
     Unknown ids have to be caught here: the column is a foreign key, so one would
     otherwise surface as an opaque 500 from the commit (or, on SQLite without
@@ -146,8 +154,10 @@ async def _require_user(db: AsyncSession, user_id: str) -> None:
     ``get_active_user``: they cannot authenticate, so the alias would be dead on
     arrival.
     """
-    if await get_active_user(db, user_id) is None:
+    user = await get_active_user(db, user_id)
+    if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User '{user_id}' not found")
+    return user.id
 
 
 @router.get("", dependencies=[Depends(verify_master_key)])
@@ -167,18 +177,20 @@ async def list_aliases(
     Every scope at once, workspace-wide and user-scoped alike: this is the
     master-key management view, not what any one caller resolves.
     """
-    statement = select(ModelAlias)
+    # Outer-joined so a page of aliases names its scopes without a lookup per
+    # row, and so a global alias (null scope) still lists.
+    statement = select(ModelAlias, col(User.external_id)).outerjoin(User, col(User.id) == ModelAlias.user_id)
     if workspace_id is not None:
         # Stored rows only. A config.yml entry has no workspace: it is
         # deployment-wide and in force in every one of them, so filtering
         # it out would misreport what actually resolves.
         statement = statement.where(ModelAlias.workspace_id == workspace_id)
-    rows = (await db.execute(statement.order_by(ModelAlias.name))).scalars().all()
+    rows = (await db.execute(statement.order_by(ModelAlias.name))).all()
     # Keyed on (workspace, name, user) rather than name: the same display name can
     # exist in several workspaces, and within one both workspace-wide and per
     # user, and every one of those is a real row to manage.
     merged: dict[tuple[uuid.UUID | None, str, str | None], AliasResponse] = {
-        (row.workspace_id, row.name, row.user_id): AliasResponse.from_model(row) for row in rows
+        (row.workspace_id, row.name, owner): AliasResponse.from_model(row, owner) for row, owner in rows
     }
     # Config last, matching effective_aliases: a configured name beats the stored
     # workspace-wide row in every workspace, so it is listed once, unscoped,
@@ -202,8 +214,7 @@ async def set_alias(
     config: Annotated[GatewayConfig, Depends(get_config)],
 ) -> AliasResponse:
     """Create or update a stored alias in one workspace, optionally for one user."""
-    if request.user_id is not None:
-        await _require_user(db, request.user_id)
+    scope_id = await _require_user(db, request.user_id) if request.user_id is not None else None
     workspace_id = await resolve_managed_workspace_id(db, request.workspace_id)
     await refresh_alias_cache(db)
     _validate(config, request.name, request.target, request.user_id)
@@ -216,7 +227,7 @@ async def set_alias(
             select(ModelAlias).where(
                 ModelAlias.workspace_id == workspace_id,
                 ModelAlias.name == request.name,
-                ModelAlias.user_id == request.user_id,
+                ModelAlias.user_id == scope_id,
             )
         )
     ).scalar_one_or_none()
@@ -226,7 +237,7 @@ async def set_alias(
         alias = ModelAlias(
             name=request.name,
             target=request.target,
-            user_id=request.user_id,
+            user_id=scope_id,
             workspace_id=workspace_id,
         )
         db.add(alias)
@@ -247,7 +258,7 @@ async def set_alias(
         await refresh_alias_cache(db)
     except SQLAlchemyError:
         logger.warning("Alias cache refresh failed after storing '%s'; converges within TTL", alias.name)
-    return AliasResponse.from_model(alias)
+    return AliasResponse.from_model(alias, request.user_id)
 
 
 @router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(verify_master_key)])
@@ -277,12 +288,21 @@ async def delete_alias(
     override must leave the workspace-wide one serving everyone else.
     """
     target_workspace_id = await resolve_managed_workspace_id(db, workspace_id)
+    scope_id = await resolve_identity_id(db, user_id) if user_id is not None else None
+    if user_id is not None and scope_id is None:
+        # Refused rather than falling through: ``user_id=None`` in the query
+        # below means "the workspace-wide alias", so a handle naming no identity
+        # would otherwise delete the entry a caller never asked about.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Alias '{name}' (scoped to user '{user_id}') not found",
+        )
     alias = (
         await db.execute(
             select(ModelAlias).where(
                 ModelAlias.workspace_id == target_workspace_id,
                 ModelAlias.name == name,
-                ModelAlias.user_id == user_id,
+                ModelAlias.user_id == scope_id,
             )
         )
     ).scalar_one_or_none()

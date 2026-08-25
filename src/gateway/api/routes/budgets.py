@@ -3,15 +3,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import get_db, verify_master_key
-from gateway.models.entities import Budget, BudgetResetLog, ScopedBudget, User, WorkspaceBudgetDefault
+from gateway.models.entities import Budget, BudgetResetLog, ScopedBudget, WorkspaceBudgetDefault
 from gateway.models.money import MAX_USD_LIMIT, as_float, to_usd, to_usd_or_none
-from gateway.models.tenancy import Workspace
+from gateway.models.tenancy import User, Workspace
 from gateway.services.scoped_budget_service import ResetAlignment
 
 router = APIRouter(prefix="/v1/budgets", tags=["budgets"])
@@ -119,10 +119,15 @@ class BudgetResetLogResponse(BaseModel):
     next_reset_at: str | None
 
     @classmethod
-    def from_model(cls, log: BudgetResetLog) -> "BudgetResetLogResponse":
+    def from_model(cls, log: BudgetResetLog, user_id: str | None) -> "BudgetResetLogResponse":
+        """Render a reset event. ``user_id`` is the handle ``log.user_id`` resolves to.
+
+        Passed in for the reason ``KeyInfo.from_model`` gives: the column stores
+        ``user.id`` and the wire carries the operator-defined handle.
+        """
         return cls(
             id=log.id,
-            user_id=log.user_id,
+            user_id=user_id,
             budget_id=log.budget_id,
             previous_spend=float(log.previous_spend),
             reset_at=log.reset_at.isoformat(),
@@ -140,9 +145,9 @@ async def _budget_usage(db: AsyncSession, budget_id: str) -> tuple[int, float, f
                 # ``coalesce(numeric, double precision)`` resolves the whole sum
                 # as double precision, which would roll exact counters up through
                 # a binary float on the way to a page that reports them.
-                func.coalesce(func.sum(User.spend), _ZERO),
-                func.coalesce(func.sum(User.reserved), _ZERO),
-            ).where(User.budget_id == budget_id, User.deleted_at.is_(None))
+                func.coalesce(func.sum(col(User.spend)), _ZERO),
+                func.coalesce(func.sum(col(User.reserved)), _ZERO),
+            ).where(col(User.budget_id) == budget_id, col(User.deleted_at).is_(None))
         )
     ).one()
     return int(row[0]), float(row[1]), float(row[2])
@@ -196,13 +201,13 @@ async def list_budgets(
     if page_ids:
         usage_rows = await db.execute(
             select(
-                User.budget_id,
+                col(User.budget_id),
                 func.count(),
-                func.coalesce(func.sum(User.spend), _ZERO),
-                func.coalesce(func.sum(User.reserved), _ZERO),
+                func.coalesce(func.sum(col(User.spend)), _ZERO),
+                func.coalesce(func.sum(col(User.reserved)), _ZERO),
             )
-            .where(User.budget_id.in_(page_ids), User.deleted_at.is_(None))
-            .group_by(User.budget_id)
+            .where(col(User.budget_id).in_(page_ids), col(User.deleted_at).is_(None))
+            .group_by(col(User.budget_id))
         )
         usage = {row[0]: (int(row[1]), float(row[2]), float(row[3])) for row in usage_rows}
 
@@ -354,6 +359,17 @@ async def delete_budget(
             ),
         )
 
+    # Detached by hand, where a ``Budget.users`` relationship used to nullify the
+    # column during flush. The relationship went with the ``users`` table
+    # (otari-ai#1727) and is not re-declared across the two declarative styles;
+    # the foreign key carries no ``ON DELETE``, so without this the delete is a
+    # constraint violation reported as "Database error".
+    await db.execute(
+        update(User)
+        .where(col(User.budget_id) == budget_id)
+        .values(budget_id=None, budget_started_at=None, next_budget_reset_at=None)
+        .execution_options(synchronize_session=False)
+    )
     await db.delete(budget)
     try:
         await db.commit()
@@ -382,11 +398,15 @@ async def list_budget_reset_logs(
             detail=f"Budget with id '{budget_id}' not found",
         )
 
+    # Outer-joined to the identity so the page reports the handle it was reset
+    # against, not the id the row stores. Outer because the foreign key is
+    # SET NULL: an event whose identity is gone still belongs on the ledger.
     result = await db.execute(
-        select(BudgetResetLog)
+        select(BudgetResetLog, col(User.external_id))
+        .outerjoin(User, col(User.id) == BudgetResetLog.user_id)
         .where(BudgetResetLog.budget_id == budget_id)
         .order_by(BudgetResetLog.reset_at.desc())
         .offset(skip)
         .limit(limit)
     )
-    return [BudgetResetLogResponse.from_model(log) for log in result.scalars().all()]
+    return [BudgetResetLogResponse.from_model(log, owner) for log, owner in result.all()]

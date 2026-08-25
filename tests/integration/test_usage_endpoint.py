@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from conftest import seed_workspace_id
-from gateway.models.entities import APIKey, UsageLog, User
+from gateway.models.entities import APIKey, UsageLog
+from gateway.models.tenancy import User
 
 USAGE_PATH = "/v1/usage"
 

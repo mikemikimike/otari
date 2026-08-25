@@ -52,7 +52,6 @@ from gateway.core.usage_source import served_here
 from gateway.models.entities import APIKey, UsageLog, WorkspaceActivationState
 from gateway.models.money import as_float
 from gateway.models.tenancy import User, Workspace
-from gateway.repositories.users_repository import get_or_create_attribution_user
 from gateway.services.tenancy import authorization
 from gateway.services.tenancy.errors import (
     WorkspaceActivationUnavailableError,
@@ -285,20 +284,18 @@ class WorkspaceActivationService:
             self._require_offerable(workspace=workspace, state=state)
 
         plaintext = generate_api_key()
-        # Owned by the caller's own request-plane row, not the shared ``default``
-        # user that ``POST /v1/keys`` falls back to. Two reasons: the dashboard's
-        # own key form requires an owner, so a key minted from a dashboard flow
-        # should have a real one; and a key owned by an identity's attribution row
-        # is what makes the request bill through that member's scoped ceilings
-        # (`services/scoped_budget_service.py` resolves the identity back out of
-        # ``users.user_id``), where one owned by ``default`` would sit outside
-        # every per-member budget. The row normally exists already: first-boot
-        # provisioning mints the operator's, and adding a member mints theirs.
-        owner = await get_or_create_attribution_user(
-            self.db,
-            user_id=str(user.id),
-            alias=user.full_name or user.email,
-        )
+        # Owned by the caller themselves, not the shared ``default`` user that
+        # ``POST /v1/keys`` falls back to. Two reasons: the dashboard's own key
+        # form requires an owner, so a key minted from a dashboard flow should
+        # have a real one; and a key owned by the member is what makes the
+        # request bill through that member's scoped ceilings
+        # (`services/scoped_budget_service.py`), where one owned by ``default``
+        # would sit outside every per-member budget. Since otari-ai#1727 the
+        # caller's identity *is* the owner, so there is nothing to mint; the one
+        # thing still worth undoing is a soft delete, which would otherwise leave
+        # a key ``POST /v1/keys`` refuses to reissue.
+        if user.deleted_at is not None:
+            user.deleted_at = None
         record = await self._existing_key(state)
         if record is None:
             record = APIKey(
@@ -307,7 +304,7 @@ class WorkspaceActivationService:
                 key_hash=hash_key(plaintext),
                 key_prefix=key_prefix(plaintext),
                 key_name=ACTIVATION_KEY_NAME,
-                user_id=owner.user_id,
+                user_id=user.id,
             )
             self.db.add(record)
         else:
@@ -317,7 +314,7 @@ class WorkspaceActivationService:
             # person holding a plaintext that still authenticates, so leaving the
             # first issuer's id on the row would bill a second manager's requests
             # against the first one's ceilings.
-            record.user_id = owner.user_id
+            record.user_id = user.id
             # A key the operator revoked from the Keys page and then asked the
             # guide for again is being asked for deliberately.
             record.is_active = True

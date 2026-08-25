@@ -13,7 +13,8 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from gateway.models.entities import Budget, ModelPricing, User
+from gateway.models.entities import Budget, ModelPricing
+from gateway.models.tenancy import User
 from gateway.repositories.users_repository import get_active_user
 from gateway.services.budget_service import (
     estimate_cost,

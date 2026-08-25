@@ -505,7 +505,7 @@ async def create_message(
     user_from_metadata = request.metadata.get("user_id") if request.metadata else None
 
     async def _normalize(
-        user_id: str,
+        user_id: uuid.UUID | None,
         provider: LLMProvider | None,
         model: str,
         instance: str | None,

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.api.deps import get_config, get_db, verify_master_key
 from gateway.api.routes._helpers import resolve_managed_workspace_id
@@ -32,7 +33,8 @@ from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.models.entities import RoutingPolicy
 from gateway.models.routing import PolicySpec
-from gateway.repositories.users_repository import get_active_user
+from gateway.models.tenancy import User
+from gateway.repositories.users_repository import get_active_user, resolve_identity_id
 from gateway.services.alias_service import all_alias_names
 from gateway.services.policy_store import (
     all_policy_names,
@@ -111,12 +113,18 @@ class PolicyResponse(BaseModel):
     updated_at: str | None = None
 
     @classmethod
-    def from_model(cls, policy: RoutingPolicy, *, is_dynamic: bool) -> "PolicyResponse":
+    def from_model(cls, policy: RoutingPolicy, user_id: str | None, *, is_dynamic: bool) -> "PolicyResponse":
+        """Render a stored policy. ``user_id`` is the handle its scope resolves to.
+
+        Passed in rather than read off the row, for the reason
+        ``AliasResponse.from_model`` gives: the column stores ``user.id`` since
+        otari-ai#1727 and the scope a caller reads and writes is the handle.
+        """
         return cls(
             name=policy.name,
             spec=policy.spec,
             source="stored",
-            user_id=policy.user_id,
+            user_id=user_id,
             workspace_id=policy.workspace_id,
             is_dynamic=is_dynamic,
             created_at=policy.created_at.isoformat() if policy.created_at else None,
@@ -307,8 +315,8 @@ async def _validate_router_pricing(config: GatewayConfig, db: AsyncSession, spec
         )
 
 
-async def _require_user(db: AsyncSession, user_id: str) -> None:
-    """404 unless ``user_id`` names a live user.
+async def _require_user(db: AsyncSession, user_id: str) -> uuid.UUID:
+    """Return the identity ``user_id`` names, 404 unless it is a live one.
 
     Unknown ids have to be caught here: the column is a foreign key, so one would
     otherwise surface as an opaque 500 from the commit. Soft-deleted users are
@@ -316,8 +324,10 @@ async def _require_user(db: AsyncSession, user_id: str) -> None:
     ``get_active_user``: they cannot authenticate, so the policy would be dead on
     arrival.
     """
-    if await get_active_user(db, user_id) is None:
+    user = await get_active_user(db, user_id)
+    if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User '{user_id}' not found")
+    return user.id
 
 
 def _missing_policy_detail(
@@ -335,7 +345,9 @@ def _missing_policy_detail(
     return f"Routing policy '{name}' ({scope}) not found in workspace '{workspace_id}'"
 
 
-async def _name_is_taken(db: AsyncSession, name: str, user_id: str | None, workspace_id: uuid.UUID) -> bool:
+async def _name_is_taken(
+    db: AsyncSession, name: str, user_id: uuid.UUID | None, workspace_id: uuid.UUID
+) -> bool:
     """True when a stored policy already answers to ``name`` in this scope."""
     existing = (
         await db.execute(
@@ -385,16 +397,18 @@ async def list_policies(
     Every scope at once, workspace-wide and user-scoped alike: this is the
     master-key management view, not what any one caller resolves.
     """
-    statement = select(RoutingPolicy)
+    # Outer-joined so a page of policies names its scopes in one query, and so a
+    # global policy (null scope) still lists.
+    statement = select(RoutingPolicy, col(User.external_id)).outerjoin(User, col(User.id) == RoutingPolicy.user_id)
     if workspace_id is not None:
         # Stored rows only. A config.yml entry has no workspace: it is
         # deployment-wide and in force in every one of them, so filtering
         # it out would misreport what actually resolves.
         statement = statement.where(RoutingPolicy.workspace_id == workspace_id)
-    rows = (await db.execute(statement.order_by(RoutingPolicy.name))).scalars().all()
+    rows = (await db.execute(statement.order_by(RoutingPolicy.name))).all()
     merged: dict[tuple[uuid.UUID | None, str, str | None], PolicyResponse] = {}
-    for row in rows:
-        key = (row.workspace_id, row.name, row.user_id)
+    for row, owner in rows:
+        key = (row.workspace_id, row.name, owner)
         try:
             parsed = PolicySpec.model_validate(row.spec)
         except ValidationError:
@@ -402,9 +416,9 @@ async def list_policies(
             # row this build cannot parse, and hiding it would make the dashboard
             # disagree with the database.
             logger.warning("Stored routing policy %r does not validate; listing it as-is", row.name)
-            merged[key] = PolicyResponse.from_model(row, is_dynamic=False)
+            merged[key] = PolicyResponse.from_model(row, owner, is_dynamic=False)
             continue
-        merged[key] = PolicyResponse.from_model(row, is_dynamic=parsed.is_dynamic)
+        merged[key] = PolicyResponse.from_model(row, owner, is_dynamic=parsed.is_dynamic)
     # Config last, matching effective_policies: a configured name beats the stored
     # workspace-wide row in every workspace, so it is listed once, unscoped,
     # instead of shadowing each workspace's row in place.
@@ -441,8 +455,7 @@ async def set_policy(
     rename can walk a policy into every collision a create can. Sending the field
     asserts the named policy is stored, so it never falls back to creating one.
     """
-    if request.user_id is not None:
-        await _require_user(db, request.user_id)
+    scope_id = await _require_user(db, request.user_id) if request.user_id is not None else None
     workspace_id = await resolve_managed_workspace_id(db, request.workspace_id)
     spec = _validated_spec(request.name, request.spec)
     await refresh_policy_cache(db)
@@ -460,7 +473,7 @@ async def set_policy(
             select(RoutingPolicy).where(
                 RoutingPolicy.workspace_id == workspace_id,
                 RoutingPolicy.name == lookup_name,
-                RoutingPolicy.user_id == request.user_id,
+                RoutingPolicy.user_id == scope_id,
             )
         )
     ).scalar_one_or_none()
@@ -477,7 +490,7 @@ async def set_policy(
         if renaming:
             # Without this the rename would be an upsert onto the target name, silently
             # destroying whatever policy already answered to it.
-            if await _name_is_taken(db, request.name, request.user_id, workspace_id):
+            if await _name_is_taken(db, request.name, scope_id, workspace_id):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_name_taken_detail(request.name))
             policy.name = request.name
     # Round-tripped through the model so the stored document is normalized (defaults
@@ -490,7 +503,7 @@ async def set_policy(
         policy = RoutingPolicy(
             name=request.name,
             spec=stored_spec,
-            user_id=request.user_id,
+            user_id=scope_id,
             workspace_id=workspace_id,
         )
         db.add(policy)
@@ -504,7 +517,7 @@ async def set_policy(
         # catches it. Re-read rather than assuming: the same constraint class also
         # covers the user foreign key, and reporting a deleted user as a name clash
         # would send the operator after the wrong thing.
-        if await _name_is_taken(db, request.name, request.user_id, workspace_id):
+        if await _name_is_taken(db, request.name, scope_id, workspace_id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=_name_taken_detail(request.name)
             ) from None
@@ -524,7 +537,7 @@ async def set_policy(
         policy.name,
         request.rename_from if renaming else "-",
         policy.workspace_id,
-        policy.user_id or "workspace-wide",
+        request.user_id or "workspace-wide",
         # A router entry contributes its whole pool, since the walker cascades
         # through the ranking. Counting one head candidate here logged
         # "candidates=1" for a policy that can dispatch three.
@@ -533,7 +546,7 @@ async def set_policy(
         spec.router_backend or "none",
     )
     await _refresh_quietly(db, policy.name)
-    return PolicyResponse.from_model(policy, is_dynamic=spec.is_dynamic)
+    return PolicyResponse.from_model(policy, request.user_id, is_dynamic=spec.is_dynamic)
 
 
 @router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(verify_master_key)])
@@ -558,15 +571,23 @@ async def delete_policy(
     override must leave the workspace-wide one serving everyone else.
     """
     target_workspace_id = await resolve_managed_workspace_id(db, workspace_id)
+    scope_id = await resolve_identity_id(db, user_id) if user_id is not None else None
     policy = (
-        await db.execute(
-            select(RoutingPolicy).where(
-                RoutingPolicy.workspace_id == target_workspace_id,
-                RoutingPolicy.name == name,
-                RoutingPolicy.user_id == user_id,
+        None
+        # A handle naming no identity resolves to ``None``, which the query below
+        # would read as "the workspace-wide policy"; refuse instead of deleting an
+        # entry the caller never named (same guard as ``/v1/aliases``).
+        if user_id is not None and scope_id is None
+        else (
+            await db.execute(
+                select(RoutingPolicy).where(
+                    RoutingPolicy.workspace_id == target_workspace_id,
+                    RoutingPolicy.name == name,
+                    RoutingPolicy.user_id == scope_id,
+                )
             )
-        )
-    ).scalar_one_or_none()
+        ).scalar_one_or_none()
+    )
     if policy is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

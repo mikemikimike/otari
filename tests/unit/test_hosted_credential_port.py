@@ -91,6 +91,11 @@ class RecordingPort:
             raise self.error
         return self.credential
 
+# The billed identity's stored id, which a request context carries alongside
+# the handle since otari-ai#1727.
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-00000000010a")
+
+
 
 def _plain_build_port() -> ModelProviderPort:
     """The adapter a build with no overlay actually runs, via the composition root."""
@@ -113,6 +118,7 @@ def _ctx(
         user_token=None,
         api_key_id=None,
         user_id="user-1",
+        identity_id=_IDENTITY,
         rate_limit_info=None,
         reservation=None,
         started_at=0.0,

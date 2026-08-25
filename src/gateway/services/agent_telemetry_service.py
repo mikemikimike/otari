@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.models.entities import APIKey
 from gateway.ports.telemetry_storage_port import IngestResult, TelemetryRecord, TelemetryStoragePort
-from gateway.repositories.users_repository import get_active_user
+from gateway.repositories.users_repository import get_active_user_by_id
 
 _MAX_NUMBER = 1_000_000_000
 _EVENTS = {"tool_result", "tool_decision", "user_prompt", "api_error"}
@@ -288,7 +288,9 @@ async def ingest(
     records = list(records)
     if not records:
         return IngestResult()
-    user_id = api_key.user_id
-    if not user_id or await get_active_user(db, user_id) is None:
+    # The key stores its owner's id; the port speaks the operator-defined handle
+    # (otari-ai#1727), and the same read answers both the gate and the spelling.
+    identity = await get_active_user_by_id(db, api_key.user_id) if api_key.user_id else None
+    if identity is None:
         return IngestResult(rejected=len(records))
-    return await storage.record(api_key_id=api_key.id, user_id=user_id, records=tuple(records))
+    return await storage.record(api_key_id=api_key.id, user_id=identity.external_id, records=tuple(records))

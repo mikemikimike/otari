@@ -33,6 +33,10 @@ STRONG = "openai/gpt-4o"
 
 PRICES = {CHEAP: 1.0, STRONG: 10.0}
 
+# The caller's stored id. Routing memory hangs off ``user.id`` since
+# otari-ai#1727, so a context carries one even where the load is patched out.
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-0000000000aa")
+
 
 def _backend(**overrides: Any) -> KnnRoutingMemory:
     kwargs: dict[str, Any] = {"router_k": 2, "router_seed_count": 2}
@@ -42,7 +46,9 @@ def _backend(**overrides: Any) -> KnnRoutingMemory:
 
 def _mem(qualities: dict[str, float], vec: tuple[float, ...] = (1.0, 0.0)) -> RoutingMemory:
     """One example: a prompt embedding plus each model's quality on it."""
-    return RoutingMemory(user_id="u", embedding_model="m", embedding=list(vec), qualities=dict(qualities))
+    return RoutingMemory(
+        user_id=_IDENTITY, embedding_model="m", embedding=list(vec), qualities=dict(qualities)
+    )
 
 
 def _both_good() -> RoutingMemory:
@@ -59,6 +65,7 @@ def _ctx(
     default: str = STRONG,
     messages: list[dict[str, Any]] | None = None,
     user_id: str = "u",
+    identity_id: uuid.UUID | None = None,
     **kw: Any,
 ) -> RoutingContext:
     """A routing context, with the prompt signals derived from ``messages``.
@@ -69,6 +76,7 @@ def _ctx(
     convo = messages or [{"role": "user", "content": "hello"}]
     return RoutingContext(
         user_id=user_id,
+        identity_id=identity_id or _IDENTITY,
         default_model=default,
         candidate_pool=list(candidates),
         task_signal=latest_user_text(convo),
@@ -90,7 +98,7 @@ def _wire(
         return list(query)
 
     async def _load(
-        user_id: str, task_id: str | None, workspace_id: uuid.UUID | None = None
+        user_id: uuid.UUID | None, task_id: str | None, workspace_id: uuid.UUID | None = None
     ) -> list[RoutingMemory]:
         # `total` pads the record count without inventing neighbors, which is how
         # the seed gate and the sparse-neighborhood gate are tested separately.

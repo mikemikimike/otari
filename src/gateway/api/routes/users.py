@@ -7,15 +7,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.api.deps import TelemetryStoragePortDep, get_config, get_db, verify_master_key
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
-from gateway.models.entities import APIKey, Budget, UsageLog, User
+from gateway.models.entities import APIKey, Budget, UsageLog
 from gateway.models.money import as_float
+from gateway.models.tenancy import User
 from gateway.repositories.users_repository import get_active_user
 from gateway.services.budget_periods import budget_window
 from gateway.services.model_access import validate_allowed_models
+from gateway.services.workspace_scope import default_organization_id
 
 router = APIRouter(prefix="/v1/users", tags=["users"])
 
@@ -53,7 +56,7 @@ class UserResponse(BaseModel):
     @classmethod
     def from_model(cls, user: User) -> "UserResponse":
         return cls(
-            user_id=user.user_id,
+            user_id=user.external_id,
             alias=user.alias,
             spend=float(user.spend),
             # In-flight budget held by accepted-but-not-yet-settled requests;
@@ -65,7 +68,7 @@ class UserResponse(BaseModel):
             next_budget_reset_at=user.next_budget_reset_at.isoformat() if user.next_budget_reset_at else None,
             blocked=bool(user.blocked),
             created_at=user.created_at.isoformat(),
-            updated_at=user.updated_at.isoformat(),
+            updated_at=(user.updated_at or user.created_at).isoformat(),
             metadata=dict(user.metadata_) if user.metadata_ else {},
         )
 
@@ -99,10 +102,15 @@ class UsageLogResponse(BaseModel):
     latency_ms: int | None
 
     @classmethod
-    def from_model(cls, log: UsageLog) -> "UsageLogResponse":
+    def from_model(cls, log: UsageLog, user_id: str | None) -> "UsageLogResponse":
+        """Render a usage row. ``user_id`` is the handle ``log.user_id`` resolves to.
+
+        Passed in for the reason ``KeyInfo.from_model`` gives: the column stores
+        ``user.id`` and the wire carries the operator-defined handle.
+        """
         return cls(
             id=log.id,
-            user_id=log.user_id,
+            user_id=user_id,
             api_key_id=log.api_key_id,
             timestamp=log.timestamp.isoformat(),
             model=log.model,
@@ -130,7 +138,7 @@ async def create_user(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    result = await db.execute(select(User).where(User.user_id == request.user_id))
+    result = await db.execute(select(User).where(col(User.external_id) == request.user_id))
     existing_user = result.scalar_one_or_none()
     if existing_user and existing_user.deleted_at is None:
         raise HTTPException(
@@ -161,12 +169,16 @@ async def create_user(
         user.next_budget_reset_at = None
     else:
         user = User(
-            user_id=request.user_id,
+            external_id=request.user_id,
             alias=request.alias,
             budget_id=request.budget_id,
             blocked=request.blocked,
             allowed_models=allowed_models,
             metadata_=request.metadata,
+            # NOT NULL on the identity table: a user created deployment-wide
+            # belongs to the deployment's default organization, the same scope a
+            # master-key-created key lands in.
+            active_organization_id=await default_organization_id(db),
         )
         db.add(user)
 
@@ -197,7 +209,7 @@ async def list_users(
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> list[UserResponse]:
     """List all users with pagination."""
-    result = await db.execute(select(User).where(User.deleted_at.is_(None)).offset(skip).limit(limit))
+    result = await db.execute(select(User).where(col(User.deleted_at).is_(None)).offset(skip).limit(limit))
     users = result.scalars().all()
 
     return [UserResponse.from_model(user) for user in users]
@@ -336,7 +348,7 @@ async def delete_user(
 
     await db.execute(
         update(APIKey)
-        .where(APIKey.user_id == user_id)
+        .where(APIKey.user_id == user.id)
         .values(is_active=False)
         .execution_options(synchronize_session=False)
     )
@@ -360,7 +372,7 @@ async def get_user_usage(
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ) -> list[UsageLogResponse]:
     """Get usage history for a specific user."""
-    result = await db.execute(select(User).where(User.user_id == user_id))
+    result = await db.execute(select(User).where(col(User.external_id) == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(
@@ -370,11 +382,13 @@ async def get_user_usage(
 
     usage_result = await db.execute(
         select(UsageLog)
-        .where(UsageLog.user_id == user_id)
+        .where(UsageLog.user_id == user.id)
         .order_by(UsageLog.timestamp.desc())
         .offset(skip)
         .limit(limit)
     )
     usage_logs = usage_result.scalars().all()
 
-    return [UsageLogResponse.from_model(log) for log in usage_logs]
+    # Every row is this user's by construction, so the handle is the path
+    # parameter rather than a join.
+    return [UsageLogResponse.from_model(log, user_id) for log in usage_logs]

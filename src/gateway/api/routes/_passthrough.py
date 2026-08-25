@@ -34,7 +34,7 @@ from any_llm.exceptions import AnyLLMError
 from fastapi import HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.routes._helpers import resolve_user_id
+from gateway.api.routes._helpers import resolve_billed_identity
 from gateway.api.routes._pipeline import (
     _elapsed_ms,
     _raise_for_unresolvable_model,
@@ -52,6 +52,7 @@ from gateway.log_config import logger
 from gateway.model_labeling import relabel_model
 from gateway.models.entities import APIKey, ModelPricing, UsageLog
 from gateway.rate_limit import check_rate_limit
+from gateway.repositories.users_repository import external_id_for
 from gateway.services.budget_service import (
     ZERO,
     ReservationHandle,
@@ -81,15 +82,21 @@ PASSTHROUGH_PROVIDER_ERROR_DETAIL = "The request could not be completed by the p
 BillingMeters = tuple[dict[str, Any], list[dict[str, Any]]]
 
 
-def resolve_passthrough_user_id(
+async def resolve_passthrough_user_id(
+    db: AsyncSession,
     auth_result: tuple[APIKey | None, bool],
     user: str | None,
     *,
     reject_mismatch: bool,
-) -> str:
-    """Resolve the billed user with the standard pass-through error responses."""
+) -> tuple[str, uuid.UUID | None]:
+    """Resolve the billed identity with the standard pass-through error responses.
+
+    Both spellings, for the reason :func:`resolve_billed_identity` gives: the
+    handle gates and rate-limits, the id is what a usage row stores.
+    """
     api_key, is_master_key = auth_result
-    return resolve_user_id(
+    return await resolve_billed_identity(
+        db,
         user_id_from_request=user,
         api_key=api_key,
         is_master_key=is_master_key,
@@ -230,7 +237,9 @@ async def run_passthrough(
     budget_exempt = api_key is not None and api_key.exclude_from_budget
 
     try:
-        user_id = resolve_passthrough_user_id(auth_result, user, reject_mismatch=config.reject_user_mismatch)
+        user_id, identity_id = await resolve_passthrough_user_id(
+            db, auth_result, user, reject_mismatch=config.reject_user_mismatch
+        )
     except HTTPException as exc:
         # Only the user/key mismatch (403) has a user to attribute the drop to;
         # see log_gateway_rejection for the rejections that deliberately do not
@@ -240,10 +249,16 @@ async def run_passthrough(
         # Also like its counterpart, this gate precedes check_rate_limit, so the
         # write is charged to the key's own bucket and skipped once throttled
         # (see throttle_early_rejection). The response stays 403.
+        # The bucket is the key owner's handle, which is what the accepted path
+        # charges below; billing this refusal to the stored id instead would
+        # split one caller's throttling across two buckets. Looked up here
+        # rather than kept from the resolve above, because that call raised.
+        key_owner = await external_id_for(db, api_key.user_id) if api_key is not None else None
         if (
             exc.status_code == status.HTTP_403_FORBIDDEN
             and api_key is not None
-            and not throttle_early_rejection(raw_request, str(api_key.user_id))
+            and key_owner is not None
+            and not throttle_early_rejection(raw_request, key_owner)
         ):
             await log_gateway_rejection(
                 db=db,
@@ -273,7 +288,7 @@ async def run_passthrough(
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
-            user_id=user_id,
+            user_id=identity_id,
             model=row_model,
             provider=row_provider,
             endpoint=endpoint,
@@ -459,7 +474,7 @@ async def run_passthrough(
             id=str(uuid.uuid4()),
             workspace_id=usage_workspace_id,
             api_key_id=api_key_id,
-            user_id=user_id,
+            user_id=identity_id,
             timestamp=datetime.now(UTC),
             model=resolved.model,
             provider=resolved.instance,

@@ -123,7 +123,7 @@ async def _resolve_from_ref(
     *,
     db: AsyncSession | None,
     file_store: FileStore | None,
-    user_id: str | None,
+    user_id: uuid.UUID | None,
     workspace_id: uuid.UUID | None,
 ) -> tuple[bytes, str, str | None, bool] | None:
     """Resolve a ``{file_data|url|file_id, filename}`` descriptor to bytes.
@@ -156,7 +156,7 @@ async def _classify(
     *,
     db: AsyncSession | None,
     file_store: FileStore | None,
-    user_id: str | None,
+    user_id: uuid.UUID | None,
     workspace_id: uuid.UUID | None,
 ) -> _Source | None:
     """Identify an image/document block and resolve its bytes, or return None."""
@@ -312,7 +312,7 @@ async def _normalize_block(
     *,
     db: AsyncSession | None,
     file_store: FileStore | None,
-    user_id: str | None,
+    user_id: uuid.UUID | None,
     workspace_id: uuid.UUID | None,
 ) -> Any:
     if not isinstance(block, dict):
@@ -362,7 +362,7 @@ async def normalize_messages(
     fmt: WireFormat,
     db: AsyncSession | None,
     file_store: FileStore | None,
-    user_id: str | None,
+    user_id: uuid.UUID | None,
     workspace_id: uuid.UUID | None = None,
 ) -> tuple[list[dict[str, Any]], NormalizationStats]:
     """Return (possibly-rewritten messages, stats).

@@ -145,7 +145,7 @@ class KnnRoutingMemory:
             logger.warning("Router embedding failed (%s); serving the policy default", type(exc).__name__)
             return RoutingDecision.decline(f"embedding error ({type(exc).__name__})")
 
-        records = await self._load_records(ctx.user_id, ctx.task_id, ctx.workspace_id)
+        records = await self._load_records(ctx.identity_id, ctx.task_id, ctx.workspace_id)
         if len(records) < self.seed_count:
             partition = f" and task '{ctx.task_id}'" if ctx.task_id else ""
             return RoutingDecision.decline(
@@ -175,7 +175,7 @@ class KnnRoutingMemory:
     async def record_preference(
         self,
         *,
-        user_id: str,
+        user_id: uuid.UUID,
         workspace_id: uuid.UUID,
         prompt: str,
         scores: dict[str, float],
@@ -353,7 +353,7 @@ class KnnRoutingMemory:
     # -- storage / retrieval ------------------------------------------------
 
     async def _load_records(
-        self, user_id: str, task_id: str | None, workspace_id: uuid.UUID | None = None
+        self, user_id: uuid.UUID | None, task_id: str | None, workspace_id: uuid.UUID | None = None
     ) -> list[RoutingMemory]:
         """Load a user's records for the current embedding model, in one workspace.
 
@@ -367,6 +367,10 @@ class KnnRoutingMemory:
         both. Omitted only where there is no request to route (no backend is asked
         to rank there), which reads every workspace the user has records in.
         """
+        if user_id is None:
+            # No resolvable identity means no records to load, which the caller
+            # reads as a cold pool and answers with the policy default.
+            return []
         async with create_session() as db:
             stmt = select(RoutingMemory).where(
                 RoutingMemory.user_id == user_id,
@@ -390,7 +394,7 @@ class KnnRoutingMemory:
         sims.sort(key=lambda pair: pair[0], reverse=True)
         return sims[: self.k]
 
-    async def _evict_if_needed(self, user_id: str, workspace_id: uuid.UUID) -> None:
+    async def _evict_if_needed(self, user_id: uuid.UUID, workspace_id: uuid.UUID) -> None:
         """Keep at most ``max_records`` of the newest records per user and workspace.
 
         Applied within the partition the router reads, not across every workspace

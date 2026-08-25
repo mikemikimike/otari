@@ -220,14 +220,16 @@ def _knn(config: GatewayConfig) -> KnnRoutingMemory:
     return backend
 
 
-async def _require_user(db: AsyncSession, user_id: str) -> None:
-    """404 unless ``user_id`` names a live user.
+async def _require_user(db: AsyncSession, user_id: str) -> uuid.UUID:
+    """Return the identity ``user_id`` names, 404 unless it is a live one.
 
-    Routing memory rows carry a foreign key to the user, so an unknown id would
-    otherwise surface as an opaque 500 from the commit.
+    Routing memory rows carry a foreign key to the identity, so an unknown id
+    would otherwise surface as an opaque 500 from the commit.
     """
-    if await get_active_user(db, user_id) is None:
+    user = await get_active_user(db, user_id)
+    if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User '{user_id}' not found")
+    return user.id
 
 
 def _canonical(
@@ -348,7 +350,7 @@ def _learned_policies(
 
 
 async def _pool_counts(
-    db: AsyncSession, backend: KnnRoutingMemory, user_id: str, workspace_id: uuid.UUID
+    db: AsyncSession, backend: KnnRoutingMemory, user_id: uuid.UUID, workspace_id: uuid.UUID
 ) -> tuple[int, list[tuple[str, int]]]:
     """This user's record counts in one workspace, for the current embedding model.
 
@@ -396,7 +398,7 @@ async def rank_candidates(
     matches.
     """
     backend = _knn(config)
-    await _require_user(db, request.user_id)
+    identity_id = await _require_user(db, request.user_id)
     workspace_id = await resolve_managed_workspace_id(db, request.workspace_id)
     # Committed before the loop, because `record_preference` writes its
     # routing-memory row in a session of its own. On a deployment that has never
@@ -422,7 +424,7 @@ async def rank_candidates(
         scores = {normalized[selector]: score for selector, score in example.scores.items()}
         try:
             written = await backend.record_preference(
-                user_id=request.user_id,
+                user_id=identity_id,
                 workspace_id=workspace_id,
                 prompt=example.prompt,
                 scores=scores,
@@ -476,7 +478,7 @@ async def rank_candidates(
 
     # Warmth of every pool this batch wrote into: each named partition, plus the
     # default pool when any example carried no task label.
-    total, per_task = await _pool_counts(db, backend, request.user_id, workspace_id)
+    total, per_task = await _pool_counts(db, backend, identity_id, workspace_id)
     counts = dict(per_task)
     pools = [
         RecordedPool(
@@ -509,9 +511,9 @@ async def routing_memory_status(
     answer.
     """
     backend = _knn(config)
-    await _require_user(db, user_id)
+    identity_id = await _require_user(db, user_id)
     target_workspace_id = await resolve_managed_workspace_id(db, workspace_id)
-    total, per_task = await _pool_counts(db, backend, user_id, target_workspace_id)
+    total, per_task = await _pool_counts(db, backend, identity_id, target_workspace_id)
     seed = backend.seed_count
     return RouterStatus(
         user_id=user_id,

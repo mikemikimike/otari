@@ -60,6 +60,7 @@ exactly as the platform's own tenancy models do.
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import field_validator
@@ -67,6 +68,8 @@ from sqlalchemy import JSON, CheckConstraint, Column, DateTime, ForeignKey, Uniq
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, SQLModel
+
+from gateway.models.money import UsdCost
 
 ORGANIZATION_MEMBER_ROLES = {"owner", "admin", "member", "viewer"}
 ORGANIZATION_MEMBER_STATUSES = {"active", "invited", "suspended"}
@@ -155,7 +158,13 @@ class UtcDateTime(TypeDecorator[datetime]):
         return value
 
 
-def _timestamp_field(*, default: Any = None, default_factory: Any = None, column_kwargs: dict[str, Any]) -> Any:
+def _timestamp_field(
+    *,
+    default: Any = None,
+    default_factory: Any = None,
+    column_kwargs: dict[str, Any],
+    index: bool = False,
+) -> Any:
     """Build a timezone-aware timestamp field.
 
     Two things are worked around here, once, instead of at five inheriting
@@ -171,11 +180,13 @@ def _timestamp_field(*, default: Any = None, default_factory: Any = None, column
             default_factory=default_factory,
             sa_type=UtcDateTime(),
             sa_column_kwargs=column_kwargs,
+            index=index,
         )
     return Field(  # type: ignore[call-overload]
         default=default,
         sa_type=UtcDateTime(),
         sa_column_kwargs=column_kwargs,
+        index=index,
     )
 
 
@@ -232,17 +243,35 @@ class UserCreate(UserBase):
 
 
 class User(UserBase, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, table=True):
-    """An identity in the reconciled control plane.
+    """The one identity in otari, and the owner every request-plane row names.
 
-    Not to be confused with `entities.User`, the gateway's own string-keyed
-    per-request spend identity, which is what keys, budgets, and usage attach to.
-    Both exist, and how they converge is no longer settled: otari-ai#1719 made
-    otari's schema the survivor, which retired the pre-flip plan of re-parenting
-    the request plane onto this table through the identity bridge. otari-ai#1727
-    holds the open decision and names two candidates, re-pointing the
-    request-plane foreign keys here or keeping both with one authoritative. Until
-    it lands, ``ActiveOrganizationMemberPublic.attribution_user_id`` is the join
-    between the two.
+    otari-ai#1727 settled the split this class used to describe: there is no
+    second identity table any more. ``users`` (string primary key, spend,
+    reserved) is gone, and the ten request-plane foreign keys that pointed at it
+    (``api_keys``, ``usage_logs``, ``budget_reset_logs``, ``model_aliases``,
+    ``routing_policies``, ``routing_memory``, ``router_preferences``,
+    ``file_objects``, ``batches``, ``agent_telemetry``) point at ``user.id``.
+
+    ``external_id`` is what makes that survivable. It carries the
+    operator-defined string the old primary key held, unique and indexed, so
+    every id an operator typed into ``config.yml``, every ``user`` field a
+    client sends, and every live API key keep resolving to the same row with no
+    re-issue. It is the wire spelling of an identity throughout the request
+    plane and the management API; ``id`` is the storage spelling, and nothing
+    outside this table stores the string any more.
+
+    An identity minted by tenancy (provisioning, an added organization member)
+    gets ``external_id = str(id)``, which is exactly what
+    ``ActiveOrganizationMemberPublic.attribution_user_id`` already published
+    while the two tables were separate, so the roster's join survived the
+    convergence unchanged. That is also what retired the shadow-row minting
+    otari-ai#1727 was filed against: a member no longer needs a second row
+    minted for it before it can own a key, because it already is the row.
+
+    The budget gate's live state lives here too (``spend``, ``reserved``,
+    ``budget_id``, the window timestamps), because it has to live wherever the
+    identity does; ``gateway.services.budget_service`` is the only thing that
+    writes the two counters.
 
     ``email`` is nullable and unique. PostgreSQL and SQLite both allow repeated
     NULLs in a unique index, so email-less local identities coexist without
@@ -315,6 +344,81 @@ class User(UserBase, PrimaryKeyMixin, CreatedAtMixin, UpdatedAtMixin, table=True
         ondelete="SET NULL",
         index=True,
     )
+
+    # =========================================================================
+    # Request plane (otari-ai#1727)
+    #
+    # What the ``users`` table carried before it was folded into this one. The
+    # columns keep their old names and semantics so the wire contract, the
+    # budget gate and the reset ledger did not have to move at the same time as
+    # the identity did.
+    # =========================================================================
+
+    # The operator-defined handle, and the old ``users.user_id`` primary key
+    # verbatim. NOT NULL and unique: every identity is nameable by the request
+    # plane, so "no external id" is never a real state. Tenancy mints
+    # ``str(id)`` for its own rows, which is the value the roster already
+    # published as ``attribution_user_id``.
+    external_id: str = Field(unique=True, index=True, max_length=255)
+    alias: str | None = Field(default=None, max_length=255)
+    # The spend ledger, exact to the micro-dollar like the ``usage_logs`` rows
+    # that sum into it (mozilla-ai/otari#691). As a float it drifted: four
+    # completions whose settled costs were each exact left this at
+    # 0.6619999999999999, and the drift accumulated across every reconcile until
+    # the budget reset.
+    spend: Decimal = Field(default=Decimal(0), sa_type=UsdCost())  # type: ignore[call-overload]
+    # In-flight budget held by requests that have passed the budget gate but
+    # whose actual cost is not yet known. The effective committed amount is
+    # ``spend + reserved``; reservations are reconciled into ``spend`` (actual
+    # cost) on success or released on failure. See gateway.services.budget_service.
+    reserved: Decimal = Field(  # type: ignore[call-overload]
+        default=Decimal(0), sa_type=UsdCost(), sa_column_kwargs={"server_default": "0"}
+    )
+    # Indexed: the budgets list groups identities by this column to build each
+    # budget's usage rollup, so an unindexed FK turns that page into a table scan.
+    budget_id: str | None = Field(default=None, foreign_key="budgets.budget_id", index=True)
+    # Default model access-list every one of this identity's keys inherits when
+    # the key has no list of its own. null = unrestricted, [] = deny all, else
+    # canonical instance:model entries (see services/model_access.py). A key may
+    # narrow this default but never broaden it (validated on key write).
+    allowed_models: list[str] | None = Field(default=None, sa_type=JSON)
+    budget_started_at: datetime | None = _timestamp_field(default=None, column_kwargs={})
+    next_budget_reset_at: datetime | None = _timestamp_field(default=None, column_kwargs={})
+    # The request plane's own block, distinct from ``is_active``: that one says
+    # whether the identity may sign in to the dashboard, this one whether the
+    # budget gate admits its requests. Convergence kept both rather than
+    # conflating them, because an operator suspending a member's spend is not
+    # the same act as deactivating their login.
+    blocked: bool = Field(default=False)
+    # Soft delete. The row is never hard-deleted: usage, batches and reset logs
+    # name it, and their history has to stay resolvable. A deleted identity owns
+    # no keys (``DELETE /v1/users`` deactivates them) and the roster reports its
+    # ``attribution_user_id`` as null.
+    deleted_at: datetime | None = _timestamp_field(default=None, column_kwargs={}, index=True)
+    # Attribute name avoids SQLAlchemy's ``metadata``; the column keeps the name
+    # the ``users`` table published, so the API field did not move.
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSON, nullable=False, server_default="{}"),
+    )
+
+    def __init__(self, **data: Any) -> None:
+        """Default ``external_id`` to the identity's own id.
+
+        An identity always names itself on the request plane, and the only
+        callers that have a handle to supply are the two that take one from an
+        operator (``POST /v1/users``, ``POST /v1/keys``). Everything tenancy
+        mints would otherwise have to repeat ``str(uuid)`` twice, and forgetting
+        it would be a NOT NULL violation at flush rather than a compile error.
+        The id is settled here rather than left to the column default so the
+        handle can be derived from it.
+
+        Only construction goes through this. SQLAlchemy populates a loaded row
+        without calling ``__init__``, so nothing here can rewrite stored state.
+        """
+        data.setdefault("id", uuid.uuid4())
+        data.setdefault("external_id", str(data["id"]))
+        super().__init__(**data)
 
 
 # =============================================================================
@@ -528,14 +632,13 @@ class ActiveOrganizationMemberPublic(SQLModel):
     rehomes, which is what fills it.
 
     ``attribution_user_id`` is the addition the platform has no counterpart for.
-    Keys, budgets, and usage attach to the gateway's string-keyed ``users`` row,
-    not to this UUID identity, so this carries the ``user_id`` a caller passes to
-    ``POST /v1/keys`` to give this member a key. It is null when no usable row
-    exists (nobody minted one, or it was soft-deleted through
-    ``DELETE /v1/users``), which is the signal not to offer this member as a key
-    owner: key creation would refuse. How the two ids converge is the open
-    question in otari-ai#1727; this field is the join until it is answered, and
-    is what lets either answer land without the dashboard changing.
+    It carries the ``user_id`` a caller passes to ``POST /v1/keys`` to give this
+    member a key, which since otari-ai#1727 is the member's own
+    ``user.external_id`` rather than a second row's primary key. The value did
+    not move: a tenancy-minted identity's ``external_id`` is its own id rendered
+    as a string, which is what this field always published. It is null when the
+    identity is soft-deleted (``DELETE /v1/users``), which is the signal not to
+    offer this member as a key owner: key creation would refuse.
     """
 
     organization_member_id: uuid.UUID | None = None

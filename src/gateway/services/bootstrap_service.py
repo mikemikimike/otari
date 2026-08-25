@@ -9,7 +9,7 @@ from gateway.core.config import GatewayConfig
 from gateway.log_config import log_secret
 from gateway.models.entities import APIKey
 from gateway.repositories.users_repository import get_or_create_default_user
-from gateway.services.workspace_scope import default_workspace_id
+from gateway.services.workspace_scope import default_organization_id, default_workspace_id
 
 
 async def bootstrap_first_api_key(config: GatewayConfig, db: AsyncSession) -> None:
@@ -26,8 +26,11 @@ async def bootstrap_first_api_key(config: GatewayConfig, db: AsyncSession) -> No
     key_id = str(uuid.uuid4())
 
     # The bootstrap key has no explicit owner, so it lands on the shared "default"
-    # user like any other no-user key, rather than a per-key virtual user.
-    user = await get_or_create_default_user(db)
+    # user like any other no-user key, rather than a per-key virtual user. That
+    # identity is scoped to the default organization, the same place the
+    # workspace below comes from: it is created before anyone could have picked
+    # either.
+    user = await get_or_create_default_user(db, organization_id=await default_organization_id(db))
 
     db_key = APIKey(
         id=key_id,
@@ -38,7 +41,7 @@ async def bootstrap_first_api_key(config: GatewayConfig, db: AsyncSession) -> No
         key_hash=hash_key(api_key),
         key_prefix=key_prefix(api_key),
         key_name="bootstrap",
-        user_id=user.user_id,
+        user_id=user.id,
         metadata_={"bootstrap": True},
     )
     db.add(db_key)

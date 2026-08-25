@@ -66,6 +66,7 @@ from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.models.entities import APIKey
 from gateway.ports.telemetry_storage_port import TelemetryRecord
+from gateway.repositories.users_repository import external_id_for
 from gateway.services.agent_telemetry_service import (
     CUMULATIVE,
     DELTA,
@@ -488,6 +489,11 @@ async def receive_logs(
     assert isinstance(parsed, ExportLogsServiceRequest)
 
     capture_telemetry = _capture_telemetry(api_key, config)
+    # The owner's handle, resolved once per export rather than per record. It is
+    # folded into every dedup key, so it has to stay the spelling the keys were
+    # minted under before otari-ai#1727 moved the column to ``user.id``, or a
+    # replayed export would be stored a second time.
+    owner = await external_id_for(db, api_key.user_id)
     pairs: list[tuple[str, ExternalUsageEvent]] = []
     telemetry: list[TelemetryRecord] = []
     for resource_logs in parsed.resource_logs:
@@ -509,7 +515,7 @@ async def receive_logs(
                         attrs,
                         timestamp=timestamp,
                         source="claude_code",
-                        user_id=api_key.user_id,
+                        user_id=owner,
                     )
                     if behavioral is not None:
                         telemetry.append(behavioral)
@@ -561,6 +567,11 @@ async def receive_metrics(
     assert isinstance(parsed, ExportMetricsServiceRequest)
 
     capture_telemetry = _capture_telemetry(api_key, config)
+    # The owner's handle, resolved once per export rather than per record. It is
+    # folded into every dedup key, so it has to stay the spelling the keys were
+    # minted under before otari-ai#1727 moved the column to ``user.id``, or a
+    # replayed export would be stored a second time.
+    owner = await external_id_for(db, api_key.user_id)
     telemetry: list[TelemetryRecord] = []
     seen_points = 0
     for resource_metrics in parsed.resource_metrics:
@@ -602,7 +613,7 @@ async def receive_metrics(
                         _attributes(point.attributes),
                         timestamp=timestamp,
                         source="claude_code",
-                        user_id=api_key.user_id,
+                        user_id=owner,
                     )
                     if mapped is not None:
                         telemetry.append(mapped)

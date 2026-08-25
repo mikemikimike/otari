@@ -7,8 +7,8 @@ from gateway.models.entities import (
     ModelPricing,
     PricingSnapshot,
     UsageLog,
-    User,
 )
+from gateway.models.tenancy import User
 from gateway.repositories.users_repository import get_active_user
 
 __all__ = [

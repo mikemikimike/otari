@@ -15,6 +15,7 @@ from gateway.core.env import otari_env
 from gateway.log_config import logger
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.tenancy import Workspace
+from gateway.repositories.users_repository import external_id_for, resolve_identity_id
 from gateway.services.guardrails import GuardrailsNotReachableError, run_input_guardrails
 from gateway.services.routing.decide import RoutingSignal
 from gateway.services.url_safety import UnsafeURLError
@@ -35,6 +36,7 @@ def resolve_user_id(
     api_key: APIKey | None,
     is_master_key: bool,
     *,
+    key_owner: str | None = None,
     master_key_error: HTTPException,
     no_api_key_error: HTTPException,
     no_user_error: HTTPException,
@@ -55,6 +57,12 @@ def resolve_user_id(
         user_id_from_request: User identifier extracted from the request body
         api_key: Authenticated API key object (None when using master key)
         is_master_key: Whether the request was authenticated with a master key
+        key_owner: The handle (``user.external_id``) ``api_key.user_id`` names.
+            Passed in rather than read off the key: since otari-ai#1727 the
+            column stores ``user.id`` while every id in play here (a client's
+            ``user`` field, a ``config.yml`` scope, a rate-limit bucket) is the
+            operator-defined handle. :func:`resolve_billed_identity` is what
+            resolves it; this function stays pure.
         master_key_error: Raised when master key is used but no user_id is provided
         no_api_key_error: Raised when no API key is available
         no_user_error: Raised when the API key has no associated user
@@ -79,9 +87,9 @@ def resolve_user_id(
 
     if api_key is None:
         raise no_api_key_error
-    if not api_key.user_id:
+    if not api_key.user_id or not key_owner:
         raise no_user_error
-    key_user_id = str(api_key.user_id)
+    key_user_id = key_owner
 
     # A non-master key is bound to its own user. Allow the request to echo that
     # same id; a different id is rejected (strict) or ignored (lenient) — either
@@ -96,6 +104,49 @@ def resolve_user_id(
         raise forbidden_user_error
 
     return key_user_id
+
+
+async def resolve_billed_identity(
+    db: AsyncSession,
+    user_id_from_request: str | None,
+    api_key: APIKey | None,
+    is_master_key: bool,
+    *,
+    master_key_error: HTTPException,
+    no_api_key_error: HTTPException,
+    no_user_error: HTTPException,
+    forbidden_user_error: HTTPException,
+    reject_mismatch: bool = True,
+) -> tuple[str, uuid.UUID | None]:
+    """The billed identity, as both spellings the request needs.
+
+    Returns ``(handle, identity_id)``: the operator-defined string every
+    config-driven decision keys on (per-user aliases and policies, the rate-limit
+    bucket, the client-supplied ``user`` comparison) and the primary key every
+    request-plane row stores (otari-ai#1727).
+
+    Exactly one indexed lookup either way, and never two. A keyed request already
+    holds its owner's id on the key row, so only the handle is fetched; a
+    master-key request names a handle, so only the id is. ``identity_id`` is
+    ``None`` when the named handle resolves to no row, which is not refused here:
+    ``reserve_budget`` is what answers 404 for an unknown user, and refusing
+    earlier would change which error an unknown ``user`` field gets.
+    """
+    key_owner = await external_id_for(db, api_key.user_id) if api_key is not None else None
+    user_id = resolve_user_id(
+        user_id_from_request=user_id_from_request,
+        api_key=api_key,
+        is_master_key=is_master_key,
+        key_owner=key_owner,
+        master_key_error=master_key_error,
+        no_api_key_error=no_api_key_error,
+        no_user_error=no_user_error,
+        forbidden_user_error=forbidden_user_error,
+        reject_mismatch=reject_mismatch,
+    )
+    if api_key is not None and user_id == key_owner:
+        return user_id, api_key.user_id
+    return user_id, await resolve_identity_id(db, user_id)
 
 
 def text_from_content(content: Any) -> str:

@@ -13,8 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from gateway.models.entities import OrganizationModelPricing, UsageLog, User
-from gateway.models.tenancy import Organization, Workspace
+from gateway.models.entities import OrganizationModelPricing, UsageLog
+from gateway.models.tenancy import Organization, User, Workspace
 
 _SRC = "claude_code"
 _MODEL_KEY = "anthropic:claude-sonnet-4-6"

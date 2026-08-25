@@ -9,6 +9,7 @@ exist, or asking at all when the caller said not to.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -55,6 +56,10 @@ def config() -> GatewayConfig:
         model_discovery=False,
         providers={"openai": {"api_key": "sk-openai"}, "anthropic": {"api_key": "sk-anthropic"}},
     )
+
+# The caller's stored id, which a routing context carries since otari-ai#1727.
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-0000000000cc")
+
 
 
 def _spec(*candidates: str, default: str = "openai:gpt-5", backend: str = "knn") -> PolicySpec:
@@ -162,7 +167,12 @@ def test_noop_backend_declines() -> None:
 @pytest.mark.asyncio
 async def test_noop_decline_is_empty() -> None:
     decision = await NoOpRouterBackend().rank(
-        RoutingContext(user_id="u", default_model="openai:gpt-5", candidate_pool=["openai:gpt-5-mini"])
+        RoutingContext(
+            user_id="u",
+            identity_id=_IDENTITY,
+            default_model="openai:gpt-5",
+            candidate_pool=["openai:gpt-5-mini"],
+        )
     )
     assert decision.ordered_models == []
 
@@ -188,7 +198,7 @@ async def test_an_unknown_backend_warns_once_per_policy(
     unknown = _spec(backend="cheapest")
     for _ in range(3):
         ordering = await decide_ordering(
-            config, unknown, policy_name="first", user_id="u", allowlist=None, signal=_signal()
+            config, unknown, policy_name="first", user_id="u", identity_id=_IDENTITY, allowlist=None, signal=_signal()
         )
     assert ordering is None
     warnings = router_warnings()
@@ -199,7 +209,7 @@ async def test_an_unknown_backend_warns_once_per_policy(
     assert "openai:gpt-5" in warnings[0]
 
     await decide_ordering(
-        config, unknown, policy_name="second", user_id="u", allowlist=None, signal=_signal()
+        config, unknown, policy_name="second", user_id="u", identity_id=_IDENTITY, allowlist=None, signal=_signal()
     )
     assert len(router_warnings()) == 2
 
@@ -212,7 +222,13 @@ async def test_a_decline_is_not_warned_about(
     # would log a line for every request a cold router serves, which is all of them
     # until someone teaches it.
     await decide_ordering(
-        config, _spec(), policy_name="smart", user_id="u", allowlist=None, signal=_signal(opted_out=True)
+        config,
+        _spec(),
+        policy_name="smart",
+        user_id="u",
+        identity_id=_IDENTITY,
+        allowlist=None,
+        signal=_signal(opted_out=True),
     )
     assert router_warnings() == []
 
@@ -254,7 +270,7 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 async def test_a_policy_without_a_router_is_not_asked(config: GatewayConfig) -> None:
     static = PolicySpec.model_validate({"select": [{"default": "openai:gpt-5"}]})
     assert await decide_ordering(
-        config, static, policy_name="fast", user_id="u", allowlist=None, signal=_signal()
+        config, static, policy_name="fast", user_id="u", identity_id=_IDENTITY, allowlist=None, signal=_signal()
     ) is None
 
 
@@ -262,7 +278,7 @@ async def test_a_policy_without_a_router_is_not_asked(config: GatewayConfig) -> 
 async def test_a_surface_with_no_request_is_not_asked(config: GatewayConfig, recorder: _Recorder) -> None:
     # `explain` and the model catalog have no prompt to route on.
     assert await decide_ordering(
-        config, _spec(), policy_name="smart", user_id="u", allowlist=None, signal=None
+        config, _spec(), policy_name="smart", user_id="u", identity_id=_IDENTITY, allowlist=None, signal=None
     ) is None
     assert recorder.seen is None
 
@@ -270,7 +286,13 @@ async def test_a_surface_with_no_request_is_not_asked(config: GatewayConfig, rec
 @pytest.mark.asyncio
 async def test_the_caller_opt_out_declines_without_asking(config: GatewayConfig, recorder: _Recorder) -> None:
     ordering = await decide_ordering(
-        config, _spec(), policy_name="smart", user_id="u", allowlist=None, signal=_signal(opted_out=True)
+        config,
+        _spec(),
+        policy_name="smart",
+        user_id="u",
+        identity_id=_IDENTITY,
+        allowlist=None,
+        signal=_signal(opted_out=True),
     )
     assert ordering is not None
     assert ordering.selectors == []
@@ -290,6 +312,7 @@ async def test_the_pool_is_filtered_before_the_backend_sees_it(
         _spec("openai:gpt-5-mini", "anthropic:claude-haiku-4-5"),
         policy_name="smart",
         user_id="u",
+        identity_id=_IDENTITY,
         allowlist=["openai:*"],
         signal=_signal(),
     )
@@ -307,6 +330,7 @@ async def test_an_unresolvable_candidate_is_left_out(config: GatewayConfig, reco
         _spec("openai:gpt-5-mini", "not-a-provider:whatever"),
         policy_name="smart",
         user_id="u",
+        identity_id=_IDENTITY,
         allowlist=None,
         signal=_signal(),
     )
@@ -321,6 +345,7 @@ async def test_nothing_usable_declines_rather_than_asking(config: GatewayConfig,
         _spec("openai:gpt-5-mini", "openai:gpt-5", default="openai:gpt-5"),
         policy_name="smart",
         user_id="u",
+        identity_id=_IDENTITY,
         allowlist=["anthropic:*"],
         signal=_signal(),
     )
@@ -350,7 +375,7 @@ async def test_a_backend_that_raises_declines_rather_than_failing_the_request(
     )
 
     ordering = await decide_ordering(
-        config, _spec(), policy_name="smart", user_id="u", allowlist=None, signal=_signal()
+        config, _spec(), policy_name="smart", user_id="u", identity_id=_IDENTITY, allowlist=None, signal=_signal()
     )
 
     assert ordering is not None
@@ -379,7 +404,7 @@ async def test_a_backend_that_hangs_declines_at_the_deadline(
     monkeypatch.setattr("gateway.services.routing.decide.ROUTER_DEADLINE_SECONDS", 0.05)
 
     ordering = await decide_ordering(
-        config, _spec(), policy_name="smart", user_id="u", allowlist=None, signal=_signal()
+        config, _spec(), policy_name="smart", user_id="u", identity_id=_IDENTITY, allowlist=None, signal=_signal()
     )
 
     assert ordering is not None
@@ -394,6 +419,7 @@ async def test_the_request_headers_reach_the_backend(config: GatewayConfig, reco
         _spec(),
         policy_name="smart",
         user_id="user-7",
+        identity_id=_IDENTITY,
         allowlist=None,
         signal=_signal(conversation_id="conv-1", task_id="summarize", has_tools=True, is_continuation=True),
     )

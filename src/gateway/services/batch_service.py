@@ -29,7 +29,7 @@ async def record_batch(
     *,
     batch_id: str,
     provider: str,
-    user_id: str,
+    user_id: uuid.UUID,
     api_key_id: str | None,
     model: str,
     workspace_id: uuid.UUID | None = None,

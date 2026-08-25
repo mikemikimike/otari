@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from gateway.models.entities import BudgetResetLog, ScopedBudget, User, WorkspaceBudgetDefault
-from gateway.models.tenancy import Organization, Workspace
+from gateway.models.entities import BudgetResetLog, ScopedBudget, WorkspaceBudgetDefault
+from gateway.models.tenancy import Organization, User, Workspace
 
 
 def _make_budget(client: TestClient, headers: dict[str, str], max_budget: float | None = 100.0) -> str:

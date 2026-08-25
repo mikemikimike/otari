@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.api.deps import TelemetryStoragePortDep, get_db, verify_master_key
 
@@ -45,6 +46,7 @@ from gateway.ports.telemetry_storage_port import (
     TelemetryScanTooLargeError,
     TelemetryStoragePort,
 )
+from gateway.repositories.users_repository import owned_by_handles
 from gateway.services.agent_telemetry_admin_service import (
     AgentTelemetryDeleteRequest,
     AgentTelemetryDeleteResult,
@@ -268,7 +270,10 @@ def _usage_filters(
     """
     conditions: list[ColumnElement[bool]] = [UsageLog.timestamp >= start, UsageLog.timestamp < end]
     if user_id:
-        conditions.append(match_any(UsageLog.user_id, user_id))
+        # Named as handles, stored as ids (otari-ai#1727), and scoped exactly the
+        # way the telemetry side of the join is, so the two halves cannot select
+        # different owners.
+        conditions.append(owned_by_handles(col(UsageLog.user_id), user_id))
     if api_key_id:
         conditions.append(match_any(UsageLog.api_key_id, api_key_id))
     if session_label is not None:

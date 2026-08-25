@@ -6,6 +6,7 @@ rather than a failed export, so it is asserted on the round trips it issues and
 not only on the counts it returns.
 """
 
+import uuid
 from datetime import UTC, datetime
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
@@ -30,6 +31,18 @@ def _record(dedup_key: str, source: str = "claude_code") -> TelemetryRecord:
     )
 
 
+# The identity behind the handle every test exports as. ``record`` resolves the
+# port's handle to it once per export (otari-ai#1727), which is the first
+# ``execute`` any of these sessions sees.
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-0000000000ee")
+
+
+def _resolved_identity() -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = _IDENTITY
+    return result
+
+
 def _adapter(db: AsyncMock) -> DatabaseTelemetryStorageAdapter:
     return DatabaseTelemetryStorageAdapter(cast(AsyncSession, db))
 
@@ -45,6 +58,7 @@ async def test_record_batches_non_colliding_records_in_one_bulk_insert() -> None
     """N non-colliding records issue one add_all + commit(), not N nested savepoints."""
     db = AsyncMock()
     db.add_all = MagicMock()
+    db.execute.return_value = _resolved_identity()
 
     result = await _adapter(db).record(
         api_key_id="key-1", user_id="alice", records=tuple(_record(f"dedup-{i}") for i in range(5))
@@ -62,11 +76,12 @@ async def test_record_attributes_every_row_to_the_exporting_key_and_user() -> No
     """Attribution comes from the port call, not from the record."""
     db = AsyncMock()
     db.add_all = MagicMock()
+    db.execute.return_value = _resolved_identity()
 
     await _adapter(db).record(api_key_id="key-1", user_id="alice", records=(_record("dedup-0"),))
 
     row = db.add_all.call_args[0][0][0]
-    assert (row.api_key_id, row.user_id) == ("key-1", "alice")
+    assert (row.api_key_id, row.user_id) == ("key-1", _IDENTITY)
     # The dedup-only fields are not columns; the key derived from them is what is stored.
     assert row.dedup_key == "dedup-0"
     assert not hasattr(row, "tool_use_id")
@@ -77,6 +92,7 @@ async def test_record_batches_each_source_separately() -> None:
     """The uniqueness constraint is (source, dedup_key), so batches are per source."""
     db = AsyncMock()
     db.add_all = MagicMock()
+    db.execute.return_value = _resolved_identity()
 
     result = await _adapter(db).record(
         api_key_id="key-1",
@@ -94,7 +110,8 @@ async def test_record_retries_only_survivors_after_a_collision() -> None:
     failure, and the retry bulk-inserts only the surviving records."""
     db = AsyncMock()
     db.add_all = MagicMock()
-    db.execute.side_effect = [_existing("dedup-0")]
+    db.execute.return_value = _resolved_identity()
+    db.execute.side_effect = [_resolved_identity(), _existing("dedup-0")]
     db.commit.side_effect = [IntegrityError("insert", {}, Exception("dup")), None]
 
     result = await _adapter(db).record(
@@ -115,7 +132,8 @@ async def test_record_reports_all_duplicates_when_nothing_survives_the_first_col
     the whole batch is reported as duplicate."""
     db = AsyncMock()
     db.add_all = MagicMock()
-    db.execute.side_effect = [_existing("dedup-0")]
+    db.execute.return_value = _resolved_identity()
+    db.execute.side_effect = [_resolved_identity(), _existing("dedup-0")]
     db.commit.side_effect = [IntegrityError("insert", {}, Exception("dup"))]
 
     result = await _adapter(db).record(api_key_id="key-1", user_id="alice", records=(_record("dedup-0"),))
@@ -133,8 +151,9 @@ async def test_record_falls_back_to_row_at_a_time_after_a_second_collision() -> 
     and only the rows that still fail are reported as duplicate."""
     db = AsyncMock()
     db.add_all = MagicMock()
+    db.execute.return_value = _resolved_identity()
     db.add = MagicMock()
-    db.execute.side_effect = [_existing("dedup-0")]
+    db.execute.side_effect = [_resolved_identity(), _existing("dedup-0")]
     db.commit.side_effect = [
         IntegrityError("insert", {}, Exception("dup")),  # whole-batch insert
         IntegrityError("insert", {}, Exception("dup")),  # retry bulk insert of survivors
@@ -165,6 +184,7 @@ async def test_record_drops_in_export_repeats_before_the_insert() -> None:
     """
     db = AsyncMock()
     db.add_all = MagicMock()
+    db.execute.return_value = _resolved_identity()
 
     result = await _adapter(db).record(
         api_key_id="key-1",
@@ -184,6 +204,7 @@ async def test_record_drops_in_export_repeats_before_the_insert() -> None:
 async def test_record_stores_nothing_for_an_empty_export() -> None:
     db = AsyncMock()
     db.add_all = MagicMock()
+    db.execute.return_value = _resolved_identity()
 
     result = await _adapter(db).record(api_key_id="key-1", user_id="alice", records=())
 

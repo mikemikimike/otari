@@ -58,6 +58,11 @@ def config() -> GatewayConfig:
         },
     )
 
+# The caller's stored id: a routing context carries one since otari-ai#1727,
+# even where nothing in the test reads routing memory.
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-0000000000bb")
+
+
 
 # The routing-memory surfaces are workspace-scoped; these tests are about which
 # backends read a pool at all, so any one workspace stands for all of them.
@@ -89,7 +94,11 @@ def _spec(
 def _rank(pool: list[str], weights: dict[str, float], seed: int = 0) -> list[str]:
     backend = WeightedRouterBackend(random.Random(seed))
     ctx = RoutingContext(
-        user_id="alice", default_model=pool[-1], candidate_pool=pool, weights=weights
+        user_id="alice",
+        identity_id=_IDENTITY,
+        default_model=pool[-1],
+        candidate_pool=pool,
+        weights=weights,
     )
     return asyncio.run(backend.rank(ctx)).ordered_models
 
@@ -265,7 +274,11 @@ def test_the_zero_weight_tail_keeps_declared_order() -> None:
 def test_the_backend_declines_when_no_candidate_is_usable() -> None:
     backend = WeightedRouterBackend(random.Random(0))
     decision = asyncio.run(
-        backend.rank(RoutingContext(user_id="alice", default_model="openai:gpt-5", candidate_pool=[]))
+        backend.rank(
+            RoutingContext(
+                user_id="alice", identity_id=_IDENTITY, default_model="openai:gpt-5", candidate_pool=[]
+            )
+        )
     )
     assert decision.ordered_models == []
 
@@ -277,7 +290,10 @@ def test_the_backend_declines_a_policy_with_no_weights() -> None:
     decision = asyncio.run(
         backend.rank(
             RoutingContext(
-                user_id="alice", default_model="openai:gpt-5", candidate_pool=["openai:gpt-5", "a:b"]
+                user_id="alice",
+                identity_id=_IDENTITY,
+                default_model="openai:gpt-5",
+                candidate_pool=["openai:gpt-5", "a:b"],
             )
         )
     )
@@ -293,6 +309,7 @@ def test_a_weighted_decision_is_not_logged_per_request() -> None:
         backend.rank(
             RoutingContext(
                 user_id="alice",
+                identity_id=_IDENTITY,
                 default_model="openai:gpt-5",
                 candidate_pool=["openai:gpt-5", "anthropic:claude-sonnet-4-5"],
                 weights={"openai:gpt-5": 1, "anthropic:claude-sonnet-4-5": 1},
@@ -382,6 +399,7 @@ def test_the_ordering_becomes_the_plan_ahead_of_on_failure(config: GatewayConfig
             spec,
             policy_name="balanced",
             user_id="alice",
+            identity_id=_IDENTITY,
             allowlist=None,
             signal=RoutingSignal(task_signal="hi", trace_signal="hi", trace_anchor="hi"),
         )
@@ -407,6 +425,7 @@ def test_the_caller_can_opt_out_and_get_the_default(config: GatewayConfig) -> No
             spec,
             policy_name="balanced",
             user_id="alice",
+            identity_id=_IDENTITY,
             allowlist=None,
             signal=RoutingSignal(opted_out=True),
         )
@@ -426,6 +445,7 @@ def test_a_filtered_pool_only_ranks_what_the_caller_may_use(config: GatewayConfi
             spec,
             policy_name="balanced",
             user_id="alice",
+            identity_id=_IDENTITY,
             allowlist=["anthropic:*"],
             signal=RoutingSignal(task_signal="hi", trace_signal="hi", trace_anchor="hi"),
         )

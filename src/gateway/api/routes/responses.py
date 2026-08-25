@@ -453,7 +453,7 @@ async def create_response(
     max_output_tokens = raw_max_output if isinstance(raw_max_output, int) and raw_max_output >= 0 else None
 
     async def _normalize(
-        user_id: str,
+        user_id: uuid.UUID | None,
         provider: LLMProvider | None,
         model: str,
         instance: str | None,

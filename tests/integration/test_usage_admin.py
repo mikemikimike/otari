@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from conftest import seed_workspace_id
 from gateway.core.sql import MAX_FILTER_VALUES
-from gateway.models.entities import UsageLog, User
+from gateway.models.entities import UsageLog
+from gateway.models.tenancy import User
 
 DELETE_PATH = "/v1/usage"
 SET_PRICE_PATH = "/v1/usage/set-price"

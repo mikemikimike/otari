@@ -75,8 +75,7 @@ from gateway.repositories.tenancy import (
     WorkspaceRepository,
 )
 from gateway.repositories.users_repository import (
-    get_or_create_attribution_user,
-    live_attribution_user_ids,
+    live_identity_ids,
 )
 from gateway.services.mail import Mailer
 from gateway.services.tenancy.email_address import validated_email as _validated_email
@@ -526,7 +525,7 @@ class OrganizationService:
         # One query for the whole page rather than a lookup per row: the roster is
         # the picker the dashboard builds its key-owner list from, so every row
         # needs to say whether it can own a key.
-        live = await live_attribution_user_ids(self.db, [str(member_user.id) for _, member_user in rows])
+        live = await live_identity_ids(self.db, [member_user.id for _, member_user in rows])
         # Likewise for which invited rows have a pending invitation to revoke:
         # one query for the page's invited memberships rather than one per row.
         pending = await self.invitations.get_pending_by_organization_members(
@@ -621,14 +620,18 @@ class OrganizationService:
                     {"role": request.role, "status": "active"},
                 )
 
-            # After both branches, not inside either: keyed on the identity's
-            # UUID, so the create path mints and the revive path finds the row it
-            # minted the first time rather than a second one.
-            attribution = await get_or_create_attribution_user(
-                self.db,
-                user_id=str(target.id),
-                alias=email,
-            )
+            # After both branches, not inside either. Since otari-ai#1727 the
+            # member and its request-plane owner are one row, so adding someone
+            # mints nothing here; what it still has to undo is a soft delete, so
+            # that re-adding a member whose ``DELETE /v1/users`` removed them
+            # gives them back an owner ``POST /v1/keys`` accepts. The counters
+            # are deliberately untouched: ``spend`` and ``budget_id`` carry over,
+            # so removing and re-adding someone cannot clear their spend against
+            # a budget.
+            if target.deleted_at is not None:
+                target.deleted_at = None
+            if target.alias is None:
+                target.alias = email
 
             await self._apply_workspace_assignments(user_id=target.id, assignments=assignments)
             await self.db.commit()
@@ -643,7 +646,7 @@ class OrganizationService:
             status="active",
             organization_member_id=membership.id,
             user_id=target.id,
-            attribution_user_id=attribution.user_id,
+            attribution_user_id=target.external_id,
             email=email,
             full_name=target.full_name,
             role=membership.role,
@@ -1007,13 +1010,18 @@ class OrganizationService:
         # invitation permanently stuck pending).
         assignments = await self._drop_vanished_workspace_assignments(organization, assignments)
         await self._apply_workspace_assignments(user_id=membership.user_id, assignments=assignments)
-        # Same as the immediate-add path: keyed on the identity's UUID, so an
-        # address invited and later re-invited (revoke, then re-add) finds the
-        # row it minted the first time rather than a second one. Without this,
-        # an accepted invitee's roster row would carry no attribution_user_id
-        # and could never be offered as a key owner, unlike a member added
-        # directly through POST /me/members.
-        await get_or_create_attribution_user(self.db, user_id=str(membership.user_id), alias=invitation.email)
+        # Same as the immediate-add path: the member is the request-plane owner
+        # since otari-ai#1727, so nothing is minted here, but a soft delete is
+        # cleared. Without this, an accepted invitee whose identity had been
+        # deleted would carry no attribution_user_id on the roster and could
+        # never be offered as a key owner, unlike a member added directly
+        # through POST /me/members.
+        invited_user = await self.users.get(membership.user_id)
+        if invited_user is not None:
+            if invited_user.deleted_at is not None:
+                invited_user.deleted_at = None
+            if invited_user.alias is None:
+                invited_user.alias = invitation.email
         await self.invitations.update_status(invitation, {"status": "accepted"})
         await self.db.commit()
 
@@ -1135,7 +1143,7 @@ class OrganizationService:
             raise OrganizationMemberNotFoundError(organization_member_id)
         await self.db.commit()
 
-        live = await live_attribution_user_ids(self.db, [str(target_user.id)])
+        live = await live_identity_ids(self.db, [target_user.id])
         invitation_id = None
         if updated.status == "invited":
             pending = await self.invitations.get_pending_by_organization_members([updated.id])
@@ -1229,14 +1237,13 @@ class OrganizationService:
         membership: OrganizationMember,
         user: User,
         *,
-        live: set[str],
+        live: set[uuid.UUID],
         invitation_id: uuid.UUID | None = None,
     ) -> ActiveOrganizationMemberPublic:
-        attribution_user_id = str(user.id)
         return ActiveOrganizationMemberPublic(
             organization_member_id=membership.id,
             user_id=user.id,
-            attribution_user_id=attribution_user_id if attribution_user_id in live else None,
+            attribution_user_id=user.external_id if user.id in live else None,
             invitation_id=invitation_id,
             email=user.email,
             full_name=user.full_name,

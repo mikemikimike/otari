@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, and_, case, func, null, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.api.deps import get_config, get_db, verify_api_key_or_master_key, verify_master_key
 from gateway.api.routes._billing_schemas import ChargeLine, MeterMap
@@ -30,8 +31,10 @@ from gateway.core.sql import (
     utc_bound,
 )
 from gateway.inflight import get_registry
-from gateway.models.entities import APIKey, UsageLog, User
+from gateway.models.entities import APIKey, UsageLog
 from gateway.models.money import as_float
+from gateway.models.tenancy import User
+from gateway.repositories.users_repository import owned_by_handles
 from gateway.services.external_usage_service import (
     ExternalEventsRequest,
     ExternalIngestResult,
@@ -109,12 +112,17 @@ class _LabelJoin(NamedTuple):
     label: Any
 
 
-_USER_LABEL = _LabelJoin(entity=User, on=User.user_id == UsageLog.user_id, label=User.alias)
+# The user breakdown's key is the operator-defined handle, not the id the row
+# stores (otari-ai#1727): the key is what a client feeds straight back as a
+# ``user_id`` filter, and what an operator recognizes. That makes the join
+# mandatory rather than decorative, so every query that groups by this dimension
+# has to apply it, the series grid included.
+_USER_LABEL = _LabelJoin(entity=User, on=col(User.id) == UsageLog.user_id, label=col(User.alias))
 _API_KEY_LABEL = _LabelJoin(entity=APIKey, on=APIKey.id == UsageLog.api_key_id, label=APIKey.key_name)
 
 _SUMMARY_DIMENSIONS: dict[str, tuple[Any, int, "_LabelJoin | None"]] = {
     "model": (UsageLog.model, _BREAKDOWN_TOP_N, None),
-    "user": (UsageLog.user_id, _BREAKDOWN_TOP_N, _USER_LABEL),
+    "user": (col(User.external_id), _BREAKDOWN_TOP_N, _USER_LABEL),
     "api_key": (UsageLog.api_key_id, _BREAKDOWN_TOP_N, _API_KEY_LABEL),
     "source": (UsageLog.source, _BREAKDOWN_TOP_N, None),
     "source_label": (UsageLog.source_label, _SESSION_BREAKDOWN_TOP_N, None),
@@ -209,12 +217,13 @@ class UsageEntry(BaseModel):
         cls,
         log: UsageLog,
         *,
+        user_id: str | None = None,
         user_alias: str | None = None,
         api_key_name: str | None = None,
     ) -> "UsageEntry":
         return cls(
             id=log.id,
-            user_id=log.user_id,
+            user_id=user_id,
             user_alias=user_alias,
             api_key_id=log.api_key_id,
             api_key_name=api_key_name,
@@ -381,7 +390,11 @@ def _usage_filters(
     if end_date is not None:
         conditions.append(UsageLog.timestamp < utc_bound(end_date))
     if user_id is not None and user_id != []:
-        conditions.append(match_any(UsageLog.user_id, user_id))
+        # A subquery rather than a join, so the filter composes with the count
+        # endpoint and the summary passes exactly as every other filter does:
+        # the caller names handles and the column stores ids (otari-ai#1727).
+        handles = user_id if isinstance(user_id, list) else [user_id]
+        conditions.append(owned_by_handles(col(UsageLog.user_id), handles))
     if status is not None:
         conditions.append(UsageLog.status == status)
     if status_code is not None:
@@ -485,8 +498,8 @@ async def list_usage(
     # dashboard to hold every user and every key in memory to label 100 rows.
     # Outer so a row whose owner was deleted still comes back, with a null label.
     stmt = (
-        select(UsageLog, User.alias, APIKey.key_name)
-        .outerjoin(User, User.user_id == UsageLog.user_id)
+        select(UsageLog, col(User.external_id), col(User.alias), APIKey.key_name)
+        .outerjoin(User, col(User.id) == UsageLog.user_id)
         .outerjoin(APIKey, APIKey.id == UsageLog.api_key_id)
         .where(*conditions)
         .order_by(UsageLog.timestamp.desc())
@@ -495,8 +508,8 @@ async def list_usage(
     )
     result = await db.execute(stmt)
     return [
-        UsageEntry.from_model(log, user_alias=alias, api_key_name=key_name)
-        for log, alias, key_name in result.all()
+        UsageEntry.from_model(log, user_id=handle, user_alias=alias, api_key_name=key_name)
+        for log, handle, alias, key_name in result.all()
     ]
 
 
@@ -1466,7 +1479,7 @@ async def usage_summary(
 
 _GROUP_COLUMNS: dict[str, tuple[Any, "_LabelJoin | None"]] = {
     "model": (UsageLog.model, None),
-    "user_id": (UsageLog.user_id, _USER_LABEL),
+    "user_id": (col(User.external_id), _USER_LABEL),
     "api_key_id": (UsageLog.api_key_id, _API_KEY_LABEL),
     "source": (UsageLog.source, None),
 }
@@ -1558,20 +1571,20 @@ async def usage_series(
     else:
         fold_expr = case((column.in_(named), 0), else_=1)
     bucket_expr = _bucket_expr(dialect_name(db), bucket)
-    rows = (
-        await db.execute(
-            select(
-                bucket_expr,
-                key_expr,
-                fold_expr,
-                func.coalesce(func.sum(UsageLog.cost), 0.0),
-                _billed_input_sum() + _billed_output_sum(),
-                _request_count_expr(status),
-            )
-            .where(*conditions)
-            .group_by(bucket_expr, key_expr, fold_expr)
-        )
-    ).all()
+    grid = select(
+        bucket_expr,
+        key_expr,
+        fold_expr,
+        func.coalesce(func.sum(UsageLog.cost), 0.0),
+        _billed_input_sum() + _billed_output_sum(),
+        _request_count_expr(status),
+    )
+    # The same outer join ``_breakdown`` applied above, for the same reason: one
+    # dimension's key lives on the joined identity rather than on the usage row,
+    # and grouping by it without the join would be a cross product.
+    if label_join is not None:
+        grid = grid.outerjoin(label_join.entity, label_join.on)
+    rows = (await db.execute(grid.where(*conditions).group_by(bucket_expr, key_expr, fold_expr))).all()
 
     points = [
         UsageGroupedSeriesPoint(
@@ -1668,7 +1681,9 @@ async def usage_summary_csv(
     dimensions = [
         (
             _CSV_DIMENSION_LABELS.get(name, name),
-            await _breakdown(db, column, conditions, totals, limit=None, status_filter=status),
+            await _breakdown(
+                db, column, conditions, totals, limit=None, status_filter=status, label_join=_label
+            ),
         )
         for name, (column, _cap, _label) in _SUMMARY_DIMENSIONS.items()
     ]

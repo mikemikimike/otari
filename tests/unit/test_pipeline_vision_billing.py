@@ -25,6 +25,10 @@ from gateway.services.budget_service import ReservationHandle
 
 _VISION_USAGE = CompletionUsage(prompt_tokens=200, completion_tokens=50, total_tokens=250)
 
+# The key owner's stored id; the handle it resolves to is "user-1".
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-0000000000ff")
+
+
 
 class _Recorder:
     """Captures the billing and settlement primitives the pipeline invoked."""
@@ -44,7 +48,7 @@ class _Recorder:
             # exercises that resolution.
             return SimpleNamespace(
                 id="key-1",
-                user_id="user-1",
+                user_id=_IDENTITY,
                 allowed_models=None,
                 exclude_from_budget=False,
                 reject_user_mismatch=None,
@@ -66,6 +70,11 @@ class _Recorder:
         async def fake_organization_for_workspace_id(*args: Any, **kwargs: Any) -> None:
             return None
 
+        # The preamble's one identity lookup (otari-ai#1727). The session here is
+        # a bare object, so the read is stubbed like every other DB touch.
+        async def fake_external_id_for(*args: Any, **kwargs: Any) -> str:
+            return "user-1"
+
         async def fake_reserve(*args: Any, **kwargs: Any) -> ReservationHandle:
             self.reserve_calls.append(kwargs)
             return ReservationHandle(user_id="user-1", estimate=Decimal(0), reserved=True, strategy="for_update")
@@ -85,6 +94,7 @@ class _Recorder:
             self.refunded += 1
 
         monkeypatch.setattr(pipeline, "verify_api_key_or_master_key", fake_verify)
+        monkeypatch.setattr(pipeline, "external_id_for", fake_external_id_for)
         monkeypatch.setattr(pipeline, "check_rate_limit", lambda request, user_id: None)
         monkeypatch.setattr(pipeline, "find_model_pricing", fake_find_pricing)
         monkeypatch.setattr(pipeline, "resolve_request_allowlist", fake_resolve_allowlist)
@@ -97,7 +107,7 @@ class _Recorder:
 
 
 async def _normalize_with_vision(
-    user_id: str,
+    user_id: uuid.UUID | None,
     provider: LLMProvider | None,
     model: str,
     instance: str | None,

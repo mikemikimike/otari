@@ -27,12 +27,14 @@ from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.core.metered_pricing import BillableUsage, billable_usage, price_billable_usage
 from gateway.core.sql import MAX_FILTER_VALUES, match_any, utc_bound
 from gateway.core.usage_source import not_served_here
 from gateway.log_config import logger
 from gateway.models.entities import ModelPricing, UsageLog
+from gateway.repositories.users_repository import owned_by_handles
 from gateway.services.tool_usage import TOOL_METER_NAMESPACE
 
 # Cap on an explicit id list. Page selections drive the id path and the largest
@@ -178,7 +180,7 @@ def _selection_conditions(selection: UsageSelection) -> list[ColumnElement[bool]
     if selection.model is not None and selection.model != []:
         conditions.append(match_any(UsageLog.model, selection.model))
     if selection.user_id is not None and selection.user_id != []:
-        conditions.append(match_any(UsageLog.user_id, selection.user_id))
+        conditions.append(owned_by_handles(col(UsageLog.user_id), selection.user_id))
     if selection.api_key_id is not None and selection.api_key_id != []:
         conditions.append(match_any(UsageLog.api_key_id, selection.api_key_id))
     if selection.status is not None:

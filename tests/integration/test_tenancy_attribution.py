@@ -16,7 +16,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from gateway.models.entities import User as GatewayUser
+from gateway.models.tenancy import User as GatewayUser
 
 
 def _add_member(client: TestClient, headers: dict[str, str], email: str) -> dict[str, Any]:

@@ -28,7 +28,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db, get_file_store, verify_api_key_or_master_key
-from gateway.api.routes._helpers import resolve_user_id
+from gateway.api.routes._helpers import resolve_billed_identity
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.models.entities import APIKey, FileObject
@@ -56,13 +56,23 @@ def _request_workspace_id(auth_result: tuple[APIKey | None, bool]) -> uuid.UUID 
     return api_key.workspace_id if api_key is not None else None
 
 
-def _resolve_user(
+async def _resolve_user(
+    db: AsyncSession,
     auth_result: tuple[APIKey | None, bool],
     user: str | None,
     config: GatewayConfig,
-) -> str:
+) -> uuid.UUID:
+    """The identity every row in this route is scoped to.
+
+    Returns the primary key rather than the handle, because that is what
+    ``file_objects.user_id`` stores (otari-ai#1727) and every use here is a
+    filter or an insert. A handle naming no identity is refused with the 404 it
+    describes rather than left to the NOT NULL foreign key, which would answer
+    500 for a value the caller supplied and can fix.
+    """
     api_key, is_master_key = auth_result
-    return resolve_user_id(
+    handle, identity_id = await resolve_billed_identity(
+        db,
         user_id_from_request=user,
         api_key=api_key,
         is_master_key=is_master_key,
@@ -84,6 +94,12 @@ def _resolve_user(
         ),
         reject_mismatch=config.reject_user_mismatch,
     )
+    if identity_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{handle}' not found",
+        )
+    return identity_id
 
 
 _READ_CHUNK_BYTES = 1024 * 1024
@@ -181,7 +197,7 @@ async def create_file(
     if not config.files_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
 
-    user_id = _resolve_user(auth_result, user, config)
+    user_id = await _resolve_user(db, auth_result, user, config)
     # A master-key upload has no key to read a workspace off, so it lands in the
     # default workspace: the operator acting deployment-wide, which is the same
     # answer `resolve_workspace_id` gives every other master-key write.
@@ -249,7 +265,7 @@ async def list_files(
     if not config.files_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
 
-    user_id = _resolve_user(auth_result, user, config)
+    user_id = await _resolve_user(db, auth_result, user, config)
     # The key's own workspace wins over anything the caller sent, rather than
     # 400ing on a mismatch: the parameter is a master-key narrowing, and a keyed
     # request is confined either way, so refusing it would only add a way to get
@@ -282,7 +298,7 @@ async def get_file(
     if not config.files_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
 
-    user_id = _resolve_user(auth_result, user, config)
+    user_id = await _resolve_user(db, auth_result, user, config)
     record = await fetch_file(db, file_id, user_id, workspace_id=_request_workspace_id(auth_result))
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
@@ -302,7 +318,7 @@ async def get_file_content(
     if not config.files_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
 
-    user_id = _resolve_user(auth_result, user, config)
+    user_id = await _resolve_user(db, auth_result, user, config)
     record = await fetch_file(db, file_id, user_id, workspace_id=_request_workspace_id(auth_result))
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
@@ -341,7 +357,7 @@ async def delete_file(
     if not config.files_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File uploads are disabled")
 
-    user_id = _resolve_user(auth_result, user, config)
+    user_id = await _resolve_user(db, auth_result, user, config)
     record = await fetch_file(db, file_id, user_id, workspace_id=_request_workspace_id(auth_result))
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")

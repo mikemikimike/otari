@@ -28,7 +28,7 @@ def _is_expired(record: FileObject) -> bool:
 
 
 async def fetch_file(
-    db: AsyncSession, file_id: str, user_id: str | None, *, workspace_id: uuid.UUID | None = None
+    db: AsyncSession, file_id: str, user_id: uuid.UUID | None, *, workspace_id: uuid.UUID | None = None
 ) -> FileObject | None:
     """Return a live, non-deleted, unexpired file owned by ``user_id``.
 

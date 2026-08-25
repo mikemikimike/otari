@@ -45,11 +45,13 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.core.config import GatewayConfig
 from gateway.core.database import create_session
 from gateway.log_config import logger
 from gateway.models.entities import ModelAlias
+from gateway.models.tenancy import User
 from gateway.services.workspace_scope import lookup_default_workspace_id
 
 # How long a worker may serve a stale alias map before refreshing. A new alias
@@ -58,9 +60,15 @@ ALIAS_CACHE_TTL_SECONDS = 30.0
 
 # Workspace-wide stored aliases: workspace_id -> {name -> target}.
 _cache: dict[uuid.UUID, dict[str, str]] = {}
-# User-scoped stored aliases: workspace_id -> user_id -> {name -> target}. Kept
+# User-scoped stored aliases: workspace_id -> handle -> {name -> target}. Kept
 # separate from _cache rather than keyed on (user_id, name) so a resolution for
 # one user never has to scan another user's aliases.
+#
+# The middle key is the owner's handle (``user.external_id``), not the
+# ``user.id`` the row stores since otari-ai#1727: resolution is synchronous and
+# reachable from callers holding only the request's ``user`` string, so the
+# refresh below joins the id out to the handle once per reload rather than
+# making every resolver do a lookup.
 _user_cache: dict[uuid.UUID, dict[str, dict[str, str]]] = {}
 # Where a resolution that names no workspace looks. Loaded with the rows, so it
 # cannot disagree with them, and ``None`` on a deployment with no workspace at
@@ -103,14 +111,23 @@ async def refresh_alias_cache(db: AsyncSession) -> dict[uuid.UUID, dict[str, str
     """
     global _cache, _user_cache, _default_workspace, _cached_at  # noqa: PLW0603
 
-    rows = (await db.execute(select(ModelAlias))).scalars().all()
+    # Outer-joined to the identity so the user layer is keyed by the handle the
+    # resolvers hold rather than by the id the row stores; outer, so a
+    # workspace-wide row (null owner) still loads.
+    rows = (
+        await db.execute(
+            select(
+                ModelAlias.workspace_id, ModelAlias.name, ModelAlias.target, col(User.external_id)
+            ).outerjoin(User, col(User.id) == ModelAlias.user_id)
+        )
+    ).all()
     fresh_global: dict[uuid.UUID, dict[str, str]] = {}
     fresh_scoped: dict[uuid.UUID, dict[str, dict[str, str]]] = {}
-    for row in rows:
-        if row.user_id is None:
-            fresh_global.setdefault(row.workspace_id, {})[row.name] = row.target
+    for workspace_id, name, target, owner in rows:
+        if owner is None:
+            fresh_global.setdefault(workspace_id, {})[name] = target
         else:
-            fresh_scoped.setdefault(row.workspace_id, {}).setdefault(row.user_id, {})[row.name] = row.target
+            fresh_scoped.setdefault(workspace_id, {}).setdefault(owner, {})[name] = target
 
     default_workspace = await lookup_default_workspace_id(db)
 

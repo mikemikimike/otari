@@ -65,6 +65,12 @@ class RoutingContext:
     """
 
     user_id: str
+    """The caller's operator-defined handle, which is what a per-user alias, a
+    per-user policy and a trace cache key are all scoped by."""
+    identity_id: uuid.UUID | None
+    """The same caller's stored id, which is what ``routing_memory`` rows carry
+    (otari-ai#1727). ``None`` for a surface with no resolvable identity, where a
+    memory-backed router has nothing to load and declines."""
     default_model: str
     """The policy's default target: what serves if the backend declines, and the
     safe choice a low-confidence decision leads with."""

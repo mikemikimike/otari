@@ -17,7 +17,8 @@ from sqlalchemy import Engine, event
 from sqlalchemy.orm import Session
 
 from gateway.api.routes.otlp import _MAX_METRIC_DATA_POINTS
-from gateway.models.entities import AgentTelemetry, UsageLog, User
+from gateway.models.entities import AgentTelemetry, UsageLog
+from gateway.models.tenancy import User
 
 from .otlp_helpers import gauge_metric, metrics_export, metrics_export_protobuf, number_point, sum_metric
 

@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from gateway.adapters.telemetry_storage_adapter import DatabaseTelemetryStorageAdapter
 from gateway.core.config import API_KEY_HEADER
-from gateway.models.entities import APIKey, BudgetResetLog, UsageLog, User
+from gateway.models.entities import APIKey, BudgetResetLog, UsageLog
+from gateway.models.tenancy import User
 
 from .conftest import MODEL_NAME
 

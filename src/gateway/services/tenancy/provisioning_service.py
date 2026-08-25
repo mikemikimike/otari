@@ -40,7 +40,6 @@ from gateway.repositories.tenancy import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
 )
-from gateway.repositories.users_repository import get_or_create_attribution_user
 from gateway.services.tenancy.errors import (
     ForeignTenancyError,
     TenancyError,
@@ -208,8 +207,13 @@ async def _provision(db: AsyncSession) -> User:
             created_by_user_id=None,
         )
 
+    # Aliased by name rather than address because this identity deliberately has
+    # none. The alias is the request plane's label for it, and since
+    # otari-ai#1727 the operator needs no second row minted before it can hold a
+    # key: the identity it already is, is the owner.
     operator = await UserRepository(db).create_local_identity(
         full_name=OPERATOR_FULL_NAME,
+        alias=OPERATOR_FULL_NAME,
         active_organization_id=organization.id,
         is_superuser=True,
     )
@@ -219,11 +223,6 @@ async def _provision(db: AsyncSession) -> User:
         user_id=operator.id,
         role="owner",
     )
-    # The operator's request-plane owner, so the first-boot identity can hold a
-    # key like any other member. Aliased by name rather than address because this
-    # identity deliberately has none.
-    await get_or_create_attribution_user(db, user_id=str(operator.id), alias=OPERATOR_FULL_NAME)
-
     workspaces = WorkspaceRepository(db)
     workspace = await workspaces.get_by_organization_and_name(organization.id, DEFAULT_WORKSPACE_NAME)
     if workspace is None:

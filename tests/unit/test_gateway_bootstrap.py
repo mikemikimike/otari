@@ -37,8 +37,8 @@ def test_create_app_bootstraps_first_api_key(tmp_path: Path) -> None:
     assert len(users) == 1
     # The bootstrap key has no explicit owner, so it lands on the shared "default"
     # user rather than a per-key virtual one.
-    assert users[0].user_id == "default"
-    assert users[0].user_id == keys[0].user_id
+    assert users[0].external_id == "default"
+    assert users[0].id == keys[0].user_id
 
 
 def test_create_app_does_not_create_second_bootstrap_key(tmp_path: Path) -> None:

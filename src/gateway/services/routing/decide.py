@@ -86,6 +86,7 @@ async def decide_ordering(
     *,
     policy_name: str,
     user_id: str | None,
+    identity_id: uuid.UUID | None,
     allowlist: list[str] | None,
     signal: RoutingSignal | None,
     workspace_id: uuid.UUID | None = None,
@@ -138,6 +139,7 @@ async def decide_ordering(
 
     context = RoutingContext(
         user_id=user_id or "",
+        identity_id=identity_id,
         default_model=default_model,
         candidate_pool=pool,
         workspace_id=workspace_id,

@@ -12,12 +12,14 @@ from fastapi import HTTPException, status
 from sqlalchemy import case, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.core.metered_pricing import estimate_metered_cost
 from gateway.log_config import logger
 from gateway.metrics import record_budget_exceeded
-from gateway.models.entities import Budget, BudgetResetLog, ModelPricing, User
+from gateway.models.entities import Budget, BudgetResetLog, ModelPricing
 from gateway.models.money import to_usd
+from gateway.models.tenancy import User
 from gateway.repositories.users_repository import get_active_user
 from gateway.services.budget_periods import budget_window
 from gateway.services.pricing_service import find_model_pricing
@@ -49,10 +51,10 @@ async def _cas_reset_user_budget(db: AsyncSession, user: User, budget: Budget, n
     result = await db.execute(
         update(User)
         .where(
-            User.user_id == user.user_id,
-            User.deleted_at.is_(None),
-            User.next_budget_reset_at.is_not(None),
-            User.next_budget_reset_at <= now,
+            col(User.id) == user.id,
+            col(User.deleted_at).is_(None),
+            col(User.next_budget_reset_at).is_not(None),
+            col(User.next_budget_reset_at) <= now,
         )
         .values(
             spend=ZERO,
@@ -67,11 +69,12 @@ async def _cas_reset_user_budget(db: AsyncSession, user: User, budget: Budget, n
     rowcount = getattr(result, "rowcount", 0)
     if rowcount and rowcount > 0:
         # Captured before commit: rollback() expires ORM instances, so reading
-        # user.user_id in the error path would attempt sync IO in the async
+        # user.external_id in the error path would attempt sync IO in the async
         # session (MissingGreenlet), masking the original commit error.
-        user_id_str = user.user_id
+        user_id_str = user.external_id
+        identity_id = user.id
         reset_log = BudgetResetLog(
-            user_id=user_id_str,
+            user_id=identity_id,
             budget_id=budget.budget_id,
             previous_spend=user.spend,
             reset_at=now,
@@ -110,9 +113,9 @@ async def get_budget_state(db: AsyncSession, user_id: str) -> BudgetState:
     """
     row = (
         await db.execute(
-            select(User.spend, User.reserved, Budget.max_budget)
-            .outerjoin(Budget, User.budget_id == Budget.budget_id)
-            .where(User.user_id == user_id, User.deleted_at.is_(None))
+            select(col(User.spend), col(User.reserved), Budget.max_budget)
+            .outerjoin(Budget, col(User.budget_id) == Budget.budget_id)
+            .where(col(User.external_id) == user_id, col(User.deleted_at).is_(None))
         )
     ).one_or_none()
     if row is None:
@@ -350,7 +353,7 @@ async def reserve_budget(
     # Resolved after the per-user lookup so a caller that passes no scope keeps
     # the original fast path exactly, and skipped entirely when there is nothing
     # to hold against on either mechanism.
-    scoped = await applicable_budgets(db, user_id=user_id, scope=scope) if scope is not None else ()
+    scoped = await applicable_budgets(db, identity_id=user.id, scope=scope) if scope is not None else ()
     if budget is None and not scoped:
         return no_reservation
 
@@ -387,8 +390,8 @@ async def reserve_budget(
         # and concurrent spend is reflected immediately.
         await db.execute(
             update(User)
-            .where(User.user_id == user_id, User.deleted_at.is_(None))
-            .values(reserved=User.reserved + held)
+            .where(col(User.external_id) == user_id, col(User.deleted_at).is_(None))
+            .values(reserved=col(User.reserved) + held)
             .execution_options(synchronize_session=False)
         )
         await db.commit()
@@ -404,16 +407,16 @@ async def reserve_budget(
     result = await db.execute(
         update(User)
         .where(
-            User.user_id == user_id,
-            User.deleted_at.is_(None),
+            col(User.external_id) == user_id,
+            col(User.deleted_at).is_(None),
             # Already at/over the cap → reject (matches the pre-reservation
             # `spend >= max_budget` semantics, and also catches zero-estimate
             # requests like audio for a maxed-out user).
-            User.spend + User.reserved < budget.max_budget,
+            col(User.spend) + col(User.reserved) < budget.max_budget,
             # ...and this request must not push committed spend past the cap.
-            User.spend + User.reserved + held <= budget.max_budget,
+            col(User.spend) + col(User.reserved) + held <= budget.max_budget,
         )
-        .values(reserved=User.reserved + held)
+        .values(reserved=col(User.reserved) + held)
         .execution_options(synchronize_session=False)
     )
     await db.commit()
@@ -448,8 +451,8 @@ def _release_reserved(estimate: Decimal) -> object:
     precision`` and round-trip the untouched amount through a binary float.
     """
     return case(
-        (User.reserved - estimate < ZERO, ZERO),
-        else_=User.reserved - estimate,
+        (col(User.reserved) - estimate < ZERO, ZERO),
+        else_=col(User.reserved) - estimate,
     )
 
 
@@ -480,7 +483,7 @@ async def reconcile_reservation(db: AsyncSession, handle: ReservationHandle, act
     # spend write here (not merely skipping the reserve) is what makes an empty
     # handle safe at every reconcile site.
     if spent and handle.counts_toward_budget:
-        values["spend"] = User.spend + spent
+        values["spend"] = col(User.spend) + spent
     if handle.reserved:
         values["reserved"] = _release_reserved(handle.estimate)
     # Every scoped ceiling the reservation held against has to be unwound too, or
@@ -496,7 +499,7 @@ async def reconcile_reservation(db: AsyncSession, handle: ReservationHandle, act
         return
     await db.execute(
         update(User)
-        .where(User.user_id == handle.user_id, User.deleted_at.is_(None))
+        .where(col(User.external_id) == handle.user_id, col(User.deleted_at).is_(None))
         .values(**values)
         .execution_options(synchronize_session=False)
     )
@@ -529,7 +532,7 @@ async def refund_reservation(db: AsyncSession, handle: ReservationHandle) -> Non
         return
     await db.execute(
         update(User)
-        .where(User.user_id == handle.user_id, User.deleted_at.is_(None))
+        .where(col(User.external_id) == handle.user_id, col(User.deleted_at).is_(None))
         .values(reserved=_release_reserved(handle.estimate))
         .execution_options(synchronize_session=False)
     )

@@ -18,9 +18,11 @@ the inference gates and the catalog filter feed it the *same* canonical
 from any_llm import LLMProvider
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import APIKey, User
+from gateway.models.entities import APIKey
+from gateway.models.tenancy import User
 from gateway.services.alias_service import all_alias_names
 from gateway.services.provider_kwargs import split_selector
 
@@ -59,7 +61,7 @@ async def resolve_request_allowlist(db: AsyncSession, api_key: APIKey | None) ->
     if api_key.user_id is None:
         return None
     user_default = (
-        await db.execute(select(User.allowed_models).where(User.user_id == api_key.user_id))
+        await db.execute(select(col(User.allowed_models)).where(col(User.id) == api_key.user_id))
     ).scalar_one_or_none()
     return user_default
 

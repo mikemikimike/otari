@@ -14,6 +14,7 @@ which is what makes binding this adapter indistinguishable from not having the
 seam at all.
 """
 
+import uuid
 from collections import defaultdict
 from typing import Any, cast
 
@@ -21,10 +22,12 @@ from sqlalchemy import ColumnElement, case, delete, func, null, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound
 from gateway.log_config import logger
 from gateway.models.entities import AgentTelemetry
+from gateway.models.tenancy import User
 from gateway.ports.telemetry_storage_port import (
     BehaviorCounts,
     BehaviorGroup,
@@ -40,12 +43,18 @@ from gateway.ports.telemetry_storage_port import (
     TelemetryRecord,
     TelemetryScanTooLargeError,
 )
+from gateway.repositories.users_repository import owned_by_handles
 
 # TelemetryRecord fields that feed a dedup key but are not their own
 # AgentTelemetry column (the key that derives from them is what is stored).
 _DEDUP_ONLY_FIELDS = ("tool_use_id", "event_sequence")
 
 _METRIC_KIND = "metric"
+
+
+def _by_handles(handles: list[str]) -> ColumnElement[bool]:
+    """Match rows whose owner is one of ``handles`` (``user.external_id``)."""
+    return owned_by_handles(col(AgentTelemetry.user_id), handles)
 
 
 def _conditions(filters: TelemetryFilter) -> list[ColumnElement[bool]]:
@@ -56,7 +65,11 @@ def _conditions(filters: TelemetryFilter) -> list[ColumnElement[bool]]:
     if filters.end is not None:
         conditions.append(AgentTelemetry.timestamp < utc_bound(filters.end))
     if filters.user_ids:
-        conditions.append(match_any(AgentTelemetry.user_id, list(filters.user_ids)))
+        # The port speaks operator-defined handles and the column stores
+        # ``user.id`` (otari-ai#1727), so the filter resolves through the
+        # identity table. A subquery rather than a join keeps ``_conditions``
+        # composable with every statement below, purges included.
+        conditions.append(_by_handles(list(filters.user_ids)))
     if filters.api_key_ids:
         conditions.append(match_any(AgentTelemetry.api_key_id, list(filters.api_key_ids)))
     if filters.name is not None:
@@ -66,7 +79,7 @@ def _conditions(filters: TelemetryFilter) -> list[ColumnElement[bool]]:
     return conditions
 
 
-def _build_row(api_key_id: str, user_id: str, record: TelemetryRecord) -> AgentTelemetry:
+def _build_row(api_key_id: str, user_id: uuid.UUID | None, record: TelemetryRecord) -> AgentTelemetry:
     row_fields = {k: v for k, v in record.__dict__.items() if k not in _DEDUP_ONLY_FIELDS}
     return AgentTelemetry(api_key_id=api_key_id, user_id=user_id, **row_fields)
 
@@ -170,6 +183,11 @@ class DatabaseTelemetryStorageAdapter:
         if not records:
             return IngestResult()
         db = self._db
+        # One lookup per export, not per record: the port's ``user_id`` is the
+        # handle and the column stores the identity's own id.
+        identity_id = (
+            await db.execute(select(col(User.id)).where(col(User.external_id) == user_id))
+        ).scalar_one_or_none()
 
         by_source: dict[str, list[AgentTelemetry]] = defaultdict(list)
         seen: set[tuple[str, str]] = set()
@@ -180,7 +198,7 @@ class DatabaseTelemetryStorageAdapter:
                 duplicate += 1
                 continue
             seen.add(identity)
-            by_source[record.source].append(_build_row(api_key_id, user_id, record))
+            by_source[record.source].append(_build_row(api_key_id, identity_id, record))
 
         accepted = 0
         try:
@@ -295,12 +313,24 @@ class DatabaseTelemetryStorageAdapter:
         """
         db = self._db
         conditions = _conditions(filters)
-        column = AgentTelemetry.user_id if group_by == "user_id" else AgentTelemetry.api_key_id
+        # The user dimension's key is the handle, so that a caller can feed a
+        # group key straight back as a ``user_ids`` filter. That puts the column
+        # on the identity table, which every statement grouping by it has to
+        # outer-join (outer, so a row whose owner is gone keeps its group).
+        by_user = group_by == "user_id"
+        column: Any = col(User.external_id) if by_user else AgentTelemetry.api_key_id
+
+        def _scoped(stmt: Any) -> Any:
+            return stmt.outerjoin(User, col(User.id) == AgentTelemetry.user_id) if by_user else stmt
 
         row_count = func.count()
         group_rows = (
             await db.execute(
-                select(column, row_count).where(*conditions).group_by(column).order_by(row_count.desc()).limit(top_n)
+                _scoped(select(column, row_count))
+                .where(*conditions)
+                .group_by(column)
+                .order_by(row_count.desc())
+                .limit(top_n)
             )
         ).all()
         total_stmt: Any = select(func.count()).select_from(AgentTelemetry).where(*conditions)
@@ -317,7 +347,7 @@ class DatabaseTelemetryStorageAdapter:
         grid_bucket = bucket_expr(dialect_name(db), bucket, AgentTelemetry.timestamp)
         rows = (
             await db.execute(
-                select(grid_bucket, key_expr, fold_expr, func.count())
+                _scoped(select(grid_bucket, key_expr, fold_expr, func.count()))
                 .where(*conditions)
                 .group_by(grid_bucket, key_expr, fold_expr)
             )
@@ -344,7 +374,7 @@ class DatabaseTelemetryStorageAdapter:
 
     async def purge_user(self, *, user_id: str) -> int:
         """Delete every row attributed to one user."""
-        deleted = await self._delete([AgentTelemetry.user_id == user_id])
+        deleted = await self._delete([_by_handles([user_id])])
         logger.info("agent_telemetry erase for user: removed=%d", deleted)
         return deleted
 

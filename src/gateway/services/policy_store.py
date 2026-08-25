@@ -41,12 +41,14 @@ import uuid
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col
 
 from gateway.core.config import GatewayConfig
 from gateway.core.database import create_session
 from gateway.log_config import logger
 from gateway.models.entities import RoutingPolicy
 from gateway.models.routing import PolicySpec
+from gateway.models.tenancy import User
 from gateway.services.workspace_scope import lookup_default_workspace_id
 
 __all__ = [
@@ -67,9 +69,11 @@ POLICY_CACHE_TTL_SECONDS = 30.0
 
 # Workspace-wide stored policies: workspace_id -> {name -> spec}.
 _cache: dict[uuid.UUID, dict[str, PolicySpec]] = {}
-# User-scoped stored policies: workspace_id -> user_id -> {name -> spec}. Kept
+# User-scoped stored policies: workspace_id -> handle -> {name -> spec}. Kept
 # separate rather than keyed on (user_id, name) so resolving for one user never
-# scans another's.
+# scans another's. The middle key is the owner's handle rather than the
+# ``user.id`` the row stores, for the reason `services/alias_service.py` gives:
+# resolution is synchronous, so the id is joined out once per reload instead.
 _user_cache: dict[uuid.UUID, dict[str, dict[str, PolicySpec]]] = {}
 # Where a lookup that names no workspace reads; see the module docstring.
 _default_workspace: uuid.UUID | None = None
@@ -98,7 +102,7 @@ def policy_cache_is_stale(ttl: float = POLICY_CACHE_TTL_SECONDS) -> bool:
     return _cached_at is None or (time.monotonic() - _cached_at) >= ttl
 
 
-def _parse(row: RoutingPolicy) -> PolicySpec | None:
+def _parse(row: RoutingPolicy, owner: str | None) -> PolicySpec | None:
     try:
         return PolicySpec.model_validate(row.spec)
     except ValidationError:
@@ -107,7 +111,7 @@ def _parse(row: RoutingPolicy) -> PolicySpec | None:
             "skipping it. Other policies are unaffected.",
             row.name,
             row.workspace_id,
-            row.user_id,
+            owner,
             exc_info=True,
         )
         return None
@@ -124,17 +128,24 @@ async def refresh_policy_cache(db: AsyncSession) -> dict[uuid.UUID, dict[str, Po
     """
     global _cache, _user_cache, _default_workspace, _cached_at  # noqa: PLW0603
 
-    rows = (await db.execute(select(RoutingPolicy))).scalars().all()
+    # Outer-joined to the identity so the user layer is keyed by the handle the
+    # resolvers hold rather than by the id the row stores; outer, so a
+    # workspace-wide row (null owner) still loads.
+    rows = (
+        await db.execute(
+            select(RoutingPolicy, col(User.external_id)).outerjoin(User, col(User.id) == RoutingPolicy.user_id)
+        )
+    ).all()
     fresh_global: dict[uuid.UUID, dict[str, PolicySpec]] = {}
     fresh_scoped: dict[uuid.UUID, dict[str, dict[str, PolicySpec]]] = {}
-    for row in rows:
-        spec = _parse(row)
+    for row, owner in rows:
+        spec = _parse(row, owner)
         if spec is None:
             continue
-        if row.user_id is None:
+        if owner is None:
             fresh_global.setdefault(row.workspace_id, {})[row.name] = spec
         else:
-            fresh_scoped.setdefault(row.workspace_id, {}).setdefault(row.user_id, {})[row.name] = spec
+            fresh_scoped.setdefault(row.workspace_id, {}).setdefault(owner, {})[row.name] = spec
 
     default_workspace = await lookup_default_workspace_id(db)
 

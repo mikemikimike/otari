@@ -281,6 +281,14 @@ def _insert_identity(connection: Connection, *, email: str | None = None, token:
     """
     organization_id = uuid.uuid4().hex
     user_id = uuid.uuid4().hex
+    # ``external_id`` is NOT NULL from otari-ai#1727 onward and absent before it,
+    # and this helper is used at revisions on both sides of that line, so the
+    # column is named only where it exists.
+    has_handle = any(
+        row[1] == "external_id" for row in connection.execute(text('PRAGMA table_info("user")')).fetchall()
+    )
+    handle_column = "external_id, " if has_handle else ""
+    handle_value = ":id, " if has_handle else ""
     connection.execute(
         text(
             "INSERT INTO organization (id, name, slug, created_at) "
@@ -290,9 +298,9 @@ def _insert_identity(connection: Connection, *, email: str | None = None, token:
     )
     connection.execute(
         text(
-            'INSERT INTO "user" '
-            "(id, email, is_active, is_superuser, full_name, active_organization_id, created_at) "
-            "VALUES (:id, :email, 1, 0, 'Ada', :org, CURRENT_TIMESTAMP)"
+            f'INSERT INTO "user" '
+            f"(id, {handle_column}email, is_active, is_superuser, full_name, active_organization_id, created_at) "
+            f"VALUES (:id, {handle_value}:email, 1, 0, 'Ada', :org, CURRENT_TIMESTAMP)"
         ),
         {"id": user_id, "email": email, "org": organization_id},
     )
@@ -818,9 +826,12 @@ def test_the_survivals_carry_a_restricting_workspace_foreign_key(
         workspace_fk = [fk for fk in inspector.get_foreign_keys(table) if fk["referred_table"] == "workspace"]
         assert [tuple(fk["constrained_columns"]) for fk in workspace_fk] == [("workspace_id",)]
         assert workspace_fk[0]["options"].get("ondelete") == "RESTRICT"
-        # The user foreign key is untouched: the workspace is a second axis, not
-        # a re-parenting (otari-ai#1643).
-        user_fk = [fk for fk in inspector.get_foreign_keys(table) if fk["referred_table"] == "users"]
+        # The owner foreign key is still its own axis: the workspace was added
+        # beside it rather than replacing it (otari-ai#1643). It points at
+        # ``user`` rather than the retired ``users`` because otari-ai#1727
+        # converged the two identity tables; what is asserted here is that the
+        # column and its cascade survived both changes.
+        user_fk = [fk for fk in inspector.get_foreign_keys(table) if fk["referred_table"] == "user"]
         assert [tuple(fk["constrained_columns"]) for fk in user_fk] == [("user_id",)]
         assert user_fk[0]["options"].get("ondelete") == "CASCADE"
 

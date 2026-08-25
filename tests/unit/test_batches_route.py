@@ -2,12 +2,14 @@
 
 import uuid
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from gateway.api.routes import batches as batches_module
 from gateway.api.routes.batches import (
     BatchRequestItem,
     CreateBatchRequest,
@@ -200,24 +202,54 @@ class TestAuthorizeLegacyBatch:
     once the batch has already been fetched from the provider, which
     `_authorize_record`'s docstring explains is safe only in this case: a
     record-less batch has no stored workspace to leak, so credentials there
-    already resolved to the caller's own."""
+    already resolved to the caller's own.
 
-    def test_master_key_is_always_authorized(self) -> None:
+    The marker holds the caller's handle rather than its stored id, and keeps
+    doing so after otari-ai#1727: it travels to the provider and back, so every
+    batch stamped before the convergence has to keep matching. That is why these
+    resolve ``api_keys.user_id`` through the identity table first.
+    """
+
+    @staticmethod
+    def _resolving(handle: str | None) -> Any:
+        async def _external_id_for(_db: Any, identity_id: Any) -> str | None:
+            return None if identity_id is None else handle
+
+        return _external_id_for
+
+    @pytest.mark.asyncio
+    async def test_master_key_is_always_authorized(self) -> None:
         batch = SimpleNamespace(metadata={"otari_user_id": "someone-else"})
-        _authorize_legacy_batch(batch, "batch-1", api_key=None, is_master_key=True)  # type: ignore[arg-type]
+        await _authorize_legacy_batch(cast(Any, None), cast(Any, batch), "batch-1", None, True)
 
-    def test_a_batch_with_no_marker_is_authorized_for_any_caller(self) -> None:
+    @pytest.mark.asyncio
+    async def test_a_batch_with_no_marker_is_authorized_for_any_caller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Batches predating the ownership marker, or from a provider that
         does not round-trip metadata, stay reachable by any authenticated key."""
+        monkeypatch.setattr(batches_module, "external_id_for", self._resolving("anyone"))
         batch = SimpleNamespace(metadata=None)
-        api_key = SimpleNamespace(user_id="anyone")
-        _authorize_legacy_batch(batch, "batch-1", api_key=api_key, is_master_key=False)  # type: ignore[arg-type]
+        api_key = SimpleNamespace(user_id=uuid.uuid4())
+        await _authorize_legacy_batch(cast(Any, None), cast(Any, batch), "batch-1", cast(Any, api_key), False)
 
-    def test_a_mismatched_marker_is_refused_with_404(self) -> None:
+    @pytest.mark.asyncio
+    async def test_a_mismatched_marker_is_refused_with_404(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(batches_module, "external_id_for", self._resolving("someone-else"))
         batch = SimpleNamespace(metadata={"otari_user_id": "the-owner"})
-        api_key = SimpleNamespace(user_id="someone-else")
+        api_key = SimpleNamespace(user_id=uuid.uuid4())
 
         with pytest.raises(HTTPException) as exc_info:
-            _authorize_legacy_batch(batch, "batch-1", api_key=api_key, is_master_key=False)  # type: ignore[arg-type]
+            await _authorize_legacy_batch(
+                cast(Any, None), cast(Any, batch), "batch-1", cast(Any, api_key), False
+            )
 
         assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_a_matching_marker_is_authorized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The handle a batch stamped before the convergence carries still matches."""
+        monkeypatch.setattr(batches_module, "external_id_for", self._resolving("the-owner"))
+        batch = SimpleNamespace(metadata={"otari_user_id": "the-owner"})
+        api_key = SimpleNamespace(user_id=uuid.uuid4())
+        await _authorize_legacy_batch(cast(Any, None), cast(Any, batch), "batch-1", cast(Any, api_key), False)

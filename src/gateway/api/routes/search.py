@@ -247,7 +247,9 @@ async def _dispatch_search(
     # into users.spend, matching every other billed endpoint.
     budget_exempt = api_key is not None and api_key.exclude_from_budget
 
-    user_id = resolve_passthrough_user_id(auth_result, request.user, reject_mismatch=config.reject_user_mismatch)
+    user_id, identity_id = await resolve_passthrough_user_id(
+        db, auth_result, request.user, reject_mismatch=config.reject_user_mismatch
+    )
     rate_limit_info = check_rate_limit(raw_request, user_id)
 
     async def log_rejection(detail: str, *, row_model: str, row_provider: str | None, status_code: int) -> None:
@@ -263,7 +265,7 @@ async def _dispatch_search(
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
-            user_id=user_id,
+            user_id=identity_id,
             model=row_model,
             provider=row_provider,
             endpoint=SEARCH_ENDPOINT,
@@ -366,7 +368,7 @@ async def _dispatch_search(
             id=str(uuid.uuid4()),
             workspace_id=usage_workspace_id,
             api_key_id=api_key_id,
-            user_id=user_id,
+            user_id=identity_id,
             timestamp=datetime.now(UTC),
             model=tool.name,
             provider=tool.provider,

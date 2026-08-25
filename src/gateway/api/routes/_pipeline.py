@@ -115,6 +115,7 @@ from gateway.models.mcp import McpServerConfig
 from gateway.models.money import to_usd
 from gateway.ports.model_provider_port import HostedAccessDeniedError, ModelProviderPort
 from gateway.rate_limit import RateLimitInfo, check_rate_limit
+from gateway.repositories.users_repository import external_id_for, resolve_identity_id
 from gateway.services.budget_service import (
     ZERO,
     ReservationHandle,
@@ -617,6 +618,7 @@ class RequestContext:
         user_token: str | None,
         api_key_id: str | None,
         user_id: str | None,
+        identity_id: uuid.UUID | None,
         rate_limit_info: RateLimitInfo | None,
         reservation: ReservationHandle | None,
         started_at: float,
@@ -642,7 +644,15 @@ class RequestContext:
         # two indexed reads every time. A fallover repricing each candidate would
         # pay that per candidate.
         self.organization_id = organization_id
+        # Two spellings of one identity (otari-ai#1727). ``user_id`` is the
+        # operator-defined handle: what a client's ``user`` field is compared
+        # against, what per-user aliases and policies are scoped by, and what the
+        # rate-limit bucket is keyed on. ``identity_id`` is the primary key every
+        # request-plane row stores, so it is what reaches a ``usage_logs`` or
+        # ``file_objects`` write. Both are resolved once in the preamble, in one
+        # indexed lookup.
         self.user_id = user_id
+        self.identity_id = identity_id
         # Standalone-only, `None` in hybrid mode: the workspace this request
         # bills to, resolved once in the preamble (`resolve_workspace_id`) and
         # reused here for the rare fallback resolve in `resolve_dispatch_provider`,
@@ -763,7 +773,7 @@ async def resolve_dispatch_provider(
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
-            user_id=ctx.user_id,
+            user_id=ctx.identity_id,
             model=model_selector,
             provider=None,
             endpoint=adapter.endpoint,
@@ -900,7 +910,7 @@ async def _serve_from_hosted_credential(
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
-            user_id=ctx.user_id,
+            user_id=ctx.identity_id,
             model=resolved.model,
             provider=resolved.instance,
             endpoint=adapter.endpoint,
@@ -936,7 +946,7 @@ async def _serve_from_hosted_credential(
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
-            user_id=ctx.user_id,
+            user_id=ctx.identity_id,
             model=resolved.model,
             provider=resolved.instance,
             endpoint=adapter.endpoint,
@@ -975,7 +985,7 @@ async def _serve_from_hosted_credential(
             db=ctx.db,
             log_writer=ctx.log_writer,
             api_key_id=ctx.api_key_id,
-            user_id=ctx.user_id,
+            user_id=ctx.identity_id,
             model=resolved.model,
             provider=resolved.instance,
             endpoint=adapter.endpoint,
@@ -1017,6 +1027,7 @@ async def _bill_vision_side_call(
     config: GatewayConfig,
     api_key_id: str | None,
     user_id: str,
+    identity_id: uuid.UUID | None,
     endpoint: str,
     usage: CompletionUsage,
     counts_toward_budget: bool = True,
@@ -1050,7 +1061,7 @@ async def _bill_vision_side_call(
         model=resolved.model,
         provider=resolved.instance,
         endpoint=endpoint,
-        user_id=user_id,
+        user_id=identity_id,
         usage_override=usage,
         counts_toward_budget=counts_toward_budget,
     )
@@ -1212,6 +1223,7 @@ async def _compile_request_plan(
     config: GatewayConfig,
     model: str,
     user_id: str | None,
+    identity_id: uuid.UUID | None,
     api_key_id: str | None,
     allowlist: list[str] | None,
     endpoint: str,
@@ -1256,6 +1268,7 @@ async def _compile_request_plan(
             spec,
             policy_name=model,
             user_id=user_id,
+            identity_id=identity_id,
             allowlist=allowlist,
             signal=routing_signal() if routing_signal is not None else None,
             workspace_id=workspace_id,
@@ -1279,7 +1292,7 @@ async def _compile_request_plan(
             db=db,
             log_writer=log_writer,
             api_key_id=api_key_id,
-            user_id=user_id,
+            user_id=identity_id,
             model=model,
             provider=None,
             endpoint=endpoint,
@@ -1307,7 +1320,7 @@ async def resolve_request_context(
     estimate_cache_write_ttl: Literal["5m", "1h"] | None = None,
     routing_signal: Callable[[], RoutingSignal] | None = None,
     normalize_messages: Callable[
-        [str, LLMProvider | None, str, str | None, uuid.UUID | None],
+        [uuid.UUID | None, LLMProvider | None, str, str | None, uuid.UUID | None],
         Awaitable[tuple[int, CompletionUsage | None]],
     ]
     | None = None,
@@ -1352,6 +1365,10 @@ async def resolve_request_context(
     # ``organization_model_pricing``.
     organization_id: uuid.UUID | None = None
     user_id: str | None = None
+    # The handle's stored counterpart. Stays None in hybrid mode for the same
+    # reason ``user_id`` does: there is no local identity table to resolve
+    # against, and no local row for this request to own.
+    identity_id: uuid.UUID | None = None
     workspace_id: uuid.UUID | None = None
     rate_limit_info: RateLimitInfo | None = None
     reservation: ReservationHandle | None = None
@@ -1405,11 +1422,17 @@ async def resolve_request_context(
         # organization's keys, not every organization the deployment holds
         # (`workspace_scope.py`'s docstring).
         workspace_id = await resolve_workspace_id(db, api_key)
+        # The one lookup this request pays to have the identity in both
+        # spellings (otari-ai#1727). Resolved before the try because the
+        # rejection path below needs the handle for the rate-limit bucket, which
+        # has to be the same bucket the accepted path charges.
+        key_owner = await external_id_for(db, api_key.user_id) if api_key is not None else None
         try:
             user_id = resolve_user_id(
                 user_id_from_request=user_id_from_request,
                 api_key=api_key,
                 is_master_key=is_master_key,
+                key_owner=key_owner,
                 master_key_error=adapter.error(400, master_key_user_required_detail, ErrorKind.INVALID_REQUEST),
                 no_api_key_error=adapter.error(500, API_KEY_VALIDATION_FAILED_DETAIL, ErrorKind.API),
                 no_user_error=adapter.error(500, API_KEY_NO_USER_DETAIL, ErrorKind.API),
@@ -1432,7 +1455,8 @@ async def resolve_request_context(
             if (
                 exc.status_code == status.HTTP_403_FORBIDDEN
                 and api_key is not None
-                and not throttle_early_rejection(raw_request, str(api_key.user_id))
+                and key_owner is not None
+                and not throttle_early_rejection(raw_request, key_owner)
             ):
                 await log_gateway_rejection(
                     db=db,
@@ -1447,6 +1471,15 @@ async def resolve_request_context(
                     started_at=started_at,
                 )
             raise
+        # A keyed request bills its own key's owner, whose id the key already
+        # carries; only a master-key request names a handle that has to be
+        # looked up. ``None`` here means the handle resolves to no identity,
+        # which ``reserve_budget`` below answers with its own 404.
+        identity_id = (
+            api_key.user_id
+            if api_key is not None and user_id == key_owner
+            else await resolve_identity_id(db, user_id)
+        )
         rate_limit_info = check_rate_limit(raw_request, user_id)
 
         # Tolerate an unparseable / unknown-provider selector here: the budget
@@ -1472,6 +1505,7 @@ async def resolve_request_context(
             config=config,
             model=model,
             user_id=user_id,
+            identity_id=identity_id,
             api_key_id=api_key_id,
             allowlist=key_allowlist,
             endpoint=adapter.endpoint,
@@ -1515,7 +1549,7 @@ async def resolve_request_context(
                 db=db,
                 log_writer=log_writer,
                 api_key_id=api_key_id,
-                user_id=user_id,
+                user_id=identity_id,
                 model=gate_model,
                 provider=gate_instance,
                 endpoint=adapter.endpoint,
@@ -1545,7 +1579,7 @@ async def resolve_request_context(
                     db=db,
                     log_writer=log_writer,
                     api_key_id=api_key_id,
-                    user_id=user_id,
+                    user_id=identity_id,
                     model=gate_model,
                     provider=gate_instance,
                     endpoint=adapter.endpoint,
@@ -1621,7 +1655,7 @@ async def resolve_request_context(
                     db=db,
                     log_writer=log_writer,
                     api_key_id=api_key_id,
-                    user_id=user_id,
+                    user_id=identity_id,
                     model=gate_model,
                     provider=gate_instance,
                     endpoint=adapter.endpoint,
@@ -1643,7 +1677,7 @@ async def resolve_request_context(
                 db=db,
                 log_writer=log_writer,
                 api_key_id=api_key_id,
-                user_id=user_id,
+                user_id=identity_id,
                 model=gate_model,
                 provider=gate_instance,
                 endpoint=adapter.endpoint,
@@ -1672,7 +1706,7 @@ async def resolve_request_context(
                 # would narrow an operator's file references to it. `fetch_file`
                 # reads None as "every workspace", matching the /v1/files routes.
                 post_chars, vision_usage = await normalize_messages(
-                    user_id,
+                    identity_id,
                     gate_impl,
                     gate_model,
                     gate_instance,
@@ -1690,6 +1724,7 @@ async def resolve_request_context(
                         config=config,
                         api_key_id=api_key_id,
                         user_id=user_id,
+                        identity_id=identity_id,
                         endpoint=adapter.endpoint,
                         usage=vision_usage,
                         counts_toward_budget=not budget_exempt,
@@ -1756,6 +1791,7 @@ async def resolve_request_context(
         user_token=user_token,
         api_key_id=api_key_id,
         user_id=user_id,
+        identity_id=identity_id,
         rate_limit_info=rate_limit_info,
         reservation=reservation,
         started_at=started_at,
@@ -2507,7 +2543,7 @@ async def _require_tool_pricing(
                 db=ctx.db,
                 log_writer=ctx.log_writer,
                 api_key_id=ctx.api_key_id,
-                user_id=ctx.user_id,
+                user_id=ctx.identity_id,
                 model=key,
                 provider=GATEWAY_TOOL_PRICING_PROVIDER,
                 endpoint=adapter.endpoint,
@@ -2550,7 +2586,7 @@ async def log_usage(
     model: str,
     provider: str | None,
     endpoint: str,
-    user_id: str | None = None,
+    user_id: uuid.UUID | None = None,
     response: ChatCompletion | AsyncIterator[ChatCompletionChunk] | None = None,
     usage_override: CompletionUsage | None = None,
     error: str | None = None,
@@ -2589,7 +2625,11 @@ async def log_usage(
         model: Model name
         provider: Provider name
         endpoint: Endpoint path
-        user_id: User identifier for tracking
+        user_id: The billed identity's primary key, which is what
+            ``usage_logs.user_id`` stores since otari-ai#1727. Callers holding a
+            request context read it off ``RequestContext.identity_id``; the
+            operator-defined handle is ``RequestContext.user_id`` and never
+            reaches a row.
         response: Response object (if successful)
         usage_override: Usage data for streaming requests
         error: Error message (if failed)
@@ -2833,7 +2873,7 @@ async def log_gateway_rejection(
     db: AsyncSession | None,
     log_writer: LogWriter,
     api_key_id: str | None,
-    user_id: str | None,
+    user_id: uuid.UUID | None,
     model: str,
     provider: str | None,
     endpoint: str,
@@ -2950,7 +2990,7 @@ async def _log_failure_and_refund(
         model=model,
         provider=provider,
         endpoint=adapter.endpoint,
-        user_id=ctx.user_id,
+        user_id=ctx.identity_id,
         error=error,
         status_code=status_code,
         latency_ms=_elapsed_ms(ctx.started_at),
@@ -3178,7 +3218,7 @@ def build_streaming_response(
     db: AsyncSession | None,
     log_writer: LogWriter | None,
     api_key_id: str | None,
-    user_id: str | None,
+    user_id: uuid.UUID | None,
     rate_limit_info: RateLimitInfo | None,
     reservation: ReservationHandle | None,
     started_at: float | None = None,
@@ -3590,7 +3630,7 @@ async def run_single_attempt_stream(
         db=ctx.db,
         log_writer=ctx.log_writer,
         api_key_id=ctx.api_key_id,
-        user_id=ctx.user_id,
+        user_id=ctx.identity_id,
         rate_limit_info=ctx.rate_limit_info,
         reservation=ctx.reservation,
         started_at=ctx.started_at,
@@ -4079,7 +4119,7 @@ async def log_exhausted_plan(
         model=last.model,
         provider=last.instance,
         endpoint=adapter.endpoint,
-        user_id=ctx.user_id,
+        user_id=ctx.identity_id,
         error=str(exc.detail),
         status_code=exc.status_code,
         latency_ms=_elapsed_ms(ctx.started_at),
@@ -4120,7 +4160,7 @@ async def log_absorbed_attempt(
             model=attempt.model,
             provider=attempt.instance,
             endpoint=adapter.endpoint,
-            user_id=ctx.user_id,
+            user_id=ctx.identity_id,
             error=str(exc),
             status_code=failure_status_code(exc),
             latency_ms=_elapsed_ms(ctx.started_at),
@@ -4236,7 +4276,7 @@ async def run_standalone_non_stream(
                     model=model,
                     provider=provider,
                     endpoint=adapter.endpoint,
-                    user_id=ctx.user_id,
+                    user_id=ctx.identity_id,
                     usage_override=usage_data,
                     latency_ms=_elapsed_ms(ctx.started_at),
                     counts_toward_budget=_handle_counts_toward_budget(ctx.reservation),

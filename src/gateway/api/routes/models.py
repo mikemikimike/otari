@@ -17,6 +17,7 @@ from gateway.log_config import logger
 from gateway.models.entities import APIKey, ModelPricing
 from gateway.models.money import as_float
 from gateway.models.routing import PolicySpec
+from gateway.repositories.users_repository import external_id_for
 from gateway.services.alias_service import effective_aliases
 from gateway.services.model_access import is_model_allowed, resolve_request_allowlist
 from gateway.services.model_catalog_service import (
@@ -436,7 +437,11 @@ async def list_models(
     # another user's and never another workspace's. A master-key caller has no key
     # to read either off, so it sees the configured layer plus the default
     # workspace's, which is where its own writes land.
-    caller_user_id = auth[0].user_id if auth[0] is not None else None
+    #
+    # The user layer is keyed by the handle, not the stored id: per-user aliases
+    # and policies are scoped by what an operator typed into ``config.yml``
+    # (otari-ai#1727).
+    caller_user_id = await external_id_for(db, auth[0].user_id) if auth[0] is not None else None
     caller_workspace_id = auth[0].workspace_id if auth[0] is not None else None
     pricing_map = await _get_pricing_map(db, provider_filter=provider)
     # Snapshot before phase 1 mutates ``pricing_map`` (it pops matched keys), so
@@ -668,7 +673,7 @@ async def get_model(
     # reads the configured layer and the default workspace's.
     aliases = effective_aliases(
         config,
-        api_key.user_id if api_key is not None else None,
+        await external_id_for(db, api_key.user_id) if api_key is not None else None,
         workspace_id=api_key.workspace_id if api_key is not None else None,
     )
 

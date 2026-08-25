@@ -63,6 +63,11 @@ ADAPTERS = [
     pytest.param(responses._ADAPTER, id="responses"),
 ]
 
+# The billed identity's stored id, which a request context carries alongside
+# the handle since otari-ai#1727.
+_IDENTITY = uuid.UUID("00000000-0000-4000-8000-0000000000dd")
+
+
 
 def _tool_ctx(**overrides: Any) -> ToolContext:
     defaults: dict[str, Any] = {
@@ -111,6 +116,7 @@ def _ctx(
         user_token=None,
         api_key_id="key-1",
         user_id="user-1",
+        identity_id=_IDENTITY,
         rate_limit_info=rate_limit_info,
         reservation=reservation,
         started_at=time.monotonic(),
