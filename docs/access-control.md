@@ -74,7 +74,7 @@ Either way spend stays bound to the key's own user and the client value is forwa
 
 A budget is a spending cap with an optional reset period, and the only place in Otari that maps a cap to an amount. Everything that enforces a limit names a budget rather than restating the figure, so editing one moves every place it applies.
 
-How it is enforced depends on what names it. Assigned to a user (`users.budget_id`), `max_budget` is the limit **per user**, so a budget shared by several users caps each of them at that amount rather than in aggregate. Named by a scoped ceiling ([Organizations and workspaces](#organizations-and-workspaces)), it is a single allowance everyone under that scope draws on together.
+How it is enforced depends on what names it. Assigned to a user (`user.budget_id`), `max_budget` is the limit **per user**, so a budget shared by several users caps each of them at that amount rather than in aggregate. Named by a scoped ceiling ([Organizations and workspaces](#organizations-and-workspaces)), it is a single allowance everyone under that scope draws on together.
 
 ```bash
 curl -X POST http://localhost:8000/v1/budgets \
@@ -330,7 +330,7 @@ API keys, usage rows, model aliases, and routing policies each belong to a works
 
 Budgets come in two kinds, both enforced, and a request has to pass both:
 
-- **Per-user budgets** are the `budgets` table described above, attached with `users.budget_id`, and unchanged. One budget shared by several users is a limit each of them gets in full, not a pot they share.
+- **Per-user budgets** are the `budgets` table described above, attached with `user.budget_id`, and unchanged. One budget shared by several users is a limit each of them gets in full, not a pot they share.
 - **Scoped budgets** (`/v1/scoped-budgets`) cap a tenancy scope instead: an organization, a workspace, a workspace membership, an organization membership, or a single API key. A ceiling optionally narrows to one provider, so "this workspace may spend $50 a month, of which no more than $10 at Anthropic" is two rows. Every ceiling that applies to a request must admit it; there is deliberately no rule that a workspace's ceilings must sum to less than its organization's, since the organization's already bounds the total.
 
 A scoped ceiling's period comes from one of two fields, never both. `budget_duration_sec` is a rolling window of N seconds measured from the last reset, so a ceiling whose window runs out while nothing is being served restarts on the next request and its reset time walks forward from there. `reset_alignment` snaps the window to a UTC calendar boundary instead: `calendar_day` to midnight, `calendar_week` to Monday 00:00, `calendar_month` to the 1st. Because an aligned window is derived from the boundary rather than from the request that noticed the expiry, a ceiling nothing touched for two months rolls straight into the current month, dated the 1st, with fresh counters and no backfill of the months it slept through. A calendar month is the case seconds cannot express at all: 2592000 makes a year of 12.17 periods against 12 months, so a monthly cap written that way is about 1.5 percent more generous than it reads. A ceiling with neither field never resets, and one carrying both is refused.
@@ -343,7 +343,7 @@ Three things scoped ceilings do not yet count. Externally recorded spend (`POST 
 
 One more limit is worth knowing before you narrow a ceiling to a provider. A request is admitted against the ceilings for the provider its routing policy names *first*. If that attempt fails and the policy falls over to another provider, the second provider's narrowed ceiling is neither checked nor charged, so a narrowed cap is only reliable on a provider that is the head of every policy that can reach it. Aggregate ceilings, the ones with no provider, are unaffected: they apply whichever provider serves.
 
-Identities and the request plane are still two tables (`user` for tenancy, `users` for per-request spend), bridged by minting a `users` row named after a member's identity id. Converging them is tracked in [mozilla-ai/otari-ai#1727](https://github.com/mozilla-ai/otari-ai/issues/1727), under the wider reconciliation in [mozilla-ai/otari-ai#1452](https://github.com/mozilla-ai/otari-ai/issues/1452).
+Identities and the request plane are one table. `user` holds both: the tenancy fields an organization member has, and the `spend` and `reserved` counters this section's budgets are enforced against. The operator-defined id an API caller names is `user.external_id`, unique and unchanged across the convergence ([mozilla-ai/otari-ai#1727](https://github.com/mozilla-ai/otari-ai/issues/1727)), so live keys, `config.yml` user scopes and the `user` field on a request all keep resolving; only the storage moved, from a second `users` table that no longer exists. The wider reconciliation is [mozilla-ai/otari-ai#1452](https://github.com/mozilla-ai/otari-ai/issues/1452).
 
 ## See also
 
