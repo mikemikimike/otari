@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from conftest import seed_workspace_id
+from conftest import seed_identity_id, seed_workspace_id
 from gateway.api.deps import reset_config
 from gateway.core.config import GatewayConfig
 from gateway.core.database import reset_db
@@ -30,10 +30,14 @@ _T0 = _NOW - timedelta(days=2)
 _WINDOW = {"start_date": (_NOW - timedelta(days=5)).isoformat(), "end_date": (_NOW + timedelta(days=1)).isoformat()}
 
 
-def _ensure_user(db: Session, user_id: str) -> None:
-    if db.query(User).filter(User.user_id == user_id).first() is None:
-        db.add(User(user_id=user_id, alias=user_id, spend=0.0, blocked=False))
-        db.flush()
+def _ensure_user(db: Session, user_id: str) -> uuid.UUID:
+    """The identity a handle names, created on first use, as its stored id.
+
+    Returns the id rather than nothing because that is what the request-plane
+    rows below store since otari-ai#1727; the handle stays what the tests name.
+    """
+    identity_id: uuid.UUID = seed_identity_id(db, user_id, alias=user_id, spend=0.0, blocked=False)
+    return identity_id
 
 
 def _ensure_api_key(db: Session, api_key_id: str, user_id: str) -> None:
@@ -42,7 +46,7 @@ def _ensure_api_key(db: Session, api_key_id: str, user_id: str) -> None:
             APIKey(
                 id=api_key_id,
                 key_hash=f"hash-{api_key_id}",
-                user_id=user_id,
+                user_id=_ensure_user(db, user_id) if user_id else None,
                 workspace_id=seed_workspace_id(db),
             )
         )
@@ -63,14 +67,14 @@ def _metric_row(
     timestamp: datetime = _T0,
     session_label: str = "s-1",
 ) -> None:
-    _ensure_user(db, user_id)
+    owner = _ensure_user(db, user_id)
     if api_key_id is not None:
         _ensure_api_key(db, api_key_id, user_id)
     db.add(
         AgentTelemetry(
             id=row_id,
             api_key_id=api_key_id,
-            user_id=user_id,
+            user_id=owner,
             timestamp=timestamp,
             name=name,
             source="claude_code",
@@ -97,14 +101,14 @@ def _behavioral_row(
     session_label: str = "s-1",
     timestamp: datetime = _T0,
 ) -> None:
-    _ensure_user(db, user_id)
+    owner = _ensure_user(db, user_id)
     if api_key_id is not None:
         _ensure_api_key(db, api_key_id, user_id)
     db.add(
         AgentTelemetry(
             id=row_id,
             api_key_id=api_key_id,
-            user_id=user_id,
+            user_id=owner,
             timestamp=timestamp,
             name=name,
             tool_name=tool_name,
@@ -125,12 +129,12 @@ def _usage_row(
     timestamp: datetime = _T0,
     session_label: str = "s-1",
 ) -> None:
-    _ensure_user(db, user_id)
+    owner = _ensure_user(db, user_id)
     db.add(
         UsageLog(
             id=row_id,
             workspace_id=seed_workspace_id(db),
-            user_id=user_id,
+            user_id=owner,
             timestamp=timestamp,
             model="claude-opus-4-8",
             provider="anthropic",

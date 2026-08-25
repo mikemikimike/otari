@@ -84,6 +84,68 @@ def _reset_default_pricing() -> Generator[None, None, None]:
     reset_price_refresh_state()
 
 
+def seed_identity_id(db: Any, external_id: str, **columns: Any) -> Any:
+    """The identity a directly-built request-plane row belongs to, created if absent.
+
+    The sibling of :func:`seed_workspace_id`, and needed for the same reason:
+    since otari-ai#1727 the ten request-plane tables store ``user.id``, so a
+    fixture that inserts one of those rows without going through a route has to
+    resolve the operator-defined handle it is thinking in to the id the column
+    holds. Get-or-create, because the handle is what a test names and it should
+    not have to know whether an earlier line already seeded it.
+
+    ``active_organization_id`` is NOT NULL, so the identity lands in the same
+    default organization a master-key write does.
+
+    Imports inside the function, for the reason ``seed_workspace_id`` gives.
+    """
+    from gateway.models.tenancy import Organization, User
+
+    existing = db.query(User).filter(User.external_id == external_id).first()
+    if existing is not None:
+        return existing.id
+
+    organization = db.query(Organization).filter(Organization.slug == "default").first()
+    if organization is None:
+        organization = Organization(name="Default organization", slug="default")
+        db.add(organization)
+        db.flush()
+    user = User(external_id=external_id, active_organization_id=organization.id, **columns)
+    db.add(user)
+    db.flush()
+    return user.id
+
+
+async def seed_identity_id_async(db: Any, external_id: str, **columns: Any) -> Any:
+    """:func:`seed_identity_id` for the async session fixtures.
+
+    Takes the identity's other columns too, because the async fixtures that need
+    this are the budget tests, and what they are seeding is a spend counter.
+    """
+    from sqlalchemy import select
+
+    from gateway.models.tenancy import Organization, User
+
+    existing = (
+        await db.execute(select(User).where(User.external_id == external_id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing.id
+
+    organization_id = (
+        await db.execute(select(Organization.id).where(Organization.slug == "default"))
+    ).scalar_one_or_none()
+    if organization_id is None:
+        organization = Organization(name="Default organization", slug="default")
+        db.add(organization)
+        await db.flush()
+        organization_id = organization.id
+    user = User(external_id=external_id, active_organization_id=organization_id, **columns)
+    db.add(user)
+    await db.flush()
+    return user.id
+
+
 def seed_workspace_id(db: Any) -> Any:
     """The workspace a directly-built request-plane row belongs to.
 

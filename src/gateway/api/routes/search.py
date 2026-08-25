@@ -244,7 +244,7 @@ async def _dispatch_search(
     api_key, _ = auth_result
     api_key_id = api_key.id if api_key else None
     # A key flagged exclude_from_budget logs cost but is never reserved or folded
-    # into users.spend, matching every other billed endpoint.
+    # into user.spend, matching every other billed endpoint.
     budget_exempt = api_key is not None and api_key.exclude_from_budget
 
     user_id, identity_id = await resolve_passthrough_user_id(

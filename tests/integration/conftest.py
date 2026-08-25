@@ -31,45 +31,8 @@ if "gateway" in sys.modules:
 from gateway.core.config import API_KEY_HEADER, GatewayConfig
 from gateway.db import get_db
 from gateway.main import create_app
-from gateway.models.tenancy import User
 
 MODEL_NAME = "gemini:gemini-2.5-flash"
-
-# The organization the workspace-scope migration seeds, restored into every test
-# database by ``clean_database``. Every identity needs one
-# (``user.active_organization_id`` is NOT NULL), and a request-plane identity a
-# test seeds belongs in the same place a master-key write lands.
-DEFAULT_ORGANIZATION_SLUG = "default"
-
-_DEFAULT_ORGANIZATION_SQL = text("SELECT id FROM organization WHERE slug = :slug")
-
-
-def seed_identity(session: Session, external_id: str, **columns: Any) -> User:
-    """Add a request-plane identity, flush it, and return the row.
-
-    The counterpart of what ``POST /v1/users`` does, for tests that seed state
-    directly. Since otari-ai#1727 there is one identity table, so a test that
-    used to add a ``users`` row adds one of these and hands ``user.id`` to
-    whatever request-plane rows it is about to create.
-    """
-    organization_id = session.execute(
-        _DEFAULT_ORGANIZATION_SQL, {"slug": DEFAULT_ORGANIZATION_SLUG}
-    ).scalar_one()
-    user = User(external_id=external_id, active_organization_id=organization_id, **columns)
-    session.add(user)
-    session.flush()
-    return user
-
-
-async def seed_identity_async(session: AsyncSession, external_id: str, **columns: Any) -> User:
-    """:func:`seed_identity` for the async session fixtures."""
-    organization_id = (
-        await session.execute(_DEFAULT_ORGANIZATION_SQL, {"slug": DEFAULT_ORGANIZATION_SLUG})
-    ).scalar_one()
-    user = User(external_id=external_id, active_organization_id=organization_id, **columns)
-    session.add(user)
-    await session.flush()
-    return user
 
 
 def alembic_config(database_url: str) -> Config:

@@ -182,7 +182,7 @@ def _normalize_strategy(strategy: str | None) -> str:
 class ReservationHandle:
     """Tracks a budget reservation so it can be reconciled or released.
 
-    ``estimate`` is the amount added to ``users.reserved`` at reservation time;
+    ``estimate`` is the amount added to ``user.reserved`` at reservation time;
     ``reserved`` records whether that write actually happened (it is skipped for
     the ``disabled`` strategy, users without a budget, and free models). The
     handle is passed to :func:`reconcile_reservation` on success or
@@ -200,7 +200,7 @@ class ReservationHandle:
     reserved: bool
     strategy: str
     # When false, reconciliation records the usage row's cost but does NOT write it
-    # to ``users.spend`` and never gates enforcement. Set for requests on keys flagged
+    # to ``user.spend`` and never gates enforcement. Set for requests on keys flagged
     # ``exclude_from_budget`` (and reused for imported usage). Defaults to true so every
     # existing construction site keeps the normal enforced behavior.
     counts_toward_budget: bool = True
@@ -277,7 +277,7 @@ async def reserve_budget(
     This replaces the old check-then-call pattern (validate, release the lock,
     call the provider, write spend in a *later* transaction) that allowed
     concurrent requests to all pass a stale budget check and collectively
-    overspend. Here the estimate is committed to ``users.reserved`` via a single
+    overspend. Here the estimate is committed to ``user.reserved`` via a single
     conditional UPDATE: if it would push ``spend + reserved`` past ``max_budget``
     the row count is zero and we reject with 403. No row lock is held across the
     provider network call.
@@ -304,7 +304,7 @@ async def reserve_budget(
     # expression as double precision.
     #
     # Defense-in-depth: estimates derive from client-controlled fields (max
-    # tokens, image count). A negative estimate would *reduce* users.reserved and
+    # tokens, image count). A negative estimate would *reduce* user.reserved and
     # weaken the budget gate, so never let one reach the DB.
     held = max(to_usd(estimate), ZERO)
     normalized = _normalize_strategy(strategy)
@@ -461,17 +461,17 @@ async def reconcile_reservation(db: AsyncSession, handle: ReservationHandle, act
 
     Note: if this UPDATE/commit fails (e.g. a transient DB error after the
     provider call succeeded), the held estimate is not released and stays in
-    ``users.reserved``. That shrinks the user's effective budget until the next
+    ``user.reserved``. That shrinks the user's effective budget until the next
     budget reset zeroes it; a future enhancement could add a stale-reservation
     sweep. This is the cost of fail-closed pre-debit and is rare in practice.
 
-    This is the single authority for writing ``users.spend`` on the billable
+    This is the single authority for writing ``user.spend`` on the billable
     path — the usage-log writer no longer touches spend, so reconciliation must
     run for every served request (even when ``actual_cost`` is 0, to release the
     reservation). Runs inline in the request, not in the (possibly batched) log
     writer, so the next request's reservation sees fresh totals.
     """
-    # The settled cost reaches ``users.spend`` unchanged: both are exact to the
+    # The settled cost reaches ``user.spend`` unchanged: both are exact to the
     # micro-dollar, so the sum of a user's rows is the counter a 403 is decided
     # against. A caller still holding a float (an imported amount, a platform
     # report) is widened rather than the counter narrowed. Never let a negative
@@ -479,7 +479,7 @@ async def reconcile_reservation(db: AsyncSession, handle: ReservationHandle, act
     spent = max(to_usd(actual_cost), ZERO)
     values: dict[str, object] = {}
     # Budget-exempt rows are recorded (their cost still lands on the usage row) but
-    # never fold into users.spend, so they cannot gate a later request. Gating the
+    # never fold into user.spend, so they cannot gate a later request. Gating the
     # spend write here (not merely skipping the reserve) is what makes an empty
     # handle safe at every reconcile site.
     if spent and handle.counts_toward_budget:
@@ -507,14 +507,14 @@ async def reconcile_reservation(db: AsyncSession, handle: ReservationHandle, act
 
 
 async def record_external_spend(db: AsyncSession, user_id: str, cost: Decimal | float) -> None:
-    """Fold already-incurred cost into ``users.spend`` outside the reservation flow.
+    """Fold already-incurred cost into ``user.spend`` outside the reservation flow.
 
     Used by asynchronous billable paths (batch results) where the create-time
     reservation has already been reconciled and no live hold exists at the point
     the cost becomes known. This deliberately does not enforce the budget: the
     spend has already happened upstream at the provider, so it is recorded, not
     gated. Writing goes through :func:`reconcile_reservation` (with an empty
-    handle) so ``users.spend`` still has a single writer.
+    handle) so ``user.spend`` still has a single writer.
 
     Scoped ceilings are deliberately not touched here. The handle that held them
     was reconciled when the batch was created, and this path has no request scope

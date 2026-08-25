@@ -665,7 +665,7 @@ class RequestContext:
         # request whose plan is exhausted still owes for the searches it ran, and
         # ``log_exhausted_plan`` writes that onto the row without settling. Recording
         # it here lets the single release site reconcile it instead of refunding,
-        # which is what keeps ``users.spend`` matching the row: ``refund_reservation``
+        # which is what keeps ``user.spend`` matching the row: ``refund_reservation``
         # releases the hold *without* writing spend.
         self.tool_charge: Decimal = Decimal(0)
         # Monotonic clock reading taken at the very start of the handler
@@ -758,7 +758,7 @@ async def resolve_dispatch_provider(
         # the model alone, which is exactly the `provider:model` form stored
         # pricing rows use. An instance removed from config while its pricing row
         # survives therefore prices, reserves a real estimate, and only fails
-        # here; before this refund existed the hold stayed on users.reserved
+        # here; before this refund existed the hold stayed on user.reserved
         # until the next budget reset (forever, for a budget with no period).
         #
         # Releasing here and then raising is safe only because no caller above
@@ -928,7 +928,7 @@ async def _serve_from_hosted_credential(
         # outside any ``try`` that takes a bare exception, and ``gateway.main``
         # registers handlers only for ``TenancyError`` and
         # ``RequestValidationError``. Without this the reservation the preamble
-        # took stays on ``users.reserved`` until the budget resets, which for a
+        # took stays on ``user.reserved`` until the budget resets, which for a
         # budget with no period is forever.
         #
         # ``Exception`` and not ``BaseException``: ``asyncio.CancelledError`` is a
@@ -1036,7 +1036,7 @@ async def _bill_vision_side_call(
 
     The describe model already ran (to caption an image for a text-only target
     model), so its cost is recorded as its own usage-log row for the configured
-    vision model and committed directly to ``users.spend``. It is intentionally
+    vision model and committed directly to ``user.spend``. It is intentionally
     not gated or refundable: the cost is already incurred, so a budget reject
     here would lose it, and refunding the main request must not erase it.
     No-op when no vision model is configured or its selector can't be parsed.
@@ -1066,9 +1066,9 @@ async def _bill_vision_side_call(
         counts_toward_budget=counts_toward_budget,
     )
     # Commit the spend directly via an unreserved handle (no held estimate to
-    # release): this just adds the actual cost to users.spend. When the request is
+    # release): this just adds the actual cost to user.spend. When the request is
     # budget-exempt the handle carries counts_toward_budget=False, so the cost is
-    # logged on its own row but never folded into users.spend.
+    # logged on its own row but never folded into user.spend.
     await reconcile_reservation(
         db,
         ReservationHandle(
@@ -1617,7 +1617,7 @@ async def resolve_request_context(
             cache_write_ttl=estimate_inputs.cache_write_ttl,
         )
         # A key flagged exclude_from_budget still logs its cost but is never
-        # reserved, reconciled into users.spend, or gated. Master-key callers have
+        # reserved, reconciled into user.spend, or gated. Master-key callers have
         # api_key None and stay on the enforced path. The decision is threaded
         # through the reservation handle so every downstream reconcile/refund/top-up
         # site inherits it (see budget_service.reconcile_reservation).
@@ -1648,7 +1648,7 @@ async def resolve_request_context(
             # A blocked or over-budget user is refused inside reserve_budget,
             # which reserves nothing on the paths that raise, so there is no
             # refund to do before recording the drop. The 404 for an unknown user
-            # is skipped: usage_logs.user_id is a foreign key to users, so a row
+            # is skipped: usage_logs.user_id is a foreign key to user, so a row
             # naming a user that does not exist could not be inserted.
             if exc.status_code != status.HTTP_404_NOT_FOUND:
                 await log_gateway_rejection(
@@ -2453,7 +2453,7 @@ async def prepare_gateway_tools(
         # guardrails, the workspace MCP servers, the workspace code-execution
         # policy and the workspace web-search configuration above, and
         # `_require_tool_pricing`), and a failure in any of them is not an
-        # `HTTPException`, so without this arm it would leave `users.reserved`
+        # `HTTPException`, so without this arm it would leave `user.reserved`
         # holding the estimate until the budget's next reset, or forever for a
         # budget with no reset period. The rollback comes first because a failed
         # statement leaves the session unusable and `release_reservation` writes:
@@ -2601,7 +2601,7 @@ async def log_usage(
     """Log API usage to the database and return the computed cost.
 
     Spend is not written here; the budget reservation reconcile path owns
-    ``users.spend``. This returns the cost it computed so the caller can
+    ``user.spend``. This returns the cost it computed so the caller can
     reconcile the reservation with the actual amount.
 
     ``tool_tally`` carries the request's gateway-run tool calls. Their cost is
@@ -2615,7 +2615,7 @@ async def log_usage(
     settled it. Absorbed rows are written without a tally on purpose
     (:func:`log_absorbed_attempt` passes none): they describe an attempt that did
     not serve, and they never settle a reservation, so a charge placed there would
-    be visible on the row and absent from ``users.spend``. One row owning the tool
+    be visible on the row and absent from ``user.spend``. One row owning the tool
     ledger also keeps the per-tool breakdown from counting the same search twice.
 
     Args:
@@ -2912,7 +2912,7 @@ async def log_gateway_rejection(
     attributed, acted on, or filtered, and writing one would let an
     unauthenticated caller append to the usage table. ``user_id=None`` is
     therefore a no-op here. A 404 for a user that does not exist is skipped for a
-    harder reason: ``usage_logs.user_id`` is a foreign key to ``users``, so that
+    harder reason: ``usage_logs.user_id`` is a foreign key to ``user``, so that
     row could not be inserted at all. A rate-limit rejection (429) is skipped
     because a throttle is expected, self-limiting behavior rather than dropped
     traffic; the client-driven gates that do log (a selector that no longer
@@ -2979,7 +2979,7 @@ async def _log_failure_and_refund(
     When gateway-run tool calls happened before the failure, their cost is
     reconciled rather than refunded: ``refund_reservation`` releases the hold
     *without* writing spend, which would leave the cost visible on the row and
-    absent from ``users.spend``.
+    absent from ``user.spend``.
     """
     if ctx.db is None:
         return

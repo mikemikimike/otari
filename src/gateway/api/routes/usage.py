@@ -528,7 +528,7 @@ async def ingest_external_usage(
     subscription-backed usage (e.g. Claude Code) as usage-log rows tagged with their
     ``source``, priced at the effective API rate for each event's timestamp.
     Imported usage is real cost, but never counts toward budgets or mutates
-    ``users.spend`` (it is retrospective, so it cannot be reserved). Idempotent by
+    ``user.spend`` (it is retrospective, so it cannot be reserved). Idempotent by
     ``(source, source_event_id)``. The payload is content-free; any
     prompt/completion/tool field is rejected (422), not stored.
     """
@@ -650,7 +650,7 @@ async def delete_usage_rows(
     (``by_filter: true`` plus optional ``source`` / ``model`` / ``user_id`` /
     ``status`` / date range / ``priced``). Only imported rows
     (``counts_toward_budget = false``) are ever removed: enforced gateway rows and
-    the spend ledger (``users.spend``) are untouched, so a delete can never desync a
+    the spend ledger (``user.spend``) are untouched, so a delete can never desync a
     budget. Master-key only.
     """
     return await delete_usage(db, request)
@@ -668,7 +668,7 @@ async def set_usage_price_rows(
     from each row's own token counts at the supplied ``input`` / ``output`` /
     ``cache_read`` / ``cache_write`` per-1M rates (manual rates, not a recompute from
     configured pricing). Only imported rows (``counts_toward_budget = false``) are
-    touched, so ``users.spend`` is never affected. Master-key only.
+    touched, so ``user.spend`` is never affected. Master-key only.
     """
     return await set_usage_price(db, request)
 

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from conftest import seed_workspace_id
+from conftest import seed_identity_id, seed_workspace_id
 from gateway.models.entities import AgentTelemetry, APIKey
 from gateway.models.tenancy import User
 
@@ -16,10 +16,14 @@ DELETE_PATH = "/v1/agent-telemetry"
 _TS = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
 
 
-def _ensure_user(db: Session, user_id: str) -> None:
-    if db.query(User).filter(User.user_id == user_id).first() is None:
-        db.add(User(user_id=user_id, alias=user_id, spend=0.0, blocked=False))
-        db.flush()
+def _ensure_user(db: Session, user_id: str) -> uuid.UUID:
+    """The identity a handle names, created on first use, as its stored id.
+
+    Returns the id rather than nothing because that is what the request-plane
+    rows below store since otari-ai#1727; the handle stays what the tests name.
+    """
+    identity_id: uuid.UUID = seed_identity_id(db, user_id, alias=user_id, spend=0.0, blocked=False)
+    return identity_id
 
 
 def _ensure_api_key(db: Session, api_key_id: str, user_id: str) -> None:
@@ -28,7 +32,7 @@ def _ensure_api_key(db: Session, api_key_id: str, user_id: str) -> None:
             APIKey(
                 id=api_key_id,
                 key_hash=f"hash-{api_key_id}",
-                user_id=user_id,
+                user_id=_ensure_user(db, user_id) if user_id else None,
                 workspace_id=seed_workspace_id(db),
             )
         )
@@ -45,13 +49,13 @@ def _make_row(
     source: str = "claude_code",
     timestamp: datetime = _TS,
 ) -> AgentTelemetry:
-    _ensure_user(db, user_id)
+    owner = _ensure_user(db, user_id)
     if api_key_id is not None:
         _ensure_api_key(db, api_key_id, user_id)
     row = AgentTelemetry(
         id=row_id,
         api_key_id=api_key_id,
-        user_id=user_id,
+        user_id=owner,
         timestamp=timestamp,
         name=name,
         tool_name="Bash",
@@ -71,10 +75,10 @@ def _make_metric_row(
     name: str = "claude_code.commit.count",
     timestamp: datetime = _TS,
 ) -> AgentTelemetry:
-    _ensure_user(db, user_id)
+    owner = _ensure_user(db, user_id)
     row = AgentTelemetry(
         id=row_id,
-        user_id=user_id,
+        user_id=owner,
         timestamp=timestamp,
         name=name,
         source="claude_code",

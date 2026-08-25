@@ -232,7 +232,7 @@ async def run_passthrough(
     # free-model shortcut applies.
     organization_id = await organization_for_workspace_id(db, workspace_id)
     # A key flagged exclude_from_budget logs cost but is never reserved or folded
-    # into users.spend. Threaded through the reservation handle (so reconcile skips
+    # into user.spend. Threaded through the reservation handle (so reconcile skips
     # the spend write) and stamped on the usage row.
     budget_exempt = api_key is not None and api_key.exclude_from_budget
 
@@ -302,7 +302,7 @@ async def run_passthrough(
 
         ``reserve_budget`` reserves nothing on the paths that raise, so there is
         nothing to refund here. The 404 for an unknown user is left unlogged:
-        ``usage_logs.user_id`` is a foreign key to ``users``, so a row naming a
+        ``usage_logs.user_id`` is a foreign key to ``user``, so a row naming a
         user that does not exist could not be inserted.
         """
         try:

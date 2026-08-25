@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from conftest import seed_workspace_id
+from conftest import seed_identity_id, seed_workspace_id
 from gateway.core.sql import MAX_FILTER_VALUES
 from gateway.models.entities import APIKey, UsageLog
 from gateway.models.tenancy import User
@@ -27,10 +27,14 @@ SUMMARY_PATH = "/v1/usage/summary"
 CSV_PATH = "/v1/usage/summary.csv"
 
 
-def _ensure_user(db: Session, user_id: str) -> None:
-    if db.query(User).filter(User.user_id == user_id).first() is None:
-        db.add(User(user_id=user_id, alias=user_id, spend=0.0, blocked=False))
-        db.flush()
+def _ensure_user(db: Session, user_id: str) -> uuid.UUID:
+    """The identity a handle names, created on first use, as its stored id.
+
+    Returns the id rather than nothing because that is what the request-plane
+    rows below store since otari-ai#1727; the handle stays what the tests name.
+    """
+    identity_id: uuid.UUID = seed_identity_id(db, user_id, alias=user_id, spend=0.0, blocked=False)
+    return identity_id
 
 
 def _ensure_api_key(db: Session, key_id: str, user_id: str | None) -> None:
@@ -41,7 +45,7 @@ def _ensure_api_key(db: Session, key_id: str, user_id: str | None) -> None:
                 id=key_id,
                 key_hash=f"hash-{key_id}",
                 key_name=key_id,
-                user_id=user_id,
+                user_id=_ensure_user(db, user_id) if user_id else None,
                 workspace_id=seed_workspace_id(db),
             )
         )
@@ -72,15 +76,14 @@ def _make_log(
     latency_ms: int | None = None,
     workspace_id: Any = None,
 ) -> None:
-    if user_id is not None:
-        _ensure_user(db, user_id)
+    owner = _ensure_user(db, user_id) if user_id is not None else None
     if api_key_id is not None:
         _ensure_api_key(db, api_key_id, user_id)
     db.add(
         UsageLog(
             id=str(uuid.uuid4()),
             workspace_id=workspace_id if workspace_id is not None else seed_workspace_id(db),
-            user_id=user_id,
+            user_id=owner,
             api_key_id=api_key_id,
             timestamp=timestamp,
             model=model,

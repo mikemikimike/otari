@@ -14,7 +14,7 @@ explicitly for the filter path so an empty request body can never match, and thu
 delete or reprice, every imported row by accident.
 
 **Safety invariant:** every query is scoped to ``counts_toward_budget = False`` (imported
-rows). Enforced gateway rows and the spend ledger (``users.spend``) are never touched, so
+rows). Enforced gateway rows and the spend ledger (``user.spend``) are never touched, so
 neither operation can desync a budget, matching the boundary the ingest path establishes.
 """
 
@@ -280,7 +280,7 @@ async def set_usage_price(db: AsyncSession, request: UsageSetPriceRequest) -> Us
     matched row against its own token counts, writing ``cost`` / ``billing_meters`` /
     ``pricing_breakdown`` back and clearing the row's pricing provenance, which the
     old amount's source no longer explains. Only imported rows are touched (see
-    ``_selection_conditions``), so recomputing cost can never desync ``users.spend``.
+    ``_selection_conditions``), so recomputing cost can never desync ``user.spend``.
     Rows whose recomputed cost equals the stored value are reported ``unchanged``.
 
     Rows are walked in bounded keyset pages ordered by id, so memory stays flat even

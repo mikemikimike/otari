@@ -12,7 +12,7 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from conftest import seed_workspace_id
+from conftest import seed_identity_id, seed_workspace_id
 from gateway.core.sql import MAX_FILTER_VALUES
 from gateway.models.entities import UsageLog
 from gateway.models.tenancy import User
@@ -24,10 +24,14 @@ COUNT_PATH = "/v1/usage/count"
 _TS = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
 
 
-def _ensure_user(db: Session, user_id: str) -> None:
-    if db.query(User).filter(User.user_id == user_id).first() is None:
-        db.add(User(user_id=user_id, alias=user_id, spend=0.0, blocked=False))
-        db.flush()
+def _ensure_user(db: Session, user_id: str) -> uuid.UUID:
+    """The identity a handle names, created on first use, as its stored id.
+
+    Returns the id rather than nothing because that is what the request-plane
+    rows below store since otari-ai#1727; the handle stays what the tests name.
+    """
+    identity_id: uuid.UUID = seed_identity_id(db, user_id, alias=user_id, spend=0.0, blocked=False)
+    return identity_id
 
 
 def _make_log(
@@ -52,11 +56,10 @@ def _make_log(
     status: str = "success",
     timestamp: datetime = _TS,
 ) -> UsageLog:
-    _ensure_user(db, user_id)
     log = UsageLog(
         id=log_id,
         workspace_id=seed_workspace_id(db),
-        user_id=user_id,
+        user_id=_ensure_user(db, user_id),
         timestamp=timestamp,
         model=model,
         provider=provider,

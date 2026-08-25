@@ -8,7 +8,7 @@ deployment price list), and records them as ``usage_logs`` rows with a ``source`
 provenance tag. Imported rows are attributed to a user and carry their real
 (API-equivalent) cost, but are always ``counts_toward_budget=False``:
 retrospective usage cannot be reserved, so it is recorded and shown in cost
-analytics without ever gating or mutating ``users.spend``.
+analytics without ever gating or mutating ``user.spend``.
 
 Idempotency: rows are keyed by ``(source, source_event_id)`` (a unique constraint).
 Re-submitting a batch counts already-present events as duplicates and never creates
@@ -460,7 +460,7 @@ async def ingest_external_events(
 
     Attribution binds to the authenticated principal: the master key may name any
     user, an API key binds usage to its own user (and stamps its id on the rows).
-    Never touches ``users.spend``/budgets: rows are written ``counts_toward_budget``
+    Never touches ``user.spend``/budgets: rows are written ``counts_toward_budget``
     False. Idempotent by ``(source, source_event_id)``.
 
     An API key used for import MUST be budget-exempt. Imported usage is

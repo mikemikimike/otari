@@ -21,7 +21,7 @@ from sqlalchemy.orm import sessionmaker
 
 from gateway.core.config import API_KEY_HEADER, GatewayConfig
 from gateway.log_config import logger as gateway_logger
-from gateway.models.entities import User
+from gateway.models.tenancy import User
 
 from .conftest import build_test_client
 

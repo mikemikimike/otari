@@ -817,7 +817,7 @@ class BatchRecord(Base):
 
     Written at creation time so results accounting can be made idempotent (bill
     and log once, on the first completed retrieval), the batch cost can be folded
-    into ``users.spend``, and ownership can be enforced without depending on the
+    into ``user.spend``, and ownership can be enforced without depending on the
     provider round-tripping the ``otari_user_id`` metadata marker. Batches created
     before this table existed carry no record and fall back to the
     metadata-anchored ownership path in ``api/routes/batches.py``. ``workspace_id``
@@ -1004,7 +1004,7 @@ class BudgetResetLog(Base):
     # grows, so an unindexed FK degrades that endpoint to a full scan over time.
     budget_id: Mapped[str] = mapped_column(ForeignKey("budgets.budget_id"), index=True)
     # The ledger's record of a counter that is now exact, so it is exact too:
-    # a float snapshot of an exact ``users.spend`` would no longer equal the
+    # a float snapshot of an exact ``user.spend`` would no longer equal the
     # spend it claims to have recorded.
     previous_spend: Mapped[Decimal] = mapped_column(UsdCost())
     reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
@@ -1054,7 +1054,7 @@ class ScopedBudget(Base):
 
     This table does not replace ``budgets``, and the two enforce differently. A
     budget reached through ``users.budget_id`` is checked against
-    ``users.spend + users.reserved``, so N users sharing one each get the full
+    ``user.spend + user.reserved``, so N users sharing one each get the full
     limit. A budget reached through a row here is checked against *this row's*
     counters, so everyone the scope names draws on one allowance. Same budget,
     two enforcement shapes, which is why both mechanisms exist.

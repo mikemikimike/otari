@@ -8,17 +8,21 @@ from datetime import UTC, datetime, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from conftest import seed_workspace_id
+from conftest import seed_identity_id, seed_workspace_id
 from gateway.models.entities import APIKey, UsageLog
 from gateway.models.tenancy import User
 
 USAGE_PATH = "/v1/usage"
 
 
-def _ensure_user(db: Session, user_id: str) -> None:
-    if db.query(User).filter(User.user_id == user_id).first() is None:
-        db.add(User(user_id=user_id, alias=user_id, spend=0.0, blocked=False))
-        db.flush()
+def _ensure_user(db: Session, user_id: str) -> uuid.UUID:
+    """The identity a handle names, created on first use, as its stored id.
+
+    Returns the id rather than nothing because that is what the request-plane
+    rows below store since otari-ai#1727; the handle stays what the tests name.
+    """
+    identity_id: uuid.UUID = seed_identity_id(db, user_id, alias=user_id, spend=0.0, blocked=False)
+    return identity_id
 
 
 def _make_log(
@@ -44,11 +48,10 @@ def _make_log(
     attempt_count: int | None = None,
     request_group_id: str | None = None,
 ) -> UsageLog:
-    _ensure_user(db, user_id)
     log = UsageLog(
         id=log_id or str(uuid.uuid4()),
         workspace_id=seed_workspace_id(db),
-        user_id=user_id,
+        user_id=_ensure_user(db, user_id),
         api_key_id=api_key_id,
         timestamp=timestamp,
         model=model,
@@ -564,7 +567,7 @@ def test_list_usage_labels_rows_from_the_joined_entities(
     on every visit to Usage and Activity just to turn ids into names, which grows
     with the deployment rather than with the page.
     """
-    db_session.add(User(user_id="labeled-user", alias="Ada Lovelace", spend=0.0, blocked=False))
+    seed_identity_id(db_session, "labeled-user", alias="Ada Lovelace", spend=0.0, blocked=False)
     db_session.flush()
     key = APIKey(
         workspace_id=seed_workspace_id(db_session),
@@ -632,7 +635,7 @@ def test_summary_breakdowns_carry_labels_for_opaque_keys(
     This is what lets the dashboard's user and key pickers be built from the
     breakdown (top N by spend, in-window) the way the model picker already is.
     """
-    db_session.add(User(user_id="summary-user", alias="Grace Hopper", spend=0.0, blocked=False))
+    seed_identity_id(db_session, "summary-user", alias="Grace Hopper", spend=0.0, blocked=False)
     db_session.flush()
     key = APIKey(
         workspace_id=seed_workspace_id(db_session),

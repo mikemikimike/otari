@@ -415,7 +415,7 @@ async def create_batch(
     provider_kwargs = resolved.kwargs
 
     # A key flagged exclude_from_budget logs cost but is never reserved or folded
-    # into users.spend, at create time and again when results are accounted.
+    # into user.spend, at create time and again when results are accounted.
     budget_exempt = api_key is not None and api_key.exclude_from_budget
 
     # Batch cost is unknown until results are retrieved, so the reservation
