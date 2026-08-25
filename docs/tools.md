@@ -97,16 +97,17 @@ a tool for you":
 | API | Non-streaming | Streaming |
 |---|---|---|
 | `/v1/responses` | A native `web_search_call` output item per search, before the message | The same item, as `response.output_item.added` / `.done`. It is not repeated in `response.completed`'s `output`, so a client reading only the final response sees the answer without the calls |
-| `/v1/messages` | A native `server_tool_use` + `web_search_tool_result` pair per search, before the message, for a caller that declared `web_search_<date>`. Nothing otherwise | The same pair, as `content_block_start` / `content_block_stop` events |
+| `/v1/messages` | A native `server_tool_use` + `web_search_tool_result` pair per search, before the message, for a caller that declared `web_search_<date>`. Nothing otherwise | The same search pair, plus a server-owned `mcp_tool_use` + `mcp_tool_result` pair around each gateway-run MCP call, as `content_block_start` / `content_block_stop` events |
 | `/v1/chat/completions` | Nothing. The final message only | Nothing. The gateway's own `tool_call` deltas are not forwarded |
 
-The gateway's own tool calls are deliberately withheld from streaming clients: a
-client shown a `tool_use` block can never be sent the matching `tool_result`,
-because Otari consumed it, and an SDK accumulating that stream would be left with
-an unanswered call. When a model asks for one of your tools *and* a gateway tool in
-the same message, Otari runs its own, hides it, renumbers what is left so the
-indices stay gapless for SDK accumulators, and hands you only the call you can
-dispatch.
+The gateway's caller-owned `tool_use` blocks are deliberately withheld from
+streaming clients: Otari consumes those calls, so exposing that vocabulary would
+incorrectly hand execution ownership to the client. Messages streams instead
+represent gateway-run MCP with server-owned `mcp_tool_use` and `mcp_tool_result`
+blocks. The start arrives immediately before execution and the matching result
+immediately after it. When a model asks for one of your tools and a gateway tool in
+the same message, Otari runs its own, renumbers the visible blocks so indices stay
+gapless for SDK accumulators, and hands you only the ordinary call you can dispatch.
 
 Billing is standalone-only. In hybrid mode the platform resolves the model and
 receives the usage report, and that report carries no tool counts, so a
