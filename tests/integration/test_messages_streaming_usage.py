@@ -34,6 +34,7 @@ from any_llm.types.messages import (
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from conftest import seed_identity_id
 from gateway.models.entities import UsageLog
 
 from .conftest import MODEL_NAME
@@ -156,7 +157,7 @@ def _poll_usage_row(
     while True:
         db = make_session()
         try:
-            row = db.query(UsageLog).filter(UsageLog.user_id == user_id).first()
+            row = db.query(UsageLog).filter(UsageLog.user_id == seed_identity_id(db, user_id)).first()
             if row is not None or time.time() > deadline:
                 return row
         finally:

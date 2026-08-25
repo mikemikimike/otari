@@ -26,6 +26,7 @@ from any_llm.types.completion import (
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from conftest import seed_identity_id
 from gateway.core.config import API_KEY_HEADER
 from gateway.models.entities import UsageLog
 from gateway.models.tenancy import User
@@ -99,7 +100,7 @@ def search_pricing(client: TestClient, master_key_header: dict[str, str]) -> dic
 def _spend(db_session_factory: Callable[[], Session], user_id: str) -> float:
     db = db_session_factory()
     try:
-        user = db.query(User).filter(User.user_id == user_id).first()
+        user = db.query(User).filter(User.external_id == user_id).first()
         return float(user.spend) if user else 0.0
     finally:
         db.close()
@@ -108,7 +109,12 @@ def _spend(db_session_factory: Callable[[], Session], user_id: str) -> float:
 def _latest_row(db_session_factory: Callable[[], Session], user_id: str) -> UsageLog:
     db = db_session_factory()
     try:
-        row = db.query(UsageLog).filter(UsageLog.user_id == user_id).order_by(UsageLog.timestamp.desc()).first()
+        row = (
+            db.query(UsageLog)
+            .filter(UsageLog.user_id == seed_identity_id(db, user_id))
+            .order_by(UsageLog.timestamp.desc())
+            .first()
+        )
         assert row is not None, "expected a usage row for the request"
         db.expunge(row)
         return row

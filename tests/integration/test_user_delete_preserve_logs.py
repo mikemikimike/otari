@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from conftest import seed_identity_id
 from gateway.adapters.telemetry_storage_adapter import DatabaseTelemetryStorageAdapter
 from gateway.core.config import API_KEY_HEADER
 from gateway.models.entities import APIKey, BudgetResetLog, UsageLog
@@ -37,7 +38,7 @@ def test_delete_user_preserves_usage_logs(
         headers={API_KEY_HEADER: f"Bearer {api_key}"},
     )
 
-    logs_before = db_session.query(UsageLog).filter(UsageLog.user_id == "del-user").all()
+    logs_before = db_session.query(UsageLog).filter(UsageLog.user_id == seed_identity_id(db_session, "del-user")).all()
     assert len(logs_before) > 0
     log_id = logs_before[0].id
     assert logs_before[0].api_key_id is not None
@@ -48,7 +49,9 @@ def test_delete_user_preserves_usage_logs(
     db_session.expire_all()
     log_after = db_session.query(UsageLog).filter(UsageLog.id == log_id).first()
     assert log_after is not None, "Usage log should survive user deletion"
-    assert log_after.user_id == "del-user", "user_id FK should be preserved (soft-delete keeps user row)"
+    assert log_after.user_id == seed_identity_id(db_session, "del-user"), (
+        "user_id FK should be preserved (soft-delete keeps the identity row)"
+    )
     assert log_after.api_key_id is not None, "api_key_id should be preserved (api keys deactivated, not deleted)"
     assert log_after.model is not None, "Usage log data should be preserved"
 
@@ -116,7 +119,11 @@ def test_delete_user_preserves_budget_reset_logs(
             headers=master_key_header,
         )
 
-    reset_logs_before = db_session.query(BudgetResetLog).filter(BudgetResetLog.user_id == "reset-user").all()
+    reset_logs_before = (
+        db_session.query(BudgetResetLog)
+        .filter(BudgetResetLog.user_id == seed_identity_id(db_session, "reset-user"))
+        .all()
+    )
     assert len(reset_logs_before) > 0
     reset_log_id = reset_logs_before[0].id
 
@@ -126,7 +133,9 @@ def test_delete_user_preserves_budget_reset_logs(
     db_session.expire_all()
     reset_log_after = db_session.query(BudgetResetLog).filter(BudgetResetLog.id == reset_log_id).first()
     assert reset_log_after is not None, "Budget reset log should survive user deletion"
-    assert reset_log_after.user_id == "reset-user", "user_id FK should be preserved (soft-delete keeps user row)"
+    assert reset_log_after.user_id == seed_identity_id(db_session, "reset-user"), (
+        "user_id FK should be preserved (soft-delete keeps the identity row)"
+    )
     assert reset_log_after.previous_spend is not None, "Reset log data should be preserved"
 
 
@@ -293,7 +302,7 @@ def test_delete_user_leaves_the_user_active_when_telemetry_erasure_fails(
     assert "telemetry" in response.json()["detail"].lower()
 
     db_session.expire_all()
-    user = db_session.query(User).filter(User.user_id == "erase-fail-user").first()
+    user = db_session.query(User).filter(User.external_id == "erase-fail-user").first()
     assert user is not None
     assert user.deleted_at is None, "the user must stay active so the erasure can be retried"
 

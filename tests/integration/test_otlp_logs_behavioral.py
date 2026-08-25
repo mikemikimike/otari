@@ -94,7 +94,7 @@ def test_otlp_logs_reject_behavior_for_soft_deleted_user(
 ) -> None:
     """A live key whose user was soft-deleted must not keep accruing telemetry."""
     headers = _exempt_key(client, master_key_header, "doomed-behavioral")
-    db_session.query(User).filter(User.user_id == "doomed-behavioral").update({"deleted_at": datetime.now(UTC)})
+    db_session.query(User).filter(User.external_id == "doomed-behavioral").update({"deleted_at": datetime.now(UTC)})
     db_session.commit()
 
     response = client.post(

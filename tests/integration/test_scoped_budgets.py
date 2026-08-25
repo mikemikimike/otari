@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from conftest import seed_identity_id_async
 from gateway.models.entities import APIKey, Budget, ScopedBudget
 from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.models.tenancy import User as TenancyUser
@@ -79,7 +80,7 @@ async def _build_tenancy(db: AsyncSession, slug: str) -> Fixture:
     # The request plane bills to a string-keyed user whose id is the tenancy
     # identity's UUID, which is the bridge the resolver walks back.
     attribution_id = str(identity.id)
-    db.add(User(user_id=attribution_id))
+    await seed_identity_id_async(db, attribution_id)
     api_key = APIKey(
         id=f"key-{slug}",
         key_hash=f"hash-{slug}",
@@ -209,7 +210,7 @@ async def test_per_user_refusal_compensates_the_scoped_holds(async_db: AsyncSess
     async_db.add(Budget(budget_id="tiny", max_budget=1.0))
     await async_db.commit()
 
-    user = (await async_db.execute(select(User).where(User.user_id == tenancy.user_id))).scalar_one()
+    user = (await async_db.execute(select(User).where(User.external_id == tenancy.user_id))).scalar_one()
     user.budget_id = "tiny"
     user.spend = Decimal("1.0")
     await async_db.commit()
@@ -481,7 +482,7 @@ async def test_legacy_per_user_path_is_unchanged(async_db: AsyncSession, tenancy
     async_db.add(cap)
     await async_db.commit()
 
-    user = (await async_db.execute(select(User).where(User.user_id == tenancy.user_id))).scalar_one()
+    user = (await async_db.execute(select(User).where(User.external_id == tenancy.user_id))).scalar_one()
     user.budget_id = "legacy"
     await async_db.commit()
 
@@ -490,14 +491,14 @@ async def test_legacy_per_user_path_is_unchanged(async_db: AsyncSession, tenancy
     assert handle.estimate == pytest.approx(4.0)
 
     async_db.expire_all()
-    user = (await async_db.execute(select(User).where(User.user_id == tenancy.user_id))).scalar_one()
+    user = (await async_db.execute(select(User).where(User.external_id == tenancy.user_id))).scalar_one()
     assert user.reserved == pytest.approx(4.0)
     assert user.spend == pytest.approx(0.0)
 
     await reconcile_reservation(async_db, handle, 2.5)
 
     async_db.expire_all()
-    user = (await async_db.execute(select(User).where(User.user_id == tenancy.user_id))).scalar_one()
+    user = (await async_db.execute(select(User).where(User.external_id == tenancy.user_id))).scalar_one()
     assert user.reserved == pytest.approx(0.0)
     assert user.spend == pytest.approx(2.5)
 
@@ -538,14 +539,14 @@ async def test_budget_exempt_key_skips_scoped_ceilings(async_db: AsyncSession, t
 async def test_settle_is_inert_for_a_handle_that_held_nothing(async_db: AsyncSession) -> None:
     """Every pre-existing construction site builds a handle with no scoped rows;
     reconciling one must not error or write anything."""
-    async_db.add(User(user_id="plain-user"))
+    await seed_identity_id_async(async_db, "plain-user")
     await async_db.commit()
 
     handle = ReservationHandle(user_id="plain-user", estimate=Decimal(0), reserved=False, strategy="disabled")
     await reconcile_reservation(async_db, handle, 3.0)
 
     async_db.expire_all()
-    user = (await async_db.execute(select(User).where(User.user_id == "plain-user"))).scalar_one()
+    user = (await async_db.execute(select(User).where(User.external_id == "plain-user"))).scalar_one()
     assert user.spend == pytest.approx(3.0)
 
 

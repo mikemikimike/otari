@@ -13,8 +13,8 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
+from conftest import seed_identity_id_async
 from gateway.models.entities import Budget, ModelPricing
-from gateway.models.tenancy import User
 from gateway.repositories.users_repository import get_active_user
 from gateway.services.budget_service import (
     estimate_cost,
@@ -36,12 +36,12 @@ async def test_reserve_budget_reads_user_without_locking(
     )
     async_db.add(budget)
 
-    user = User(
-        user_id="race-user",
+    await seed_identity_id_async(
+        async_db,
+        "race-user",
         spend=9.0,
         budget_id="race-budget",
     )
-    async_db.add(user)
     await async_db.commit()
 
     with patch(
@@ -65,12 +65,12 @@ async def test_reserve_budget_rejects_at_limit(
     )
     async_db.add(budget)
 
-    user = User(
-        user_id="full-user",
+    await seed_identity_id_async(
+        async_db,
+        "full-user",
         spend=10.0,
         budget_id="full-budget",
     )
-    async_db.add(user)
     await async_db.commit()
 
     with pytest.raises(HTTPException) as exc_info:
@@ -90,7 +90,7 @@ async def test_reservation_accumulates_to_prevent_overspend(async_db: Any) -> No
     starting spend.
     """
     async_db.add(Budget(budget_id="resv-budget", max_budget=10.0))
-    async_db.add(User(user_id="resv-user", spend=9.0, budget_id="resv-budget"))
+    await seed_identity_id_async(async_db, "resv-user", spend=9.0, budget_id="resv-budget")
     await async_db.commit()
 
     # First reservation fits: 9.0 + 0.8 <= 10.
@@ -116,7 +116,7 @@ async def test_reservation_accumulates_to_prevent_overspend(async_db: Any) -> No
 async def test_reconcile_records_actual_cost_and_releases_hold(async_db: Any) -> None:
     """reconcile_reservation adds the actual cost to spend and frees the estimate."""
     async_db.add(Budget(budget_id="rec-budget", max_budget=100.0))
-    async_db.add(User(user_id="rec-user", spend=10.0, budget_id="rec-budget"))
+    await seed_identity_id_async(async_db, "rec-user", spend=10.0, budget_id="rec-budget")
     await async_db.commit()
 
     handle = await reserve_budget(async_db, "rec-user", 5.0)
@@ -136,7 +136,7 @@ async def test_reconcile_records_actual_cost_and_releases_hold(async_db: Any) ->
 async def test_refund_releases_hold_without_charging(async_db: Any) -> None:
     """refund_reservation releases the estimate without recording any spend."""
     async_db.add(Budget(budget_id="ref-budget", max_budget=100.0))
-    async_db.add(User(user_id="ref-user", spend=10.0, budget_id="ref-budget"))
+    await seed_identity_id_async(async_db, "ref-user", spend=10.0, budget_id="ref-budget")
     await async_db.commit()
 
     handle = await reserve_budget(async_db, "ref-user", 5.0)
@@ -162,7 +162,7 @@ def test_estimate_cost_clamps_negative_output_tokens() -> None:
 async def test_reserve_budget_clamps_negative_estimate(async_db: Any) -> None:
     """A negative estimate must not reduce users.reserved (budget-gate bypass)."""
     async_db.add(Budget(budget_id="neg-budget", max_budget=100.0))
-    async_db.add(User(user_id="neg-user", spend=10.0, reserved=4.0, budget_id="neg-budget"))
+    await seed_identity_id_async(async_db, "neg-user", spend=10.0, reserved=4.0, budget_id="neg-budget")
     await async_db.commit()
 
     await reserve_budget(async_db, "neg-user", -50.0)
@@ -178,7 +178,7 @@ async def test_reserve_budget_clamps_negative_estimate(async_db: Any) -> None:
 async def test_increase_reservation_grows_hold_and_folds_handle(async_db: Any) -> None:
     """A fitting top-up adds to `reserved` and folds the delta into the handle."""
     async_db.add(Budget(budget_id="inc-budget", max_budget=100.0))
-    async_db.add(User(user_id="inc-user", spend=10.0, budget_id="inc-budget"))
+    await seed_identity_id_async(async_db, "inc-user", spend=10.0, budget_id="inc-budget")
     await async_db.commit()
 
     handle = await reserve_budget(async_db, "inc-user", 5.0)
@@ -208,7 +208,7 @@ async def test_increase_reservation_rejects_without_touching_original(async_db: 
     been added to ``reserved`` (the atomic UPDATE either fully applies or not).
     """
     async_db.add(Budget(budget_id="incr-budget", max_budget=10.0))
-    async_db.add(User(user_id="incr-user", spend=8.0, budget_id="incr-budget"))
+    await seed_identity_id_async(async_db, "incr-user", spend=8.0, budget_id="incr-budget")
     await async_db.commit()
 
     handle = await reserve_budget(async_db, "incr-user", 1.0)  # 8 + 1 <= 10, fits
@@ -235,7 +235,7 @@ async def test_increase_reservation_rejects_without_touching_original(async_db: 
 async def test_increase_reservation_noop_for_nonpositive_delta(async_db: Any) -> None:
     """A zero/negative delta leaves the reservation untouched."""
     async_db.add(Budget(budget_id="incn-budget", max_budget=100.0))
-    async_db.add(User(user_id="incn-user", spend=0.0, budget_id="incn-budget"))
+    await seed_identity_id_async(async_db, "incn-user", spend=0.0, budget_id="incn-budget")
     await async_db.commit()
 
     handle = await reserve_budget(async_db, "incn-user", 5.0)
@@ -252,7 +252,7 @@ async def test_increase_reservation_noop_for_nonpositive_delta(async_db: Any) ->
 async def test_reconcile_clamps_negative_cost(async_db: Any) -> None:
     """A negative actual_cost must not reduce users.spend."""
     async_db.add(Budget(budget_id="negc-budget", max_budget=100.0))
-    async_db.add(User(user_id="negc-user", spend=10.0, budget_id="negc-budget"))
+    await seed_identity_id_async(async_db, "negc-user", spend=10.0, budget_id="negc-budget")
     await async_db.commit()
 
     handle = await reserve_budget(async_db, "negc-user", 5.0)

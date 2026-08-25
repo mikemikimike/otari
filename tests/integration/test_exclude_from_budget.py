@@ -13,6 +13,7 @@ from any_llm.types.completion import ChatCompletion, ChatCompletionMessage, Choi
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from conftest import seed_identity_id
 from gateway.core.config import API_KEY_HEADER
 from gateway.models.entities import UsageLog
 from gateway.models.tenancy import User
@@ -86,11 +87,11 @@ def test_excluded_key_logged_but_not_billed_or_gated(
     assert _chat(client, headers).status_code == 200
     assert _chat(client, headers).status_code == 200
 
-    user = db_session.query(User).filter(User.user_id == "exempt-user").one()
+    user = db_session.query(User).filter(User.external_id == "exempt-user").one()
     assert float(user.spend) == pytest.approx(0.0)
     assert float(user.reserved) == pytest.approx(0.0)
 
-    rows = db_session.query(UsageLog).filter(UsageLog.user_id == "exempt-user").all()
+    rows = db_session.query(UsageLog).filter(UsageLog.user_id == seed_identity_id(db_session, "exempt-user")).all()
     assert len(rows) == 2
     assert all(r.counts_toward_budget is False for r in rows)
     # Cost is still computed and recorded, just not billed to spend.
@@ -107,7 +108,7 @@ def test_normal_key_still_bills_spend(
 
     assert _chat(client, headers).status_code == 200
 
-    user = db_session.query(User).filter(User.user_id == "billed-user").one()
+    user = db_session.query(User).filter(User.external_id == "billed-user").one()
     assert float(user.spend) == pytest.approx(7.5)
-    row = db_session.query(UsageLog).filter(UsageLog.user_id == "billed-user").one()
+    row = db_session.query(UsageLog).filter(UsageLog.user_id == seed_identity_id(db_session, "billed-user")).one()
     assert row.counts_toward_budget is True

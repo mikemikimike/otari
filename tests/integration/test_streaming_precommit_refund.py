@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from conftest import seed_identity_id
 from gateway.models.entities import UsageLog
 from gateway.models.tenancy import User
 
@@ -48,7 +49,7 @@ def _configure_pricing(client: TestClient, headers: dict[str, str], model_key: s
 def _user_state(make_session: Callable[[], Session], user_id: str) -> tuple[float, float]:
     db = make_session()
     try:
-        user = db.query(User).filter(User.user_id == user_id).first()
+        user = db.query(User).filter(User.external_id == user_id).first()
         assert user is not None
         return float(user.spend), float(user.reserved)
     finally:
@@ -60,7 +61,7 @@ def _poll_usage_logs(make_session: Callable[[], Session], user_id: str, *, timeo
     while True:
         db = make_session()
         try:
-            rows = db.query(UsageLog).filter(UsageLog.user_id == user_id).all()
+            rows = db.query(UsageLog).filter(UsageLog.user_id == seed_identity_id(db, user_id)).all()
             if rows or time.time() > deadline:
                 return [r.status for r in rows]
         finally:

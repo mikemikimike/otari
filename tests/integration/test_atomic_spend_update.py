@@ -11,7 +11,8 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.models.tenancy import User
+from conftest import seed_identity_id_async
+from gateway.repositories.users_repository import get_active_user
 from gateway.services.budget_service import ReservationHandle, reconcile_reservation
 
 
@@ -19,9 +20,10 @@ from gateway.services.budget_service import ReservationHandle, reconcile_reserva
 async def test_spend_update_uses_sql_expression(async_db: AsyncSession) -> None:
     """Test that reconcile_reservation updates spend atomically via SQL, not Python read-modify-write."""
     # Set up user with initial spend
-    user = User(user_id="atomic-user", spend=5.0)
-    async_db.add(user)
+    await seed_identity_id_async(async_db, "atomic-user", spend=5.0)
     await async_db.commit()
+    user = await get_active_user(async_db, "atomic-user")
+    assert user is not None
 
     # actual_cost equivalent to the old log_usage computation:
     # (1M / 1M) * 2.5 + (100K / 1M) * 10.0 = 2.5 + 1.0 = 3.5, plus a
@@ -42,9 +44,10 @@ async def test_spend_update_uses_sql_expression(async_db: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_multiple_spend_updates_accumulate(async_db: AsyncSession) -> None:
     """Test that multiple sequential spend updates via reconcile_reservation accumulate correctly."""
-    user = User(user_id="multi-spend-user", spend=0.0)
-    async_db.add(user)
+    await seed_identity_id_async(async_db, "multi-spend-user", spend=0.0)
     await async_db.commit()
+    user = await get_active_user(async_db, "multi-spend-user")
+    assert user is not None
 
     # Each call costs (1M/1M)*10 + (1M/1M)*10 = 20.0, plus a micro-dollar tail so
     # three of them accumulate at the column's full scale rather than at a value

@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from conftest import seed_identity_id, seed_identity_id_async
 from gateway.core.config import API_KEY_HEADER
 from gateway.models.entities import Budget, ScopedBudget, UsageLog
 from gateway.models.tenancy import User
@@ -111,12 +112,14 @@ def test_spend_equals_the_exact_sum_of_the_rows_that_produced_it(
 
     costs = [
         cost
-        for cost in db_session.execute(select(UsageLog.cost).where(UsageLog.user_id == "ledger-user")).scalars()
+        for cost in db_session.execute(
+            select(UsageLog.cost).where(UsageLog.user_id == seed_identity_id(db_session, "ledger-user"))
+        ).scalars()
         if cost is not None
     ]
     assert len(costs) == len(_REQUESTS)
 
-    user = db_session.execute(select(User).where(User.user_id == "ledger-user")).scalar_one()
+    user = db_session.execute(select(User).where(User.external_id == "ledger-user")).scalar_one()
     assert user.spend == sum(costs, Decimal(0))
     # Nothing is still held: every reservation was reconciled, and the amount
     # released was the amount taken.
@@ -139,7 +142,7 @@ async def test_many_reconciles_leave_no_residue(async_db: AsyncSession) -> None:
     it matter was that it accumulated for a whole budget period. So the shape of
     the test is the shape of the bug: settle many times, then compare.
     """
-    async_db.add(User(user_id="residue-user"))
+    await seed_identity_id_async(async_db, "residue-user")
     await async_db.commit()
 
     amount = Decimal("0.000001")
@@ -148,7 +151,7 @@ async def test_many_reconciles_leave_no_residue(async_db: AsyncSession) -> None:
         await reconcile_reservation(async_db, handle, amount)
 
     async_db.expire_all()
-    user = (await async_db.execute(select(User).where(User.user_id == "residue-user"))).scalar_one()
+    user = (await async_db.execute(select(User).where(User.external_id == "residue-user"))).scalar_one()
     assert user.spend == Decimal("0.001000")
 
 
@@ -162,7 +165,7 @@ async def test_a_hold_is_released_at_the_amount_it_was_taken(async_db: AsyncSess
     outlive the request and permanently shrink the user's budget.
     """
     async_db.add(Budget(budget_id="hold-budget", max_budget=Decimal("10")))
-    async_db.add(User(user_id="hold-user", budget_id="hold-budget"))
+    await seed_identity_id_async(async_db, "hold-user", budget_id="hold-budget")
     await async_db.commit()
 
     for _ in range(50):
@@ -171,7 +174,7 @@ async def test_a_hold_is_released_at_the_amount_it_was_taken(async_db: AsyncSess
         await reconcile_reservation(async_db, handle, Decimal("0.033333"))
 
     async_db.expire_all()
-    user = (await async_db.execute(select(User).where(User.user_id == "hold-user"))).scalar_one()
+    user = (await async_db.execute(select(User).where(User.external_id == "hold-user"))).scalar_one()
     assert user.reserved == Decimal(0)
     assert user.spend == Decimal("1.666650")
 

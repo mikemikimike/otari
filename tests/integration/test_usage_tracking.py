@@ -10,6 +10,7 @@ from any_llm.types.completion import ChatCompletion, ChatCompletionMessage, Choi
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from conftest import seed_identity_id
 from gateway.models.entities import UsageLog
 from gateway.models.tenancy import User
 
@@ -32,7 +33,7 @@ async def test_completion_accuracy(
     # Capture initial user spend
     db = db_session_factory()
     try:
-        user = db.query(User).filter(User.user_id == test_user["user_id"]).first()
+        user = db.query(User).filter(User.external_id == test_user["user_id"]).first()
         initial_spend = float(user.spend) if user else 0.0
     finally:
         db.close()
@@ -96,7 +97,7 @@ async def test_completion_accuracy(
         )
 
         # Check user spend
-        user = db.query(User).filter(User.user_id == test_user["user_id"]).first()
+        user = db.query(User).filter(User.external_id == test_user["user_id"]).first()
         assert user is not None
         final_spend = float(user.spend)
 
@@ -127,7 +128,7 @@ async def test_streaming_completion_accuracy(
     # Capture initial user spend
     db = db_session_factory()
     try:
-        user = db.query(User).filter(User.user_id == test_user["user_id"]).first()
+        user = db.query(User).filter(User.external_id == test_user["user_id"]).first()
         initial_spend = float(user.spend) if user else 0.0
     finally:
         db.close()
@@ -228,7 +229,7 @@ async def test_streaming_completion_accuracy(
         )
 
         # Check user spend
-        user = db.query(User).filter(User.user_id == test_user["user_id"]).first()
+        user = db.query(User).filter(User.external_id == test_user["user_id"]).first()
         assert user is not None
         final_spend = float(user.spend)
 
@@ -320,7 +321,7 @@ def test_spend_incremented_via_reconciliation(
     assert response.status_code == 200
 
     # Expected cost: 1M/1M * 2.5 + 0.5M/1M * 10 = 2.5 + 5.0 = 7.5
-    user = db_session.query(User).filter(User.user_id == "spend-user").first()
+    user = db_session.query(User).filter(User.external_id == "spend-user").first()
     assert user is not None
     assert user.spend == pytest.approx(7.5)
     assert float(user.reserved) == pytest.approx(0.0)  # hold released
@@ -363,7 +364,7 @@ def test_successful_request_records_latency(
         )
     assert response.status_code == 200
 
-    log = db_session.query(UsageLog).filter(UsageLog.user_id == "latency-user").first()
+    log = db_session.query(UsageLog).filter(UsageLog.user_id == seed_identity_id(db_session, "latency-user")).first()
     assert log is not None
     assert log.latency_ms is not None
     assert log.latency_ms >= 0

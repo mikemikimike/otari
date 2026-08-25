@@ -408,7 +408,7 @@ def test_budget_isolation(
     resp = _post(client, master_key_header, [_event("iso")])
     assert resp.json()["accepted"] == 1
 
-    user = db_session.query(User).filter(User.user_id == "cc-user").one()
+    user = db_session.query(User).filter(User.external_id == "cc-user").one()
     assert float(user.spend) == pytest.approx(0.0)
     assert float(user.reserved) == pytest.approx(0.0)
 

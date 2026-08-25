@@ -8,9 +8,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from conftest import seed_identity_id_async
 from gateway.core.config import API_KEY_HEADER
 from gateway.models.entities import Budget
-from gateway.models.tenancy import User
+from gateway.repositories.users_repository import get_active_user
 from gateway.services.budget_service import _cas_reset_user_budget, _is_model_free
 
 
@@ -112,10 +113,14 @@ async def test_cas_reset_user_budget_rollback_on_commit_failure(async_db: AsyncS
 
     now = datetime.now(UTC)
     # A past reset time makes the CAS UPDATE match the row so the code reaches commit.
-    user = User(user_id="reset-fail-user", spend=50.0, next_budget_reset_at=now - timedelta(seconds=1))
+    await seed_identity_id_async(
+        async_db, "reset-fail-user", spend=50.0, next_budget_reset_at=now - timedelta(seconds=1)
+    )
     budget = Budget(max_budget=100.0, budget_duration_sec=3600)
-    async_db.add_all([user, budget])
+    async_db.add(budget)
     await async_db.commit()
+    user = await get_active_user(async_db, "reset-fail-user")
+    assert user is not None
 
     with (
         patch.object(async_db, "commit", side_effect=OperationalError("db", {}, Exception("disk full"))),

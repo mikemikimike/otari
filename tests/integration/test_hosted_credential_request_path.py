@@ -273,7 +273,7 @@ def test_an_adapter_failure_returns_the_budget_hold(overlay_client: TestClient, 
     engine = create_engine(postgres_url)
     try:
         with sessionmaker(bind=engine)() as session:
-            user = session.query(User).filter(User.user_id == "held").one()
+            user = session.query(User).filter(User.external_id == "held").one()
             assert float(user.reserved) == pytest.approx(0.0), (
                 f"the budget hold leaked: users.reserved is {user.reserved}"
             )

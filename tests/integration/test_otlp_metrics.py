@@ -224,7 +224,7 @@ def test_metrics_export_rejects_points_for_a_soft_deleted_user(
     client: TestClient, master_key_header: dict[str, str], db_session: Session
 ) -> None:
     headers = _exempt_key(client, master_key_header, "doomed-metrics")
-    db_session.query(User).filter(User.user_id == "doomed-metrics").update({"deleted_at": datetime.now(UTC)})
+    db_session.query(User).filter(User.external_id == "doomed-metrics").update({"deleted_at": datetime.now(UTC)})
     db_session.commit()
 
     response = client.post(

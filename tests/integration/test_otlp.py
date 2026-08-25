@@ -121,7 +121,7 @@ def test_otlp_api_request_is_ingested_and_priced(
     # The email attribute present in the OTLP record must never be persisted.
     assert "example.com" not in (row.source_label or "")
 
-    user = db_session.query(User).filter(User.user_id == "alice").one()
+    user = db_session.query(User).filter(User.external_id == "alice").one()
     assert float(user.spend) == 0.0  # imports never touch spend
 
 
@@ -456,7 +456,7 @@ def test_otlp_rejected_events_reported_via_partial_success(
     headers = _exempt_key(client, master_key_header, user_id="doomed")
     # Soft-delete the user directly, leaving the key active: simulates the race
     # where a user is removed while an exporter still holds a live key.
-    db_session.query(User).filter(User.user_id == "doomed").update({"deleted_at": datetime.now(UTC)})
+    db_session.query(User).filter(User.external_id == "doomed").update({"deleted_at": datetime.now(UTC)})
     db_session.commit()
 
     resp = client.post(_PATH, json=_otlp(_api_request_record("req_rejected_1")), headers=headers)
