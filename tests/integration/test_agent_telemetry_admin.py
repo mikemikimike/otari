@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
@@ -9,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from conftest import seed_identity_id, seed_workspace_id
 from gateway.models.entities import AgentTelemetry, APIKey
-from gateway.models.tenancy import User
 
 DELETE_PATH = "/v1/agent-telemetry"
 

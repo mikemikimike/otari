@@ -1106,7 +1106,10 @@ async def _breakdown(
         _request_count_expr(status_filter),
     )
     if label_join is not None:
-        stmt = stmt.outerjoin(label_join.entity, label_join.on)
+        # ``select_from`` as well as the join: one dimension's key lives on the
+        # joined entity (the identity's handle), so the usage row is not always
+        # the statement's first named table and the left side has to be said.
+        stmt = stmt.select_from(UsageLog).outerjoin(label_join.entity, label_join.on)
     group_by = (column,) if label_join is None else (column, label_column)
     stmt = stmt.where(*conditions).group_by(*group_by).order_by(cost_sum.desc())
     if limit is not None:
@@ -1583,7 +1586,7 @@ async def usage_series(
     # dimension's key lives on the joined identity rather than on the usage row,
     # and grouping by it without the join would be a cross product.
     if label_join is not None:
-        grid = grid.outerjoin(label_join.entity, label_join.on)
+        grid = grid.select_from(UsageLog).outerjoin(label_join.entity, label_join.on)
     rows = (await db.execute(grid.where(*conditions).group_by(bucket_expr, key_expr, fold_expr))).all()
 
     points = [

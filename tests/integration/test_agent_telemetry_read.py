@@ -7,6 +7,7 @@ normally fills those tables.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -19,7 +20,6 @@ from gateway.core.config import GatewayConfig
 from gateway.core.database import reset_db
 from gateway.main import create_app
 from gateway.models.entities import AgentTelemetry, APIKey, UsageLog
-from gateway.models.tenancy import User
 
 SUMMARY_PATH = "/v1/agent-telemetry/summary"
 COUNT_PATH = "/v1/agent-telemetry/count"

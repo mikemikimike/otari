@@ -321,7 +321,12 @@ class DatabaseTelemetryStorageAdapter:
         column: Any = col(User.external_id) if by_user else AgentTelemetry.api_key_id
 
         def _scoped(stmt: Any) -> Any:
-            return stmt.outerjoin(User, col(User.id) == AgentTelemetry.user_id) if by_user else stmt
+            # ``select_from`` and not only ``outerjoin``: the user dimension's
+            # only named entity is the identity table, so without it SQLAlchemy
+            # cannot tell which side of the join the telemetry rows are on.
+            if not by_user:
+                return stmt
+            return stmt.select_from(AgentTelemetry).outerjoin(User, col(User.id) == AgentTelemetry.user_id)
 
         row_count = func.count()
         group_rows = (

@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from conftest import seed_identity_id, seed_workspace_id
 from gateway.models.entities import APIKey, UsageLog
-from gateway.models.tenancy import User
 
 USAGE_PATH = "/v1/usage"
 
@@ -567,7 +566,7 @@ def test_list_usage_labels_rows_from_the_joined_entities(
     on every visit to Usage and Activity just to turn ids into names, which grows
     with the deployment rather than with the page.
     """
-    seed_identity_id(db_session, "labeled-user", alias="Ada Lovelace", spend=0.0, blocked=False)
+    owner = seed_identity_id(db_session, "labeled-user", alias="Ada Lovelace", spend=0.0, blocked=False)
     db_session.flush()
     key = APIKey(
         workspace_id=seed_workspace_id(db_session),
@@ -575,7 +574,7 @@ def test_list_usage_labels_rows_from_the_joined_entities(
         key_hash=f"hash-{uuid.uuid4()}",
         key_prefix="sk-test",
         key_name="CI pipeline",
-        user_id="labeled-user",
+        user_id=owner,
     )
     db_session.add(key)
     db_session.flush()
@@ -613,7 +612,8 @@ def test_list_usage_keeps_a_row_whose_entities_are_gone(
         api_key_id=None,
     )
     db_session.commit()
-    db_session.query(UsageLog).filter(UsageLog.user_id == "soon-deleted").update({"user_id": None})
+    orphaned = seed_identity_id(db_session, "soon-deleted")
+    db_session.query(UsageLog).filter(UsageLog.user_id == orphaned).update({"user_id": None})
     db_session.commit()
 
     response = client.get(USAGE_PATH, headers=master_key_header)
@@ -635,7 +635,7 @@ def test_summary_breakdowns_carry_labels_for_opaque_keys(
     This is what lets the dashboard's user and key pickers be built from the
     breakdown (top N by spend, in-window) the way the model picker already is.
     """
-    seed_identity_id(db_session, "summary-user", alias="Grace Hopper", spend=0.0, blocked=False)
+    owner = seed_identity_id(db_session, "summary-user", alias="Grace Hopper", spend=0.0, blocked=False)
     db_session.flush()
     key = APIKey(
         workspace_id=seed_workspace_id(db_session),
@@ -643,7 +643,7 @@ def test_summary_breakdowns_carry_labels_for_opaque_keys(
         key_hash=f"hash-{uuid.uuid4()}",
         key_prefix="sk-test",
         key_name="Nightly batch",
-        user_id="summary-user",
+        user_id=owner,
     )
     db_session.add(key)
     db_session.flush()

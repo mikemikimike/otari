@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 from conftest import seed_identity_id, seed_workspace_id
 from gateway.core.sql import MAX_FILTER_VALUES
 from gateway.models.entities import APIKey, UsageLog
-from gateway.models.tenancy import User
 
 SUMMARY_PATH = "/v1/usage/summary"
 CSV_PATH = "/v1/usage/summary.csv"
