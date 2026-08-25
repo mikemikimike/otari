@@ -223,7 +223,7 @@ def test_unresolvable_selector_releases_the_reservation(
     session = db_session_factory()
     try:
         reserved = session.execute(
-            text("SELECT reserved FROM users WHERE user_id = 'stranded-user'")
+            text("SELECT reserved FROM \"user\" WHERE external_id = 'stranded-user'")
         ).scalar_one()
     finally:
         session.close()

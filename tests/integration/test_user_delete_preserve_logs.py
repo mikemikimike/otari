@@ -259,7 +259,7 @@ def test_cascade_delete_api_keys_on_hard_delete(
     key_id = key_resp.json()["id"]
 
     db_session.expire_all()
-    db_session.execute(text("DELETE FROM users WHERE user_id = :uid"), {"uid": "cascade-user"})
+    db_session.execute(text('DELETE FROM "user" WHERE external_id = :uid'), {"uid": "cascade-user"})
     db_session.commit()
 
     key = db_session.query(APIKey).filter(APIKey.id == key_id).first()

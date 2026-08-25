@@ -426,7 +426,7 @@ def test_a_policy_read_that_fails_releases_the_budget_reservation(
     session = db_session_factory()
     try:
         reserved = session.execute(
-            text("SELECT reserved FROM users WHERE user_id = :user"), {"user": funded}
+            text('SELECT reserved FROM "user" WHERE external_id = :user'), {"user": funded}
         ).scalar_one()
     finally:
         session.close()

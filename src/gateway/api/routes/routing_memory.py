@@ -461,7 +461,7 @@ async def rank_candidates(
         try:
             db.add(
                 RouterPreference(
-                    user_id=request.user_id,
+                    user_id=identity_id,
                     workspace_id=workspace_id,
                     prompt=example.prompt,
                     task_id=example.task_id,

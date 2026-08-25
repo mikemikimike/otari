@@ -417,7 +417,7 @@ def test_tier_down_fires_once_the_budget_threshold_is_crossed(
     # (correctly, it is an accounting field), so this writes it directly.
     engine = create_engine(routing_config.database_url, pool_pre_ping=True)
     with engine.connect() as conn:
-        conn.execute(text("UPDATE users SET spend = 0.9 WHERE user_id = 'test-user'"))
+        conn.execute(text("UPDATE \"user\" SET spend = 0.9 WHERE external_id = 'test-user'"))
         conn.commit()
     engine.dispose()
     with patch("gateway.api.routes.chat.acompletion", new=AsyncMock(return_value=_completion("gpt-5-nano"))) as mock:
