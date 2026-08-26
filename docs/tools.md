@@ -100,8 +100,8 @@ a tool for you":
 | `/v1/messages` | A native `server_tool_use` + `web_search_tool_result` pair per search, before the message, for a caller that declared `web_search_<date>`. Nothing otherwise | The same search pair, plus a server-owned `mcp_tool_use` + `mcp_tool_result` pair around each gateway-run MCP call, as `content_block_start` / `content_block_stop` events |
 | `/v1/chat/completions` | Nothing. The final message only | Nothing. The gateway's own `tool_call` deltas are not forwarded |
 
-The gateway's caller-owned `tool_use` blocks are deliberately withheld from
-streaming clients: Otari consumes those calls, so exposing that vocabulary would
+The gateway-owned `tool_use` blocks are deliberately withheld from streaming
+clients: Otari consumes those calls, so exposing that vocabulary would
 incorrectly hand execution ownership to the client. Messages streams instead
 represent gateway-run MCP with server-owned `mcp_tool_use` and `mcp_tool_result`
 blocks. The start arrives immediately before execution and the matching result
