@@ -74,6 +74,28 @@ def test_hybrid_mode_disables_local_management_endpoints(monkeypatch: pytest.Mon
     reset_db()
 
 
+def test_hybrid_mode_disables_a_head_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``HEAD`` is enumerated on the stubs, not derived from ``GET``.
+
+    FastAPI adds it alongside ``GET`` only for a route that leaves its methods
+    unspecified, and these spell theirs out, so it has to be listed or a HEAD
+    probe reads 405, which says the path exists.
+    """
+    monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
+
+    config = GatewayConfig(
+        mode="hybrid",
+        platform={"base_url": "http://localhost:8100/api/v1"},
+    )
+    with TestClient(create_app(config)) as client:
+        response = client.head("/v1/keys")
+
+    assert response.status_code == 404
+
+    reset_config()
+    reset_db()
+
+
 def test_hybrid_mode_disables_dashboard_management_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
     # The admin-dashboard management surface is standalone-only; in hybrid mode
     # it must be unavailable (owned by the platform), with the same helpful hint.

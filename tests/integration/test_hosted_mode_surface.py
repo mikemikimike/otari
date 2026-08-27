@@ -162,6 +162,20 @@ def test_hosted_mode_refuses_a_verb_the_path_never_took(tmp_path: Path) -> None:
     assert DATA_PLANE_URL in response.json()["detail"]
 
 
+def test_hosted_mode_refuses_a_head_probe(tmp_path: Path) -> None:
+    """``HEAD`` is enumerated, not derived, so it needs its own assertion.
+
+    FastAPI adds ``HEAD`` alongside ``GET`` only when a route leaves its methods
+    unspecified, and these stubs spell theirs out, so leaving it off the list
+    answered 405 to exactly the probing tooling most likely to reach for it. The
+    body is empty by definition of the method; the status is the whole answer.
+    """
+    with TestClient(create_app(_hosted(tmp_path))) as client:
+        response = client.head("/v1/chat/completions")
+
+    assert response.status_code == 404
+
+
 def test_hosted_mode_refusal_needs_no_credential(tmp_path: Path) -> None:
     """The refusal is reachable unauthenticated, deliberately.
 

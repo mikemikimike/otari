@@ -34,10 +34,13 @@ _DISABLED_DETAIL = (
     "Send inference requests to the data-plane gateway"
 )
 
-# Every method, not just the one the real route takes: the point is that the
-# path is not served here, and a client that guessed the verb wrong should read
-# the same explanation rather than a 405 that suggests the path exists.
-_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+# Every method a client might reach one of these paths with, not just the one the
+# real route takes: the point is that the path is not served here, and a client
+# that guessed the verb wrong should read the explanation rather than a 405 that
+# suggests the path exists. ``HEAD`` is spelled out because FastAPI does not
+# derive it from ``GET`` when the methods are given explicitly, and probing
+# tooling reaches for it.
+_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
 ConfigDep = Annotated[GatewayConfig, Depends(get_config)]
 
