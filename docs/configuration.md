@@ -383,8 +383,8 @@ These are only relevant when running connected to [otari.ai](https://otari.ai). 
 | `PLATFORM_USAGE_TIMEOUT_MS` | `5000` | Timeout for usage reporting calls |
 | `PLATFORM_USAGE_INLINE_TIMEOUT_MS` | `1500` | Budget for the successful usage report awaited to attach inline cost. Expiry returns the response without cost while the report continues |
 | `PLATFORM_USAGE_MAX_RETRIES` | `3` | Max retries for transient usage reporting failures |
-| `STREAMING_FALLBACK_FIRST_CHUNK_TIMEOUT_MS` | `2000` | Per-attempt timeout waiting for first streamed chunk |
-| `STREAMING_FALLBACK_FINAL_ATTEMPT_EXTRA_FIRST_CHUNK_TIMEOUT_MS` | `0` | Extra first-chunk grace for the sole/final attempt, added on top of the per-attempt budget. `0` = no grace (unchanged) |
+| `STREAMING_FALLBACK_FIRST_CHUNK_TIMEOUT_MS` | `2000` | Per-attempt timeout waiting for the first streamed chunk. Forwarded provider-tool requests keep this tight budget on non-final attempts. |
+| `STREAMING_FALLBACK_FINAL_ATTEMPT_EXTRA_FIRST_CHUNK_TIMEOUT_MS` | `0` | Extra first-chunk grace for the sole/final attempt, added on top of the per-attempt budget. A final request with forwarded provider tools gets at least the tool-loop first-chunk budget (`30000` ms by default), even when this configured grace would produce a shorter deadline. |
 
 ## Provider configuration
 
