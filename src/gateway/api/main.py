@@ -19,6 +19,7 @@ from gateway.api.routes import (
     embeddings,
     files,
     health,
+    hosted_mode,
     hybrid_mode,
     images,
     invitations,
@@ -62,15 +63,58 @@ def register_routers(app: FastAPI, config: GatewayConfig) -> None:
     """Mount Otari's own routers, then whatever the bootstrap contributed."""
     _register_core_routers(app, config)
     _register_contributed_routers(app)
+    # Last, and after the contributed routers on purpose. Both stub routers are
+    # ``{path:path}`` catch-alls over whole prefixes (/v1/organizations,
+    # /v1/usage for one; /v1/chat, /v1/batches for the other), and FastAPI
+    # serves the first route that matches, so registering them earlier would
+    # swallow an overlay route under any of those prefixes and answer with the
+    # stub instead. They are a fallback for a path nothing else serves, so they
+    # are mounted like one.
+    #
+    # A deployment mounts at most one of them: they cover opposite halves, the
+    # management plane a hybrid gateway does not own and the data plane a hosted
+    # control plane does not serve, and no mode is missing both.
     if config.is_hybrid_mode:
-        # Last, and after the contributed routers on purpose. These are
-        # ``{path:path}`` catch-alls over whole management prefixes
-        # (/v1/organizations, /v1/usage, ...), and FastAPI serves the first
-        # route that matches, so registering them earlier would swallow an
-        # overlay route under any of those prefixes and answer "manage this via
-        # the platform UI" instead. They are a fallback for a path nothing else
-        # serves, so they are mounted like one.
         app.include_router(hybrid_mode.router)
+    elif config.is_hosted_mode:
+        app.include_router(hosted_mode.router)
+
+
+def _register_data_plane_routers(app: FastAPI, config: GatewayConfig) -> None:
+    """Mount the OpenAI-compatible inference surface, unless this is a control plane.
+
+    Hosted mode gets none of it. A hosted deployment is the multi-tenant control
+    plane: an organization's wallet is debited by the usage a data-plane gateway
+    reports back to it, so inference served *by* the control plane is inference
+    nobody reports and nobody is billed for (otari#822). The routers are left
+    unmounted rather than guarded on the way in, so there is no billable code
+    path to reach at all, and ``hosted_mode``'s stubs answer these paths with
+    the data-plane address instead of a bare 404.
+
+    Hybrid mode keeps the three that support it (multi-attempt fallback plus
+    usage reporting) and none of the rest.
+    """
+    if config.is_hosted_mode:
+        return
+
+    app.include_router(chat.router)
+    app.include_router(messages.router)
+    app.include_router(responses.router)
+
+    if config.is_hybrid_mode:
+        return
+
+    app.include_router(embeddings.router)
+    app.include_router(images.router)
+    app.include_router(audio.router)
+    app.include_router(rerank.router)
+    app.include_router(search.router)
+    app.include_router(batches.router)
+    app.include_router(moderations.router)
+    # Storage for inference rather than inference itself: batch input and
+    # output, and file inputs to a completion. It travels with the set because
+    # every consumer of an uploaded file is in it.
+    app.include_router(files.router)
 
 
 def _register_contributed_routers(app: FastAPI) -> None:
@@ -82,9 +126,9 @@ def _register_contributed_routers(app: FastAPI) -> None:
     management plane. With no bootstrap configured there are none, so this is a
     no-op for the plain build.
 
-    Mounted after Otari's own routers and before the hybrid stubs, so a
-    contribution cannot take a path the core already serves and the hybrid
-    stubs' catch-alls cannot take one the contribution serves.
+    Mounted after Otari's own routers and before whichever mode stub router
+    this deployment gets, so a contribution cannot take a path the core already
+    serves and a stub's catch-alls cannot take one the contribution serves.
     """
     container: Container = app.state.container
     for contribution in container.router_contributions():
@@ -95,21 +139,18 @@ def _register_contributed_routers(app: FastAPI) -> None:
 
 
 def _register_core_routers(app: FastAPI, config: GatewayConfig) -> None:
-    app.include_router(chat.router)
     app.include_router(health.router)
-    # Registered in both modes on purpose: the deployment bootstrap is how a
+    # Registered in every mode on purpose: the deployment bootstrap is how a
     # browser learns which mode it reached, so it is the one management-adjacent
     # route a hybrid gateway still answers.
     app.include_router(bootstrap.router)
-    # /v1/messages and /v1/responses now support hybrid mode (multi-attempt
-    # fallback + usage reporting), so they're registered in both modes.
-    app.include_router(messages.router)
-    app.include_router(responses.router)
+
+    _register_data_plane_routers(app, config)
 
     if config.is_hybrid_mode:
         # The hybrid stub router is mounted by register_routers, after the
         # contributed routers; see the note there.
-        return  # Remaining routers (including batches) are standalone-mode only
+        return  # The management routers below are skipped in hybrid mode only
 
     app.include_router(admin.router)
     app.include_router(auth_session.router)
@@ -118,14 +159,6 @@ def _register_core_routers(app: FastAPI, config: GatewayConfig) -> None:
     app.include_router(auth_password_reset.router)
     app.include_router(auth_webauthn.router)
     app.include_router(auth_oauth.router)
-    app.include_router(embeddings.router)
-    app.include_router(images.router)
-    app.include_router(audio.router)
-    app.include_router(files.router)
-    app.include_router(rerank.router)
-    app.include_router(search.router)
-    app.include_router(batches.router)
-    app.include_router(moderations.router)
     app.include_router(models.router)
     app.include_router(providers.router)
     app.include_router(keys.router)

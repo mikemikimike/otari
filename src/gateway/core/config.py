@@ -1079,8 +1079,10 @@ class GatewayConfig(BaseSettings):
             "else standalone. Set explicitly to assert the intended mode: 'hybrid' requires a token, "
             "and 'standalone' or 'hosted' with a token present is rejected at startup as conflicting "
             "configuration. 'hosted' is standalone's multi-tenant sibling: it owns its own database "
-            "and serves the whole management API, and it reports the per-organization provider-key "
-            "surface rather than the process-global one. "
+            "and serves the whole management API, but serves no inference (the data-plane routers are "
+            "not mounted, because a control plane is billed by the usage a data-plane gateway reports "
+            "to it), and it reports the per-organization provider-key surface rather than the "
+            "process-global one. "
             "Legacy value 'platform' is accepted as an alias for 'hybrid'."
         ),
     )
@@ -1164,9 +1166,15 @@ class GatewayConfig(BaseSettings):
         its own database and mounts the whole management API, exactly as
         standalone does, and every request path that asks ``is_hybrid_mode``
         gets the same answer here as it would for a standalone gateway. What it
-        changes is who the deployment serves, and therefore which management
-        surfaces make sense on it: the per-organization credential set rather
-        than the process-global one (see ``bootstrap.HOSTED_SURFACES``).
+        changes is who the deployment serves, and two things follow from that.
+        It serves no inference: an organization's wallet is debited by the usage
+        a data-plane gateway reports back to this control plane, so a completion
+        the control plane served itself would be free, and the data-plane
+        routers are therefore not mounted at all (see
+        ``api.main._register_data_plane_routers`` and ``api.routes.hosted_mode``,
+        otari#822). And a different management surface set makes sense on it:
+        the per-organization credential set rather than the process-global one
+        (see ``bootstrap.HOSTED_SURFACES``).
         """
         return self.effective_mode == "hosted"
 

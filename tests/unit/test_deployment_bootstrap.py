@@ -220,10 +220,10 @@ def test_every_surface_names_a_route_the_gateway_mounts(
 ) -> None:
     """A surface that outlives its API would gate a nav item onto a 404.
 
-    Each edition is asked about its own app rather than both about standalone's.
-    They mount the identical router set today, so the two runs are the same
-    assertion twice; the point is that an edition which stopped mounting one
-    would be caught here rather than in a browser.
+    Each edition is asked about its own app rather than both about standalone's,
+    which is load-bearing now that the two mount different router sets: hosted
+    mounts no data plane (otari#822), so an edition that dropped a *management*
+    router along with it is caught here rather than in a browser.
     """
     app = create_app(build(tmp_path))
     mounted = {getattr(route, "path", "") for route in app.routes}

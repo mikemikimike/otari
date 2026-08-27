@@ -2,8 +2,8 @@
 
 Otari operates in two modes: **standalone** and **connected to otari.ai**
 (`hybrid mode`). Standalone has a multi-tenant variant, **hosted**, described
-below: same database, same API, a dashboard scoped to organizations rather than
-to the process.
+below: same database, the management API unchanged, no inference endpoints, and
+a dashboard scoped to organizations rather than to the process.
 
 ## Standalone
 
@@ -26,9 +26,10 @@ management API, and signs operators in itself. A platform token is refused here
 for the same reason it is refused in standalone, since a deployment holding its
 own management API is not also a data plane reporting to somebody else's.
 
-What changes is the dashboard, in one place. Provider credentials in
-`config.yml` and under `/v1/provider-credentials` are keyed on the instance name
-alone, so one added there is served to every organization on the deployment. The
+Two things change: the deployment serves no inference (see below), and the
+dashboard drops one page. Provider credentials in `config.yml` and under
+`/v1/provider-credentials` are keyed on the instance name alone, so one added
+there is served to every organization on the deployment. The
 `Providers` page that manages them is right for a single-tenant deployment and
 misleading on a shared one, so hosted mode hides it and shows the
 organization-scoped credentials at `Organization > Providers` instead
@@ -43,11 +44,24 @@ path; hosted mode only stops offering them a dashboard.
 
 A hosted deployment is a control plane. Customer inference belongs on the
 data-plane gateway that resolves credentials through it and reports usage back,
-not on the host serving this dashboard. Set `data_plane_url` (or
-`OTARI_DATA_PLANE_URL`) to that gateway's base URL so the dashboard's request
-snippets, on the Keys page and in the setup guide, name it rather than the
-address the browser happens to have reached. With none set the snippets are
-withheld and the panel says why; see
+not on the host serving this dashboard.
+
+**So a hosted deployment does not serve the inference endpoints at all.**
+`/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/embeddings`,
+`/v1/images/generations`, `/v1/audio/*`, `/v1/rerank`, `/v1/moderations`,
+`/v1/search`, `/v1/batches` and `/v1/files` are not registered, and a request to
+one answers `404` naming the data-plane gateway instead. That is a billing
+boundary rather than a tidiness one: an organization's wallet is debited by the
+usage a data-plane gateway reports back to the control plane, so a completion the
+control plane served itself is a completion nobody reports and nobody pays for.
+`/v1/models`, `/v1/pricing` and `/v1/tools` stay: they are catalog reads the
+dashboard needs, and they call no provider.
+
+Set `data_plane_url` (or `OTARI_DATA_PLANE_URL`) to that gateway's base URL so
+the dashboard's request snippets, on the Keys page and in the setup guide, name
+it rather than the address the browser happens to have reached, and so the
+refusals above can say where to go. With none set the snippets are withheld and
+the panel says why; see
 [The data-plane address](configuration.md#the-data-plane-address).
 
 Standalone and hybrid deployments need none of this: each serves its own API at
@@ -56,9 +70,9 @@ ignored.
 
 ### What hosted mode does not do
 
-It selects a dashboard, not a security posture, and today the gateway's own
-management API is not tenant-scoped. Any valid dashboard session authenticates
-a master-key-gated route: `POST /v1/auth/session` issues the cookie, and
+It drops the data plane and selects a dashboard. It does not make the
+management plane tenant-scoped, and today the gateway's own management API is
+not. Any valid dashboard session authenticates a master-key-gated route: `POST /v1/auth/session` issues the cookie, and
 `verify_master_key` accepts that cookie from whoever holds it, checking only
 that the session is unexpired and its identity active. So on a deployment with
 several organizations, any signed-in member can read and write `/v1/keys`,
@@ -70,8 +84,8 @@ ownership, so a member of one organization can put a key in another's
 workspace, billed to that organization.
 
 That is fine for the single-tenant deployment this base build is written for,
-and it is why hosted mode changes the surface set and nothing else. Do not read
-it as isolation between tenants. Closing the gap is tracked in
+and it is why hosted mode changes the router set and the surface set and nothing
+else. Do not read it as isolation between tenants. Closing the gap is tracked in
 [mozilla-ai/otari-ai#1880](https://github.com/mozilla-ai/otari-ai/issues/1880),
 which scopes the fix to this repository: gating the deployment-wide routers on
 the caller's real authority, and scoping every `/v1/keys` load and the mint's
