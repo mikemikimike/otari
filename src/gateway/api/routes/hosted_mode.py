@@ -39,7 +39,7 @@ _DISABLED_DETAIL = (
 # the same explanation rather than a 405 that suggests the path exists.
 _METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
-Config = Annotated[GatewayConfig, Depends(get_config)]
+ConfigDep = Annotated[GatewayConfig, Depends(get_config)]
 
 
 def _raise_disabled(config: GatewayConfig) -> None:
@@ -58,7 +58,7 @@ def _raise_disabled(config: GatewayConfig) -> None:
 
 @router.api_route("/v1/chat/{path:path}", methods=_METHODS)
 @router.api_route("/v1/chat", methods=_METHODS)
-async def chat_disabled(config: Config) -> None:
+async def chat_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
@@ -68,40 +68,40 @@ async def chat_disabled(config: Config) -> None:
 # complete them has been pointed somewhere confusing.
 @router.api_route("/v1/messages/{path:path}", methods=_METHODS)
 @router.api_route("/v1/messages", methods=_METHODS)
-async def messages_disabled(config: Config) -> None:
+async def messages_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
 @router.api_route("/v1/responses/{path:path}", methods=_METHODS)
 @router.api_route("/v1/responses", methods=_METHODS)
-async def responses_disabled(config: Config) -> None:
+async def responses_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
 @router.api_route("/v1/embeddings", methods=_METHODS)
-async def embeddings_disabled(config: Config) -> None:
+async def embeddings_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
 @router.api_route("/v1/images/{path:path}", methods=_METHODS)
 @router.api_route("/v1/images", methods=_METHODS)
-async def images_disabled(config: Config) -> None:
+async def images_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
 @router.api_route("/v1/audio/{path:path}", methods=_METHODS)
 @router.api_route("/v1/audio", methods=_METHODS)
-async def audio_disabled(config: Config) -> None:
+async def audio_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
 @router.api_route("/v1/rerank", methods=_METHODS)
-async def rerank_disabled(config: Config) -> None:
+async def rerank_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
 @router.api_route("/v1/moderations", methods=_METHODS)
-async def moderations_disabled(config: Config) -> None:
+async def moderations_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
@@ -111,13 +111,13 @@ async def moderations_disabled(config: Config) -> None:
 # matches it.
 @router.api_route("/v1/search/{path:path}", methods=_METHODS)
 @router.api_route("/v1/search", methods=_METHODS)
-async def search_disabled(config: Config) -> None:
+async def search_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
 @router.api_route("/v1/batches/{path:path}", methods=_METHODS)
 @router.api_route("/v1/batches", methods=_METHODS)
-async def batches_disabled(config: Config) -> None:
+async def batches_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)
 
 
@@ -129,5 +129,5 @@ async def batches_disabled(config: Config) -> None:
 # customer request data.
 @router.api_route("/v1/files/{path:path}", methods=_METHODS)
 @router.api_route("/v1/files", methods=_METHODS)
-async def files_disabled(config: Config) -> None:
+async def files_disabled(config: ConfigDep) -> None:
     _raise_disabled(config)

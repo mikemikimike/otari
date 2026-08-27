@@ -15,11 +15,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway.api.deps import reset_config
-from gateway.core.config import GatewayConfig
+from gateway.core.config import API_KEY_HEADER, GatewayConfig
 from gateway.core.database import reset_db
 from gateway.main import create_app
 
 DATA_PLANE_URL = "https://gateway.otari.example"
+MASTER_KEY = "test-master-key"
 
 # One request per data-plane path, verb included, so a stub that covered the
 # prefix but not the verb the real route takes would fail here.
@@ -86,7 +87,7 @@ def _hosted(tmp_path: Path, data_plane_url: str | None = DATA_PLANE_URL) -> Gate
     return GatewayConfig(
         mode="hosted",
         database_url=f"sqlite:///{tmp_path / 'hosted.db'}",
-        master_key="test-master-key",
+        master_key=MASTER_KEY,
         data_plane_url=data_plane_url,
     )
 
@@ -94,7 +95,7 @@ def _hosted(tmp_path: Path, data_plane_url: str | None = DATA_PLANE_URL) -> Gate
 def _standalone(tmp_path: Path) -> GatewayConfig:
     return GatewayConfig(
         database_url=f"sqlite:///{tmp_path / 'standalone.db'}",
-        master_key="test-master-key",
+        master_key=MASTER_KEY,
     )
 
 
@@ -204,6 +205,19 @@ def test_hosted_mode_still_serves_the_management_plane(tmp_path: Path) -> None:
 
     for path in MANAGEMENT_PATHS:
         assert any(candidate.startswith(path) for candidate in mounted), f"{path} is not mounted"
+
+
+def test_hosted_mode_still_answers_the_management_plane(tmp_path: Path) -> None:
+    """Mounted is not the same as working, so one management call is made for real.
+
+    ``/v1/keys`` is the one to pick: it is the page a hosted operator uses to
+    hand somebody a key for the data-plane gateway, so it is exactly the surface
+    that must survive the data plane being taken away.
+    """
+    with TestClient(create_app(_hosted(tmp_path))) as client:
+        response = client.get("/v1/keys", headers={API_KEY_HEADER: f"Bearer {MASTER_KEY}"})
+
+    assert response.status_code == 200
 
 
 def test_standalone_still_serves_the_whole_data_plane(tmp_path: Path) -> None:
