@@ -376,8 +376,13 @@
   --color-text: #f7f8f8;
   --color-text-muted: #d0d6e0;
   --color-text-subtle: #8a8f98;
-  --color-text-on-primary: #0a1419; /* near-black, for ink on a light accent */
-  --color-text-on-inverse: #15171c;
+  /* White, not the near-black this held before. That value was correct while
+     the dark accent was a lifted light teal; this palette uses the same
+     `#5e6ad2` in both themes, on which near-black measures 3.96:1 and misses
+     AA. `--color-primary-foreground` beside it answers the same question, so
+     the two agreeing matters more than either value on its own. */
+  --color-text-on-primary: #ffffff;
+  --color-text-on-inverse: #15171c; /* ink on a light surface; 15.85:1 at worst */
 
   /* ── Borders ───────────────────────────────────────────── */
   --color-border: rgb(255 255 255 / 0.08);
