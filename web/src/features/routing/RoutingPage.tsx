@@ -301,7 +301,7 @@ function ScopePicker({
       onClick={() => onChange(value ? "" : null)}
       className={
         scoped === value
-          ? "rounded-md bg-surface px-3 py-1.5 text-sm font-medium text-foreground shadow-sm"
+          ? "rounded-md bg-surface px-3 py-1.5 text-sm font-medium text-foreground shadow-elevation-sm"
           : "rounded-md px-3 py-1.5 text-sm text-muted hover:text-foreground"
       }
     >
@@ -370,7 +370,7 @@ function ModeToggle({
             onClick={() => onChange(mode)}
             className={
               value === mode
-                ? "rounded-md bg-surface px-3 py-1 text-sm font-medium text-foreground shadow-sm"
+                ? "rounded-md bg-surface px-3 py-1 text-sm font-medium text-foreground shadow-elevation-sm"
                 : "rounded-md px-3 py-1 text-sm text-muted hover:text-foreground"
             }
           >
@@ -918,7 +918,7 @@ function PolicyForm({
                   className={
                     atCandidateCap
                       ? "cursor-not-allowed text-sm text-muted opacity-60"
-                      : "text-sm text-accent hover:underline"
+                      : "text-sm text-link hover:underline"
                   }
                   onClick={() => {
                     setCandidates((prev) => [...prev, ""])
@@ -984,7 +984,7 @@ function PolicyForm({
                   className={
                     atCandidateCap
                       ? "cursor-not-allowed text-sm text-muted opacity-60"
-                      : "text-sm text-accent hover:underline"
+                      : "text-sm text-link hover:underline"
                   }
                   onClick={() => setChain((prev) => [...prev, ""])}
                 >
@@ -1094,7 +1094,7 @@ function PolicyForm({
             {conditions.length === 0 ? (
               <button
                 type="button"
-                className="text-accent hover:underline"
+                className="text-link hover:underline"
                 onClick={() => setConditions([{ threshold: 80, target: "" }])}
               >
                 + Tier down when the budget fills up
@@ -1103,7 +1103,7 @@ function PolicyForm({
             {chain.length === 0 ? (
               <button
                 type="button"
-                className="text-accent hover:underline"
+                className="text-link hover:underline"
                 onClick={() => setChain([""])}
               >
                 + Add a fallback chain
@@ -1112,7 +1112,7 @@ function PolicyForm({
             {candidates.length === 0 ? (
               <button
                 type="button"
-                className="text-accent hover:underline"
+                className="text-link hover:underline"
                 // Seeded with the policy's own target, marked as the safe choice, so
                 // the pool starts from the model this policy already serves and the
                 // operator adds the cheaper one rather than restating everything.
@@ -1129,7 +1129,7 @@ function PolicyForm({
             {candidates.length === 0 ? (
               <button
                 type="button"
-                className="text-accent hover:underline"
+                className="text-link hover:underline"
                 // An even split of the policy's own target with one more provider:
                 // the neutral starting point for load balancing, which the operator
                 // then skews. Seeding 90/10 would be guessing at a canary.
@@ -1160,7 +1160,7 @@ function PolicyForm({
                   }
                   className={
                     guardrails_.configured
-                      ? "text-accent hover:underline"
+                      ? "text-link hover:underline"
                       : "cursor-not-allowed text-muted opacity-60"
                   }
                   onClick={() =>
@@ -1178,7 +1178,7 @@ function PolicyForm({
                   >
                     No guardrails service is configured, so there would be
                     nothing to call.{" "}
-                    <Link to="/tools" className="text-accent hover:underline">
+                    <Link to="/tools" className="text-link hover:underline">
                       Set one up in Tools &amp; Guardrails
                     </Link>
                     .
