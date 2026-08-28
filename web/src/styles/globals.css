@@ -1107,10 +1107,12 @@ body {
 .otari-table .table__row .table__cell {
   border-color: var(--color-border);
 }
-/* HeroUI draws a bottom border on the row as well as on its cells, reading
-   `--separator` directly. The cell rule above covers the cells; without this the
-   row's own border is the one thing in the table that does not follow
-   `--color-border`, which is visible the moment that token carries alpha. */
+/* Aliasing `--separator` is not enough for the row. HeroUI draws a bottom
+   border on the row as well as on its cells, and halves it on the way through:
+   `color-mix(in oklab, var(--separator) 50%, transparent)`. Measured on the
+   built stylesheet, that renders the row edge at alpha 0.029 against the cell's
+   0.06, so the same line is drawn at two strengths. Setting the color here
+   restores one. */
 .otari-table .table__row {
   border-color: var(--color-border);
 }
