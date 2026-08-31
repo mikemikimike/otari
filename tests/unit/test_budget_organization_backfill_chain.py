@@ -57,7 +57,11 @@ def _sole_organization(engine: Engine) -> str:
     backfill fires on an ordinary upgrade instead of being dead code.
     """
     with engine.begin() as connection:
-        return list(connection.execute(text("SELECT id FROM organization")).scalars())[0]
+        # `str(...)` rather than indexing straight into the result: a raw textual
+        # query is untyped, so mypy sees `Any` and `--disallow-any-return` refuses
+        # it. On SQLite the column is CHAR(32), so this is a narrowing, not a
+        # conversion.
+        return str(list(connection.execute(text("SELECT id FROM organization")).scalars())[0])
 
 
 def _add_organization(engine: Engine, *, name: str, slug: str) -> str:

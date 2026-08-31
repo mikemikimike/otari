@@ -243,6 +243,56 @@ def test_an_unknown_scope_type_is_refused_by_the_schema(
     assert refused.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, refused.text
 
 
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_provider_narrowing_is_refused(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    blank: str,
+) -> None:
+    """A ceiling narrowed to nothing would be created, listed, and never enforced.
+
+    ``applicable_budgets`` matches ``provider_key_id == provider_instance OR IS
+    NULL``, and a blank string is neither: it stores as a narrowed row under
+    ``uq_scoped_budgets_scope_with_key`` and binds to no request ever. That is the
+    same permissive-direction failure a scope naming nothing has, so it is refused
+    at the schema rather than normalized, since folding it into null would quietly
+    cap *more* than the caller asked for.
+    """
+    budget = client.post(_BUDGETS, json=_budget_body(), headers=master_key_header).json()
+
+    refused = client.post(
+        _CEILINGS,
+        json={
+            "scope_type": "organization",
+            "scope_id": budget["organization_id"],
+            "provider_key_id": blank,
+            "budget_id": budget["budget_id"],
+        },
+        headers=master_key_header,
+    )
+    assert refused.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, refused.text
+
+
+def test_an_omitted_provider_narrowing_still_caps_every_provider(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """The other half of the rule above: absent is the aggregate cap, and stays so."""
+    budget = client.post(_BUDGETS, json=_budget_body(), headers=master_key_header).json()
+
+    created = client.post(
+        _CEILINGS,
+        json={
+            "scope_type": "organization",
+            "scope_id": budget["organization_id"],
+            "budget_id": budget["budget_id"],
+        },
+        headers=master_key_header,
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    assert created.json()["provider_key_id"] is None
+
+
 def test_deleting_a_budget_a_ceiling_names_is_refused(
     client: TestClient,
     master_key_header: dict[str, str],

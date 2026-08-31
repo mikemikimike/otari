@@ -213,10 +213,32 @@ class OrganizationScopedBudgetCreate(BaseModel):
             "a membership in either, or an API key in one"
         ),
     )
+    # Absent means every provider. A *present* value has to be a real instance
+    # name, so it is constrained rather than only length-checked: resolution
+    # matches `provider_key_id == provider_instance OR IS NULL`
+    # (`applicable_budgets`), and an empty or whitespace-only string is neither.
+    # It would store as a narrowed row under `uq_scoped_budgets_scope_with_key`,
+    # list like any other ceiling, and never bind, which is the same
+    # created-listed-and-silently-unenforced failure `_require_scope_exists`
+    # refuses a bad scope for, and it fails in the permissive direction.
+    #
+    # Blank is refused rather than folded into null: null is a *wider* cap, so
+    # accepting "" as "every provider" would silently cap more than the caller
+    # asked for. A pattern rather than a check in the dashboard, so the rule holds
+    # for every client and is published in the schema, as
+    # `organization_pricing`'s model-key pattern is. Whitespace is excluded
+    # outright because an instance name cannot contain any: the model-key pattern
+    # already forbids it in the provider half, since the allow-list is keyed on
+    # `"{instance}:{model}"`.
     provider_key_id: str | None = Field(
         default=None,
+        min_length=1,
         max_length=255,
-        description="Narrow the cap to one provider instance; null caps spend across every provider",
+        pattern=r"^\S+$",
+        description=(
+            "Narrow the cap to one provider instance; omit or null to cap spend across every provider. "
+            "Must name a real instance: a blank value would store a ceiling that never binds"
+        ),
     )
     budget_id: str = Field(
         min_length=1,
