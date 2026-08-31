@@ -56,6 +56,12 @@ from gateway.services.tenancy.organization_budget_service import (
 _BUDGETS = "/v1/organizations/me/budgets"
 _CEILINGS = "/v1/organizations/me/spend-ceilings"
 
+# `HTTP_422_UNPROCESSABLE_CONTENT`, not `..._ENTITY`, in the schema-refusal
+# assertions below. The two are both 422; `_ENTITY` is the deprecated alias and
+# reading it emits a `StarletteDeprecationWarning` (verified against Starlette
+# 1.3.1). Noted here because the swap has been suggested twice in review, in the
+# wrong direction each time.
+
 
 # =============================================================================
 # The HTTP surface
