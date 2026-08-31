@@ -6895,7 +6895,7 @@ export interface components {
              * Reset Alignment
              * @description Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec
              */
-            reset_alignment?: string | null;
+            reset_alignment?: ("calendar_day" | "calendar_week" | "calendar_month") | null;
         };
         /**
          * OrganizationBudgetPublic
@@ -6963,7 +6963,7 @@ export interface components {
              * Reset Alignment
              * @description Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec
              */
-            reset_alignment?: string | null;
+            reset_alignment?: ("calendar_day" | "calendar_week" | "calendar_month") | null;
         };
         /** OrganizationBudgetsPublic */
         OrganizationBudgetsPublic: {

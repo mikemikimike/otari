@@ -6103,6 +6103,11 @@
           "reset_alignment": {
             "anyOf": [
               {
+                "enum": [
+                  "calendar_day",
+                  "calendar_week",
+                  "calendar_month"
+                ],
                 "type": "string"
               },
               {
@@ -6245,6 +6250,11 @@
           "reset_alignment": {
             "anyOf": [
               {
+                "enum": [
+                  "calendar_day",
+                  "calendar_week",
+                  "calendar_month"
+                ],
                 "type": "string"
               },
               {

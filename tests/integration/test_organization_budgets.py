@@ -136,6 +136,58 @@ def test_a_patch_that_would_state_both_periods_is_refused(
     assert refused.status_code == status.HTTP_400_BAD_REQUEST, refused.text
 
 
+@pytest.mark.parametrize("alignment", ["weekly", "calendar_fortnight", "CALENDAR_DAY", ""])
+def test_an_unrecognized_reset_alignment_is_refused_on_the_request(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    alignment: str,
+) -> None:
+    """422 on the request that introduces it, not 500 on the next window derivation.
+
+    An unrecognized alignment stores happily and then raises out of
+    ``period_window`` the first time a window is derived from it, which is
+    creating a ceiling or retiming one after a cadence change. "weekly" is the
+    plausible mistake: it is a period name a caller would reasonably try, and it
+    is not one of the three calendar boundaries.
+    """
+    refused = client.post(
+        _BUDGETS,
+        json={"name": "Monthly", "max_budget": 100.0, "reset_alignment": alignment},
+        headers=master_key_header,
+    )
+    assert refused.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, refused.text
+
+
+def test_an_unrecognized_reset_alignment_is_refused_on_an_update(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """The update path too, which is the one that reaches the retiming."""
+    budget = client.post(_BUDGETS, json=_budget_body(), headers=master_key_header).json()
+
+    refused = client.patch(
+        f"{_BUDGETS}/{budget['budget_id']}",
+        json={"reset_alignment": "weekly"},
+        headers=master_key_header,
+    )
+    assert refused.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, refused.text
+
+
+def test_every_recognized_alignment_is_accepted(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """The other half, so the constraint cannot creep into refusing a valid boundary."""
+    for alignment in ("calendar_day", "calendar_week", "calendar_month"):
+        created = client.post(
+            _BUDGETS,
+            json={"name": alignment, "max_budget": 10.0, "reset_alignment": alignment},
+            headers=master_key_header,
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.text
+        assert created.json()["reset_alignment"] == alignment
+
+
 def test_an_unknown_budget_is_not_found(client: TestClient, master_key_header: dict[str, str]) -> None:
     missing = client.patch(f"{_BUDGETS}/nope", json={"name": "x"}, headers=master_key_header)
     assert missing.status_code == status.HTTP_404_NOT_FOUND, missing.text

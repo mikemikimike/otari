@@ -65,7 +65,7 @@ from sqlmodel import col
 from gateway.models.entities import APIKey, Budget, ScopedBudget, WorkspaceBudgetDefault
 from gateway.models.money import MAX_USD_LIMIT, as_float, to_usd_or_none
 from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
-from gateway.services.budget_periods import period_window
+from gateway.services.budget_periods import ResetAlignment, period_window
 from gateway.services.budget_retiming import cadence_of, retime_ceilings_for_budget
 from gateway.services.tenancy.errors import (
     OrganizationBudgetInUseError,
@@ -134,7 +134,18 @@ class OrganizationBudgetRates(BaseModel):
         description="Maximum spend in USD over one period; null caps nothing",
     )
     budget_duration_sec: int | None = Field(default=None, gt=0, description=_PERIOD_DESCRIPTION)
-    reset_alignment: str | None = Field(default=None, description=_ALIGNMENT_DESCRIPTION)
+    # The `Literal`, not a bare `str`: an unrecognized alignment is stored happily
+    # and then raises out of `period_window` the first time a window is derived
+    # from it, which is a 500 on creating a ceiling or on retiming one rather than
+    # a 422 on the request that introduced it. `_roll_expired_periods` degrades
+    # safely (it logs and leaves the exhausted window in place) but the API paths
+    # do not, so the value is refused at the boundary and published in the schema,
+    # matching what `CreateBudgetRequest` on the deployment route already does.
+    #
+    # The response models keep `str | None` on purpose: they echo whatever is
+    # stored, and narrowing them would turn a row holding an unexpected value into
+    # a failed read rather than a readable row someone can go and fix.
+    reset_alignment: ResetAlignment | None = Field(default=None, description=_ALIGNMENT_DESCRIPTION)
 
 
 class OrganizationBudgetCreate(OrganizationBudgetRates):
