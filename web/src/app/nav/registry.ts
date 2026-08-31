@@ -295,12 +295,18 @@ const ORGANIZATION_NAV_SECTIONS = [
     id: "org-money",
     label: "Cost & billing",
     items: [
+      // No `operatorOnly`, because the destination is two pages now: an
+      // operator gets the deployment's budgets and an organization owner or
+      // admin gets their own organization's (otari-ai#1943). The roles matrix
+      // has this row at Edit for an admin, and `/v1/organizations/me/budgets`
+      // plus `/v1/organizations/me/spend-ceilings` are what it edits. A plain
+      // member is not offered it, because the organization rail opens only to a
+      // caller who manages the organization.
       {
         to: "/budgets",
         label: "Spend & budgets",
         surface: "budgets",
         icon: FiDollarSign,
-        operatorOnly: "refused",
       },
       // Tenant-scoped in fact as well as in the design: a rate applies to every
       // workspace and every key in the deployment. The catalog had no home

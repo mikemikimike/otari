@@ -17,11 +17,13 @@ import type {
   CreateBudgetRequest,
   CreateKeyRequest,
   CreateKeyResponse,
+  CreateOrganizationBudget,
   CreateOrganizationGuardrailRequest,
   CreateOrganizationMemberRequest,
   CreateOrganizationMemberResult,
   CreateOrganizationPricingOverride,
   CreateOrganizationRequest,
+  CreateOrganizationSpendCeiling,
   CreateOrgProviderKeyRequest,
   CreateOwnKeyRequest,
   CreateScopedBudgetRequest,
@@ -50,10 +52,12 @@ import type {
   ModelListResponse,
   ModelMetadataResponse,
   Organization,
+  OrganizationBudget,
   OrganizationContext,
   OrganizationGuardrail,
   OrganizationMember,
   OrganizationPricingOverride,
+  OrganizationSpendCeiling,
   OrgProviderKey,
   Passkey,
   PasskeysResponse,
@@ -93,10 +97,12 @@ import type {
   UpdateBudgetRequest,
   UpdateDeploymentUserRequest,
   UpdateKeyRequest,
+  UpdateOrganizationBudget,
   UpdateOrganizationGuardrailRequest,
   UpdateOrganizationMemberRequest,
   UpdateOrganizationPricingOverride,
   UpdateOrganizationRequest,
+  UpdateOrganizationSpendCeiling,
   UpdateOrgProviderKeyRequest,
   UpdateOwnKeyRequest,
   UpdateScopedBudgetRequest,
@@ -180,6 +186,12 @@ const DEPLOYMENT_ADMIN = "deployment-admin"
 // key is: the organization context is read on nearly every page, and a rate
 // edit should not make all of them refetch.
 const ORGANIZATION_PRICING = "organization-pricing"
+// The organization's own budgets and ceilings, keyed apart from BUDGETS and
+// SCOPED_BUDGETS above: those are the deployment-wide reads, which answer 403
+// to a tenant, so one key for both would serve a cached operator answer to an
+// admin and invalidate reads neither caller can make.
+const ORGANIZATION_BUDGETS = "organization-budgets"
+const ORGANIZATION_SPEND_CEILINGS = "organization-spend-ceilings"
 const ORGANIZATION_GUARDRAILS = "organization-guardrails"
 // The organization's own upstream provider credentials. Its own key for the
 // reason the two above have one: this is read by one page, and a credential
@@ -3070,6 +3082,148 @@ export function useDeleteOrganizationPricing() {
         method: "DELETE",
       }),
     onSuccess: () => invalidateOrganizationPricing(queryClient),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// The organization's own budgets and spend ceilings
+//
+// The tenant-scoped counterpart to `useBudgets` / `useScopedBudgets` above,
+// which read `/v1/budgets` and `/v1/scoped-budgets` and have answered 403 to
+// anyone who does not operate the deployment since #821. These read the
+// caller's own organization instead, and are owner-or-admin on both halves:
+// unlike the rate overrides, a cap is a statement about what colleagues may
+// spend, so the roles matrix has it Hidden for a member (otari-ai#1943).
+//
+// A ceiling naming a budget the organization does not own reports `manageable`
+// false. Those are what the otari-ai cutover writes, and they are listed rather
+// than hidden because they are enforcing today; the page offers to move one onto
+// one of the organization's own budgets instead of pretending it can edit the
+// figure.
+// ---------------------------------------------------------------------------
+
+export function useOrganizationBudgets(enabled = true) {
+  return useQuery({
+    queryKey: [ORGANIZATION_BUDGETS],
+    // Paged through with the tenancy walker rather than read in one shot, for
+    // the reason `useOrganizationPricing` gives: the endpoint caps `limit`
+    // server-side, and the cap is what would silently truncate a long-lived
+    // organization's list.
+    queryFn: () =>
+      fetchAllPaged<OrganizationBudget>("/v1/organizations/me/budgets"),
+    staleTime: 60_000,
+    enabled,
+  })
+}
+
+export function useOrganizationSpendCeilings(enabled = true) {
+  return useQuery({
+    queryKey: [ORGANIZATION_SPEND_CEILINGS],
+    queryFn: () =>
+      fetchAllPaged<OrganizationSpendCeiling>(
+        "/v1/organizations/me/spend-ceilings",
+      ),
+    staleTime: 60_000,
+    enabled,
+  })
+}
+
+// Both keys move together on every write. A budget's figure is read *through*
+// the budget by every ceiling naming it, so changing one changes what those
+// ceilings report; and creating a ceiling changes a budget's `ceiling_count`,
+// which is what makes its delete refuse.
+function invalidateOrganizationSpend(
+  queryClient: ReturnType<typeof useQueryClient>,
+) {
+  void queryClient.invalidateQueries({ queryKey: [ORGANIZATION_BUDGETS] })
+  void queryClient.invalidateQueries({
+    queryKey: [ORGANIZATION_SPEND_CEILINGS],
+  })
+}
+
+export function useCreateOrganizationBudget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: CreateOrganizationBudget) =>
+      apiFetch<OrganizationBudget>("/v1/organizations/me/budgets", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => invalidateOrganizationSpend(queryClient),
+  })
+}
+
+// PATCH, not PUT: an omitted field is left alone, so the form sends only what it
+// changed and clearing a cap back to uncapped is a delete rather than a null.
+export function useUpdateOrganizationBudget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string
+      body: UpdateOrganizationBudget
+    }) =>
+      apiFetch<OrganizationBudget>(
+        `/v1/organizations/me/budgets/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+      ),
+    onSuccess: () => invalidateOrganizationSpend(queryClient),
+  })
+}
+
+export function useDeleteOrganizationBudget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ message: string }>(
+        `/v1/organizations/me/budgets/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () => invalidateOrganizationSpend(queryClient),
+  })
+}
+
+export function useCreateOrganizationSpendCeiling() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: CreateOrganizationSpendCeiling) =>
+      apiFetch<OrganizationSpendCeiling>(
+        "/v1/organizations/me/spend-ceilings",
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+    onSuccess: () => invalidateOrganizationSpend(queryClient),
+  })
+}
+
+export function useUpdateOrganizationSpendCeiling() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string
+      body: UpdateOrganizationSpendCeiling
+    }) =>
+      apiFetch<OrganizationSpendCeiling>(
+        `/v1/organizations/me/spend-ceilings/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+      ),
+    onSuccess: () => invalidateOrganizationSpend(queryClient),
+  })
+}
+
+export function useDeleteOrganizationSpendCeiling() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ message: string }>(
+        `/v1/organizations/me/spend-ceilings/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () => invalidateOrganizationSpend(queryClient),
   })
 }
 

@@ -86,6 +86,14 @@ Settings shows the effective non-secret configuration. Some values can be change
 at runtime and others require a restart. The server marks that distinction in the
 settings response.
 
+What a page shows can also depend on who is signed in, not only on the
+deployment. Spend and budgets is the clearest case: an organization owner or
+admin manages their own organization's budgets and the spend ceilings holding
+them, while a deployment operator gets the deployment-wide budgets and the
+gateway users assigned to them. Model pricing splits the same way, with the
+default pricing catalog kept to an operator and the organization's own rate
+overrides open to its admins.
+
 Exact page names and availability can change with deployment mode and installed
 extensions. The running dashboard is the source of truth.
 

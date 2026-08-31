@@ -4,10 +4,15 @@ import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { Budget, BudgetResetLog, User } from "@/client"
+import type {
+  Budget,
+  BudgetResetLog,
+  OrganizationContext,
+  User,
+} from "@/client"
 import { BudgetsPage } from "@/features/budgets/BudgetsPage"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
-import { bootstrap } from "@/tests/fixtures"
+import { bootstrap, organizationContext } from "@/tests/fixtures"
 
 function testUser(user_id: string): User {
   return {
@@ -56,11 +61,16 @@ function mockApi(
     users?: User[]
     failedUserUpdates?: string[]
     updateUser?: (userId: string) => Response | Promise<Response>
+    // Who is asking, which is what decides which of the two pages this route
+    // renders. An operator by default, so every case below describes the
+    // deployment-wide page it always described.
+    context?: OrganizationContext
   } = {},
 ) {
   let list = [...(opts.budgets ?? [])]
   const resetLogs = opts.resetLogs ?? []
   const users = opts.users ?? []
+  const context = opts.context ?? organizationContext()
 
   return vi
     .spyOn(globalThis, "fetch")
@@ -110,6 +120,13 @@ function mockApi(
         }
         return jsonResponse(list)
       }
+      if (url.includes("/v1/organizations/me/budgets")) {
+        return jsonResponse({ data: [], count: 0 })
+      }
+      if (url.includes("/v1/organizations/me/spend-ceilings")) {
+        return jsonResponse({ data: [], count: 0 })
+      }
+      if (url.includes("/v1/organizations/me")) return jsonResponse(context)
       return jsonResponse([])
     })
 }
@@ -546,5 +563,46 @@ describe("BudgetsPage", () => {
       )
       expect(del).toBeTruthy()
     })
+  })
+
+  it("gives an organization admin their own budgets, not the deployment's", async () => {
+    // One route, two pages (otari-ai#1943). Every deployment-wide read this
+    // file's other cases make answers 403 to a tenant, so an admin gets the
+    // organization-scoped page instead of a screen of refusals.
+    const requests = mockApi({
+      budgets: [budget()],
+      // An admin, not the owner the fixture defaults to: the matrix row is
+      // about the admin, and it is the weaker of the two management roles.
+      context: organizationContext({
+        role: "admin",
+        deployment_operator: false,
+      }),
+    })
+    renderPage(<BudgetsPage />)
+
+    expect(
+      await screen.findByRole("grid", { name: "Organization budgets" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("grid", { name: "Organization spend ceilings" }),
+    ).toBeInTheDocument()
+
+    // Withheld at the request, not only in the markup.
+    const read = requests.mock.calls.map(([url]) => String(url))
+    expect(read.some((url) => /\/v1\/budgets/.test(url))).toBe(false)
+    expect(read.some((url) => /\/v1\/scoped-budgets/.test(url))).toBe(false)
+    expect(read.some((url) => /\/v1\/users/.test(url))).toBe(false)
+  })
+
+  it("keeps the deployment page for an operator", async () => {
+    // The other side of the split, pinned so a future change cannot quietly
+    // take the deployment's budgets away from the caller who owns them.
+    mockApi({ budgets: [budget({ name: "Deployment wide" })] })
+    renderPage(<BudgetsPage />)
+
+    expect(await screen.findByText("Deployment wide")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("grid", { name: "Organization budgets" }),
+    ).toBeNull()
   })
 })

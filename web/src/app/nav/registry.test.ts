@@ -102,9 +102,15 @@ describe("nav registry", () => {
     // already management-gated, and its catalog read serves any session, so only
     // two of its sections were ever the operator's and the page withholds those
     // rather than the rail withholding the destination.
+    //
+    // Spend & budgets left it a fourth way, in the same issue: the route now
+    // resolves to *two* pages, the deployment's for an operator and the
+    // organization's own for an owner or admin, so there is no caller the
+    // destination refuses. That is the shape to copy for the rows still on this
+    // list, not a loosened gate.
     expect(
       NAV_ITEMS.filter((item) => item.operatorOnly).map((item) => item.to),
-    ).toEqual(["/providers", "/budgets", "/settings", "/admin/accounts"])
+    ).toEqual(["/providers", "/settings", "/admin/accounts"])
   })
 
   it("puts each destination on exactly one rail", () => {

@@ -279,6 +279,18 @@ export type CreateOrganizationPricingOverride =
   Schemas["OrganizationModelPricingCreate"]
 export type UpdateOrganizationPricingOverride =
   Schemas["OrganizationModelPricingUpdate"]
+// The organization's own budgets and the ceilings enforcing them, which are the
+// tenant-scoped counterparts to `Budget` and `ScopedBudget` above. Separate
+// types rather than the same ones: these carry an owner and, on a ceiling,
+// whether its figure is this organization's to change.
+export type OrganizationBudget = Schemas["OrganizationBudgetPublic"]
+export type CreateOrganizationBudget = Schemas["OrganizationBudgetCreate"]
+export type UpdateOrganizationBudget = Schemas["OrganizationBudgetUpdate"]
+export type OrganizationSpendCeiling = Schemas["OrganizationScopedBudgetPublic"]
+export type CreateOrganizationSpendCeiling =
+  Schemas["OrganizationScopedBudgetCreate"]
+export type UpdateOrganizationSpendCeiling =
+  Schemas["OrganizationScopedBudgetUpdate"]
 export type PricingRefreshChange = Schemas["PricingRefreshChangeResponse"]
 export type PricingRefreshPreview = Schemas["PricingRefreshPreviewResponse"]
 export type ProviderInfo = Schemas["ProviderInfoSchema"]

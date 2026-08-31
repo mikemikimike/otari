@@ -6,6 +6,7 @@ import type {
   CreateBudgetRequest,
   User,
 } from "@/client"
+import { isDeploymentOperator } from "@/features/organization/roles"
 import { UserMultiSelect } from "@/features/users/UserMultiSelect"
 import {
   useAllWorkspaceBudgetDefaults,
@@ -13,6 +14,7 @@ import {
   useBudgets,
   useCreateBudget,
   useDeleteBudget,
+  useOrganizationContext,
   useUpdateBudget,
   useUpdateUser,
   useUsers,
@@ -28,11 +30,14 @@ import {
   ErrorBanner,
   InfoBanner,
   PageHeader,
+  PageLoading,
 } from "@/shared/components/ui"
 import {
   resolveSelectedIds,
   useTableSelection,
 } from "@/shared/helpers/tableSelection"
+
+import { OrganizationBudgetsPage } from "./OrganizationBudgetsPage"
 
 // ---------- formatting ----------
 
@@ -479,7 +484,16 @@ function budgetLabel(budget: Budget): string {
   return budget.name ?? shortId(budget.budget_id)
 }
 
-export function BudgetsPage() {
+/**
+ * The deployment's own budgets page, which is what an operator sees.
+ *
+ * Deployment-wide end to end: `/v1/budgets`, the gateway's `users` table, and
+ * every workspace's member default, all behind `require_deployment_operator`.
+ * Unchanged by otari-ai#1943, which added the tenant-scoped page beside it
+ * rather than reshaping this one, because the two surfaces answer to different
+ * callers and read different rows.
+ */
+function DeploymentBudgetsPage() {
   const budgets = useBudgets()
   const users = useUsers()
   const workspaces = useWorkspaces()
@@ -935,4 +949,36 @@ export function BudgetsPage() {
       />
     </div>
   )
+}
+
+/**
+ * Spend & budgets, picking the page for whoever is asking.
+ *
+ * One route with two pages behind it, the way Routing does since otari#867: an
+ * operator gets the deployment's budgets, and an organization owner or admin
+ * gets their own organization's, which is the surface otari-ai#1943 added. Not
+ * two rail rows, because it is one destination in the design and one row in the
+ * roles matrix; and not one merged page, because the two read different tables
+ * and every deployment-wide read here answers 403 to a tenant.
+ *
+ * Held until the context lands rather than defaulting to one of them. Guessing
+ * would either flash the operator page at an admin and swap it, or fire the
+ * deployment-wide reads as an admin and paint their refusals; the shell already
+ * waits on this query, so the cost is a spinner that is usually already over.
+ */
+export function BudgetsPage() {
+  const organization = useOrganizationContext()
+
+  if (organization.isPending && !organization.data) {
+    return <PageLoading label="Loading spend and budgets…" />
+  }
+  // Fails towards the operator page on an errored context, matching what the
+  // rail does with this row: it is the page that was here before, its reads say
+  // in their own words when they are refused, and an admin seeing that is a
+  // worse-looking version of a page they can still reach, where the reverse
+  // would hide the deployment's budgets from the one caller who owns them.
+  if (organization.data && !isDeploymentOperator(organization.data)) {
+    return <OrganizationBudgetsPage organization={organization.data} />
+  }
+  return <DeploymentBudgetsPage />
 }
