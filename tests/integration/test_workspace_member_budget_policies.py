@@ -14,6 +14,7 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -904,3 +905,28 @@ async def test_a_default_may_still_name_a_deployment_budget(async_db: AsyncSessi
     )
 
     assert created.budget_id == deployment_budget_id
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+async def test_a_default_refuses_a_blank_provider_narrowing(async_db: AsyncSession, blank: str) -> None:
+    """A blank narrowing would materialize a never-binding ceiling per member.
+
+    Worse here than on a single ceiling: `create_default` fans the template out
+    across every active member, so one bad request leaves a whole workspace with
+    caps that are stored, listed, and enforced against nothing. Refused at the
+    schema rather than normalized, because null is the wider rule and coercing
+    would silently apply the cap to every provider instead of one.
+
+    Validated at the request model, since this surface is reachable by an
+    organization or workspace owner/admin rather than only by an operator.
+    """
+    with pytest.raises(ValidationError):
+        WorkspaceMemberBudgetPolicyCreate(budget_id="b1", provider_key_id=blank)
+
+
+async def test_a_default_still_accepts_a_real_provider_instance(async_db: AsyncSession) -> None:
+    """The other half of the rule, so the pattern cannot creep into refusing valid names."""
+    request = WorkspaceMemberBudgetPolicyCreate(budget_id="b1", provider_key_id="openai-eu")
+    assert request.provider_key_id == "openai-eu"
+    # Omitted stays the aggregate default.
+    assert WorkspaceMemberBudgetPolicyCreate(budget_id="b1").provider_key_id is None

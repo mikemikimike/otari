@@ -9888,7 +9888,7 @@ export interface components {
             budget_id: string;
             /**
              * Provider Key Id
-             * @description Narrow the default to one provider instance; null applies to every provider
+             * @description Narrow the default to one provider instance; omit or null to apply to every provider. Must name a real instance: a blank value would materialize ceilings that never bind
              */
             provider_key_id?: string | null;
         };

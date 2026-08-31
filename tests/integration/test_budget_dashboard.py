@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
@@ -274,3 +275,110 @@ def test_deleting_a_budget_a_ceiling_enforces_is_refused(
     db_session.execute(delete(ScopedBudget).where(ScopedBudget.budget_id == budget_id))
     db_session.commit()
     assert client.delete(f"/v1/budgets/{budget_id}", headers=master_key_header).status_code == 204
+
+
+def test_a_cadence_change_retimes_the_ceilings_naming_the_budget(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session: Session,
+) -> None:
+    """The direction that is an enforcement bug, not a cosmetic one.
+
+    `_roll_expired_periods` only updates a row whose `period_end` is not null, so
+    a ceiling left with a NULL window under a periodic budget never rolls at all:
+    it accumulates spend forever while the API reports the new cadence. Since
+    `b7e1c4a9d2f5` a budget can also belong to an organization while this route
+    still sees every one, so the ceilings stranded this way may be a tenant's.
+    """
+    budget_id = _make_budget(client, master_key_header)
+    # A budget with no cadence materializes a ceiling with no window.
+    ceiling = ScopedBudget(scope_type="workspace", scope_id=str(uuid4()), budget_id=budget_id)
+    db_session.add(ceiling)
+    db_session.commit()
+    assert ceiling.period_end is None
+
+    patched = client.patch(
+        f"/v1/budgets/{budget_id}",
+        json={"reset_alignment": "calendar_month"},
+        headers=master_key_header,
+    )
+    assert patched.status_code == 200, patched.json()
+
+    db_session.expire_all()
+    retimed = db_session.get(ScopedBudget, ceiling.id)
+    assert retimed is not None
+    assert retimed.period_start is not None
+    assert retimed.period_end is not None
+
+
+def test_dropping_a_cadence_clears_the_ceiling_window(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session: Session,
+) -> None:
+    """The reverse, which would otherwise roll once at a boundary that no longer means anything."""
+    created = client.post(
+        "/v1/budgets", json={"max_budget": 100.0, "reset_alignment": "calendar_day"}, headers=master_key_header
+    ).json()
+    budget_id = created["budget_id"]
+    ceiling = ScopedBudget(
+        scope_type="workspace",
+        scope_id=str(uuid4()),
+        budget_id=budget_id,
+        period_start=datetime(2026, 8, 1, tzinfo=UTC),
+        period_end=datetime(2026, 8, 2, tzinfo=UTC),
+    )
+    db_session.add(ceiling)
+    db_session.commit()
+
+    patched = client.patch(
+        f"/v1/budgets/{budget_id}",
+        json={"reset_alignment": None},
+        headers=master_key_header,
+    )
+    assert patched.status_code == 200, patched.json()
+
+    db_session.expire_all()
+    cleared = db_session.get(ScopedBudget, ceiling.id)
+    assert cleared is not None
+    assert cleared.period_start is None
+    assert cleared.period_end is None
+
+
+def test_a_rename_does_not_restart_a_ceiling_period(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    db_session: Session,
+) -> None:
+    """Retiming is keyed on the cadence, so unrelated edits leave the window alone.
+
+    Otherwise every typo fix in a budget's name would throw away the part of the
+    period its ceilings had already spent.
+    """
+    created = client.post(
+        "/v1/budgets", json={"max_budget": 100.0, "reset_alignment": "calendar_day"}, headers=master_key_header
+    ).json()
+    budget_id = created["budget_id"]
+    start, end = datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 2, tzinfo=UTC)
+    ceiling = ScopedBudget(
+        scope_type="workspace",
+        scope_id=str(uuid4()),
+        budget_id=budget_id,
+        period_start=start,
+        period_end=end,
+    )
+    db_session.add(ceiling)
+    db_session.commit()
+
+    patched = client.patch(
+        f"/v1/budgets/{budget_id}",
+        json={"name": "renamed", "max_budget": 500.0},
+        headers=master_key_header,
+    )
+    assert patched.status_code == 200, patched.json()
+
+    db_session.expire_all()
+    untouched = db_session.get(ScopedBudget, ceiling.id)
+    assert untouched is not None
+    assert untouched.period_start == start
+    assert untouched.period_end == end

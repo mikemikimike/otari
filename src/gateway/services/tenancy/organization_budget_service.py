@@ -57,7 +57,7 @@ from datetime import UTC, datetime
 from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
@@ -66,6 +66,7 @@ from gateway.models.entities import APIKey, Budget, ScopedBudget, WorkspaceBudge
 from gateway.models.money import MAX_USD_LIMIT, as_float, to_usd_or_none
 from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.services.budget_periods import period_window
+from gateway.services.budget_retiming import cadence_of, retime_ceilings_for_budget
 from gateway.services.tenancy.errors import (
     OrganizationBudgetInUseError,
     OrganizationBudgetNotFoundError,
@@ -213,23 +214,11 @@ class OrganizationScopedBudgetCreate(BaseModel):
             "a membership in either, or an API key in one"
         ),
     )
-    # Absent means every provider. A *present* value has to be a real instance
-    # name, so it is constrained rather than only length-checked: resolution
-    # matches `provider_key_id == provider_instance OR IS NULL`
-    # (`applicable_budgets`), and an empty or whitespace-only string is neither.
-    # It would store as a narrowed row under `uq_scoped_budgets_scope_with_key`,
-    # list like any other ceiling, and never bind, which is the same
-    # created-listed-and-silently-unenforced failure `_require_scope_exists`
-    # refuses a bad scope for, and it fails in the permissive direction.
-    #
-    # Blank is refused rather than folded into null: null is a *wider* cap, so
-    # accepting "" as "every provider" would silently cap more than the caller
-    # asked for. A pattern rather than a check in the dashboard, so the rule holds
-    # for every client and is published in the schema, as
-    # `organization_pricing`'s model-key pattern is. Whitespace is excluded
-    # outright because an instance name cannot contain any: the model-key pattern
-    # already forbids it in the provider half, since the allow-list is keyed on
-    # `"{instance}:{model}"`.
+    # Absent means every provider; a present value must name a real instance.
+    # Resolution matches `provider_key_id == provider_instance OR IS NULL`, and a
+    # blank string is neither, so it would store, list, and never bind. Refused
+    # rather than folded into null, because null is the *wider* cap and coercing
+    # would silently cap more than the caller asked for.
     provider_key_id: str | None = Field(
         default=None,
         min_length=1,
@@ -550,7 +539,7 @@ class OrganizationBudgetService:
         # moved at all: retiming a ceiling whose cadence did not change would
         # restart its window for a rename or a figure change, throwing away the
         # part of the period it had already spent.
-        cadence_before = (budget.budget_duration_sec, budget.reset_alignment)
+        cadence_before = cadence_of(budget.budget_duration_sec, budget.reset_alignment)
 
         fields = request.model_fields_set
         if "name" in fields:
@@ -566,41 +555,21 @@ class OrganizationBudgetService:
         # refuses, and neither field alone looks wrong.
         _require_single_period_source(budget.budget_duration_sec, budget.reset_alignment)
 
-        if (budget.budget_duration_sec, budget.reset_alignment) != cadence_before:
-            await self._retime_ceilings(budget)
+        if cadence_of(budget.budget_duration_sec, budget.reset_alignment) != cadence_before:
+            # Shared with the deployment-wide surface rather than written twice,
+            # so a rule this important cannot hold on one and not the other.
+            await retime_ceilings_for_budget(
+                self.db,
+                budget_id=budget.budget_id,
+                duration=budget.budget_duration_sec,
+                alignment=budget.reset_alignment,
+            )
 
         await self.db.commit()
         await self.db.refresh(budget)
         return OrganizationBudgetPublic.from_model(
             budget,
             ceiling_count=await self._ceiling_count(budget.budget_id),
-        )
-
-    async def _retime_ceilings(self, budget: Budget) -> None:
-        """Move every ceiling naming this budget onto the cadence it now carries.
-
-        One statement rather than a row per ceiling: the window is the same for
-        all of them, since it is derived from the budget and from now, not from
-        anything the ceiling holds. Not committed here; the caller owns the
-        transaction, so a refused update takes the retiming back with it.
-
-        A cadence of neither kind clears the window rather than computing one,
-        which is what "no reset" means and what ``period_window`` returns None
-        for. That is the direction that has to clear rather than be left stale: a
-        row keeping an old ``period_end`` under no cadence would roll once, at the
-        moment that stale boundary passed, and zero its spend for no reason.
-        """
-        window = period_window(
-            datetime.now(UTC),
-            duration=budget.budget_duration_sec,
-            alignment=budget.reset_alignment,
-        )
-        period_start, period_end = window if window is not None else (None, None)
-        await self.db.execute(
-            update(ScopedBudget)
-            .where(ScopedBudget.budget_id == budget.budget_id)
-            .values(period_start=period_start, period_end=period_end)
-            .execution_options(synchronize_session=False)
         )
 
     async def delete_budget(self, *, user: User, budget_id: str) -> None:

@@ -12,6 +12,7 @@ from gateway.api.deps import get_db, require_deployment_operator
 from gateway.models.entities import Budget, BudgetResetLog, ScopedBudget, User, WorkspaceBudgetDefault
 from gateway.models.money import MAX_USD_LIMIT, as_float, to_usd, to_usd_or_none
 from gateway.models.tenancy import Workspace
+from gateway.services.budget_retiming import cadence_of, retime_ceilings_for_budget
 from gateway.services.scoped_budget_service import ResetAlignment
 
 router = APIRouter(prefix="/v1/budgets", tags=["budgets"])
@@ -254,6 +255,10 @@ async def update_budget(
             detail=f"Budget with id '{budget_id}' not found",
         )
 
+    # Read before the mutation below, because it is what decides whether the
+    # ceilings naming this budget have to be retimed.
+    cadence_before = cadence_of(budget.budget_duration_sec, budget.reset_alignment)
+
     # Name is tri-state: omit leaves it unchanged, while an explicit null clears
     # it back to unnamed (unlike the numeric fields, where null is not meaningful).
     if "name" in request.model_fields_set:
@@ -276,6 +281,24 @@ async def update_budget(
         _require_single_period_source(duration, alignment)
         budget.budget_duration_sec = duration
         budget.reset_alignment = alignment
+
+    # A ceiling holds its own window and reads the cadence through this budget, so
+    # changing the cadence without rewriting the windows leaves the two
+    # disagreeing. In one direction that is an enforcement bug rather than a
+    # cosmetic one: `_roll_expired_periods` only updates a row whose `period_end`
+    # is not null, so a budget moved from "no reset" to a periodic cadence would
+    # leave its ceilings with NULL windows that never roll, accumulating spend
+    # forever. Since `b7e1c4a9d2f5` a budget can also belong to an organization
+    # while this route still sees every one of them, so the ceilings stranded that
+    # way may be a tenant's. Shared with the tenant-scoped surface rather than
+    # written twice.
+    if cadence_of(budget.budget_duration_sec, budget.reset_alignment) != cadence_before:
+        await retime_ceilings_for_budget(
+            db,
+            budget_id=budget.budget_id,
+            duration=budget.budget_duration_sec,
+            alignment=budget.reset_alignment,
+        )
 
     try:
         await db.commit()

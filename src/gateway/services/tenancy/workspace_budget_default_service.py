@@ -74,10 +74,23 @@ class WorkspaceMemberBudgetPolicyCreate(BaseModel):
         max_length=255,
         description="The budget this workspace hands to every member",
     )
+    # Absent means every provider; a present value must name a real instance.
+    # Constrained rather than only length-checked because this template is
+    # materialized verbatim into a ceiling per member, and a ceiling whose
+    # `provider_key_id` is a blank string binds to nothing: resolution matches
+    # `provider_key_id == provider_instance OR IS NULL` and blank is neither, so
+    # every member would get a cap that is stored, listed, and never enforced.
+    # Reachable by an organization or workspace owner/admin, not only an operator,
+    # which is why it is refused here rather than left to the dashboard.
     provider_key_id: str | None = Field(
         default=None,
+        min_length=1,
         max_length=255,
-        description="Narrow the default to one provider instance; null applies to every provider",
+        pattern=r"^\S+$",
+        description=(
+            "Narrow the default to one provider instance; omit or null to apply to every provider. "
+            "Must name a real instance: a blank value would materialize ceilings that never bind"
+        ),
     )
 
 
