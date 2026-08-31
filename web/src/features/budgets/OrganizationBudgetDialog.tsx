@@ -5,7 +5,11 @@ import type { OrganizationBudget } from "@/client"
 import { Field } from "@/shared/components/Field"
 import { ErrorBanner, FilterSelect } from "@/shared/components/ui"
 
-import { PERIOD_OPTIONS, periodValue } from "./organizationBudget"
+import {
+  PERIOD_OPTIONS,
+  periodValue,
+  type ResetAlignment,
+} from "./organizationBudget"
 
 // The form behind both Add and Edit for one of the organization's budgets. One
 // component rather than two: the fields are identical, and the endpoint is a
@@ -16,7 +20,9 @@ export interface OrganizationBudgetDraft {
   name: string | null
   max_budget: number | null
   budget_duration_sec: number | null
-  reset_alignment: string | null
+  // The generated union, not `string`: see `ResetAlignment` for why restating it
+  // as a string broke the build when the endpoint narrowed the field.
+  reset_alignment: ResetAlignment | null
 }
 
 /** A typed amount, or undefined when it is not a number this can send. */

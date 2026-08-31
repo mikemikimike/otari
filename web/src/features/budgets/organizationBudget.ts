@@ -7,11 +7,26 @@
  */
 
 import type {
+  CreateOrganizationBudget,
   OrganizationBudget,
   OrganizationSpendCeiling,
   Workspace,
 } from "@/client"
 import { formatUsd } from "@/shared/helpers/format"
+
+/**
+ * The calendar boundaries the API accepts, derived from the generated client
+ * rather than restated here.
+ *
+ * Restating them as `string` is what broke the build once: the endpoint narrowed
+ * `reset_alignment` to a three-value enum and every local `string` stopped
+ * assigning to it. Deriving the type means the next change to that enum is a
+ * type error at the two places that construct one, not a widening that compiles
+ * and sends a value the server refuses.
+ */
+export type ResetAlignment = NonNullable<
+  CreateOrganizationBudget["reset_alignment"]
+>
 
 /**
  * The periods this page offers, as calendar boundaries rather than seconds.
@@ -31,7 +46,7 @@ import { formatUsd } from "@/shared/helpers/format"
 export const PERIOD_OPTIONS: readonly {
   value: string
   label: string
-  alignment: string | undefined
+  alignment: ResetAlignment | undefined
 }[] = [
   { value: "none", label: "No reset", alignment: undefined },
   { value: "calendar_day", label: "Daily", alignment: "calendar_day" },
