@@ -153,7 +153,12 @@
   --color-primary: #0098a4; /* primary CTAs, links, focus rings */
   --color-primary-hover: #00848f;
   --color-primary-active: #00717a;
-  --color-primary-subtle: #e3f4f6; /* selected/soft backgrounds */
+  /* Translucent on purpose, not a hex. An opaque tint tuned to one ground
+     lands -4.97 / -2.48 / -0.07 / +2.71 L* across the four surface rungs:
+     invisible on one and inverted on another, lighter than a card but darker
+     than a well. An overlay holds to a 1.03 L* spread across all four here,
+     and 1.22 in dark. Same reason the border tiers are overlays. */
+  --color-primary-subtle: rgb(0 152 164 / 0.14); /* selected/soft backgrounds */
   --color-primary-foreground: #08090a; /* text/icons on primary bg */
   /* Text on the subtle fill, which is a different question from text on the
      solid one and does not have the same answer. `--color-primary` itself
@@ -399,12 +404,17 @@
   --color-primary: #0098a4;
   --color-primary-hover: #00b0be;
   --color-primary-active: #00838d;
-  --color-primary-subtle: #0b2629; /* selection / soft fill */
+  --color-primary-subtle: rgb(0 152 164 / 0.18); /* selection / soft fill */
   --color-primary-foreground: #08090a;
   /* Same role as the light block's, and not simply the accent-on-tint
      pairing for the same reason. The contrast direction inverts here, so
      this is a lifted step rather than a darker one. */
-  --color-primary-subtle-foreground: #0098a4;
+  /* Lifted from the accent itself, because a translucent fill composites
+     lighter as the rung rises and the ink loses contrast with it: the accent
+     drops to 3.97 and 3.70 on the two lighter rungs, under AA, where the
+     opaque fill had held a flat 4.55. This clears 5.04 on the worst rung.
+     Same hue, same ceiling fraction. */
+  --color-primary-subtle-foreground: #00b3c1;
 
   /* ── Link & focus — mirrors the light block's restraint ──────────────── */
   --color-link: #00a5b2;
