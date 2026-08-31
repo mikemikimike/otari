@@ -134,38 +134,42 @@
   --color-border-subtle: rgb(0 0 0 / 0.03); /* faint internal dividers */
 
   /* ── Primary ───────────────────────────────────────────────────────────
-     `#5e6ad2`. White on it measures 4.70:1, clearing AA for button labels;
-     `#f7f8f8` on it measures 4.417 and does not, which is why
-     `--color-primary-foreground` is pure white in both themes rather than
-     the text token.
+     `#0098a4`. Its ink is near-black, not white: white on it measures 3.48:1
+     and fails, `#08090a` measures 5.72:1. `--color-primary-foreground` is
+     therefore the same near-black in both themes, which is the reverse of the
+     previous accent and the line most easily missed when the accent moves.
+
+     Three values here do not follow from `--color-primary` and are deliberate:
+     `--color-link` diverges because the accent itself reads 2.87:1 as text on
+     these surfaces, `--color-focus` steps down to clear the 3:1 a ring needs,
+     and in the dark block `--color-primary-subtle-foreground` is the accent
+     itself.
 
      Two copies of this value live outside CSS, because neither can read a
      custom property: the `theme-color` meta tag in web/index.html and
      `theme_color` in web/public/pwa/manifest.webmanifest, which tint the
      browser and installed-app chrome. `foundation.test.ts` reads all three
      and fails when they disagree, so change them together.           */
-  --color-primary: #5e6ad2; /* primary CTAs, links, focus rings */
-  --color-primary-hover: #4b57c8;
-  --color-primary-active: #4b57c8;
-  --color-primary-subtle: rgb(
-    94 106 210 / 0.12
-  ); /* selected/soft backgrounds */
-  --color-primary-foreground: #ffffff; /* text/icons on primary bg */
+  --color-primary: #0098a4; /* primary CTAs, links, focus rings */
+  --color-primary-hover: #00848f;
+  --color-primary-active: #00717a;
+  --color-primary-subtle: #e3f4f6; /* selected/soft backgrounds */
+  --color-primary-foreground: #08090a; /* text/icons on primary bg */
   /* Text on the subtle fill, which is a different question from text on the
      solid one and does not have the same answer. `--color-primary` itself
      is under AA on `--color-primary-subtle`, so the obvious reading, "the
      accent on the accent tint", does not work for the small text these chips
      and active nav items are set in. This is the darker step instead. */
-  --color-primary-subtle-foreground: #4b57c8;
+  --color-primary-subtle-foreground: #005b63;
 
   /* ── Link & focus ───────────────────────────────────────────────────────
    * Link is the accent's darker step, clearly distinct from the accent itself
    * (reserved for active routes and primary CTAs) but quiet enough that
    * sidebar/footer links don't fight body content for attention. The
    * underline does the heavy lifting; the color is just a nudge. */
-  --color-link: #4b57c8;
-  --color-link-hover: #5e6ad2;
-  --color-focus: #5e6ad2;
+  --color-link: #00747e;
+  --color-link-hover: #00626a;
+  --color-focus: #00848f;
 
   /* ── Status (semantic intent colors) ───────────────────────────────────
      Five hues, each held at roughly 90% of what sRGB allows at the
@@ -378,9 +382,9 @@
   --color-text-subtle: #8a8f98;
   /* White, not the near-black this held before. That value was correct while
      the dark accent was a lifted light teal; this palette uses the same
-     `#5e6ad2` in both themes, on which near-black measures 3.96:1 and misses
-     AA. `--color-primary-foreground` beside it answers the same question, so
-     the two agreeing matters more than either value on its own. */
+     the same accent in both themes. `--color-primary-foreground` beside it
+     answers the same question, so the two agreeing matters more than either
+     value on its own. */
   --color-text-on-primary: #ffffff;
   --color-text-on-inverse: #15171c; /* ink on a light surface; 15.85:1 at worst */
 
@@ -392,20 +396,20 @@
   /* ── Primary ───────────────────────────────────────────────────────────
      The same accent as light, unchanged: it clears AA on these grounds
      without lifting. Hover brightens, active drops back one step.       */
-  --color-primary: #5e6ad2;
-  --color-primary-hover: #828fff;
-  --color-primary-active: #4b57c8;
-  --color-primary-subtle: rgb(94 106 210 / 0.15); /* selection / soft fill */
-  --color-primary-foreground: #ffffff;
+  --color-primary: #0098a4;
+  --color-primary-hover: #00b0be;
+  --color-primary-active: #00838d;
+  --color-primary-subtle: #0b2629; /* selection / soft fill */
+  --color-primary-foreground: #08090a;
   /* Same role as the light block's, and not simply the accent-on-tint
      pairing for the same reason. The contrast direction inverts here, so
      this is a lifted step rather than a darker one. */
-  --color-primary-subtle-foreground: #a8b1ff;
+  --color-primary-subtle-foreground: #0098a4;
 
   /* ── Link & focus — mirrors the light block's restraint ──────────────── */
-  --color-link: #828fff;
-  --color-link-hover: #a8b1ff;
-  --color-focus: #828fff;
+  --color-link: #00a5b2;
+  --color-link-hover: #00bac9;
+  --color-focus: #00a5b2;
 
   /* ── Status ────────────────────────────────────────────── */
   --color-success: #2c9a50;
