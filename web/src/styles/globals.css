@@ -204,8 +204,8 @@
   --color-danger: #cb2526; /* clear cherry-red */
   --color-danger-subtle: #ffece9;
   --color-danger-foreground: #ffffff;
-  --color-info: #267383;
-  --color-info-subtle: #e1f6fc;
+  --color-info: #2166c7;
+  --color-info-subtle: #e8f3ff;
   --color-info-foreground: #ffffff;
 
   /* ── Attention (warm accent) — see the @theme block for intent. Warm
@@ -421,8 +421,8 @@
   --color-danger: #f6453f; /* cleaner cherry-red, less orange than a coral */
   --color-danger-subtle: #2a1715;
   --color-danger-foreground: #08090a;
-  --color-info: #3393a7;
-  --color-info-subtle: #0a2026;
+  --color-info: #3e86ee;
+  --color-info-subtle: #151e2d;
   --color-info-foreground: #08090a;
 
   /* ── Attention (warm accent) — brighter honey for dark surfaces.
