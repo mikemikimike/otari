@@ -402,8 +402,12 @@
      The same accent as light, unchanged: it clears AA on these grounds
      without lifting. Hover brightens, active drops back one step.       */
   --color-primary: #0098a4;
-  --color-primary-hover: #00b0be;
-  --color-primary-active: #00838d;
+  /* Both steps go UP here, mirroring light's two down. Before this, active sat
+     below primary while its own hover sat above it: the only role in either
+     theme travelling against itself. Light steps -7.13 then -6.99; dark now
+     +6.99 then +7.15. */
+  --color-primary-hover: #00acba;
+  --color-primary-active: #00c1d0;
   --color-primary-subtle: rgb(0 152 164 / 0.18); /* selection / soft fill */
   --color-primary-foreground: #08090a;
   /* Same role as the light block's, and not simply the accent-on-tint
