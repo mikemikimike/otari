@@ -5,11 +5,13 @@ import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type {
+  OrganizationContext,
   ToolSettingField,
   ToolSettingsResponse,
   ToolsResponse,
 } from "@/client"
 import { ToolsGuardrailsPage } from "@/features/tools/ToolsGuardrailsPage"
+import { organizationContext } from "@/tests/fixtures"
 import { pickOption } from "@/tests/select"
 
 const FIELDS: ToolSettingField[] = [
@@ -134,6 +136,10 @@ interface MockOpts {
   testBody?: { ok: boolean; reason: string }
   tools?: ToolsResponse
   toolsStatus?: number
+  // The caller's membership context, an operator's by default: the page gates
+  // its deployment-wide reads on `deployment_operator`, so most tests here are
+  // about the forms only an operator sees.
+  context?: OrganizationContext
 }
 
 function mockApi(opts: MockOpts = {}) {
@@ -143,6 +149,9 @@ function mockApi(opts: MockOpts = {}) {
     .mockImplementation(async (input, init) => {
       const url = String(input)
       const method = (init?.method ?? "GET").toUpperCase()
+      if (url.endsWith("/v1/organizations/me")) {
+        return jsonResponse(opts.context ?? organizationContext())
+      }
       if (url.includes("/v1/tools")) {
         if (opts.toolsStatus && opts.toolsStatus >= 400) {
           return jsonResponse({ detail: "nope" }, opts.toolsStatus)
@@ -259,6 +268,9 @@ describe("ToolsGuardrailsPage", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input)
       const method = (init?.method ?? "GET").toUpperCase()
+      if (url.endsWith("/v1/organizations/me")) {
+        return jsonResponse(organizationContext())
+      }
       if (url.includes("/tool-settings/") && url.endsWith("/test")) {
         return jsonResponse({ ok: true, reason: "reachable (HTTP 200)" })
       }
@@ -345,8 +357,10 @@ describe("ToolsGuardrailsPage", () => {
         },
       ],
     }
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      jsonResponse(withExtra),
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input).endsWith("/v1/organizations/me")
+        ? jsonResponse(organizationContext())
+        : jsonResponse(withExtra),
     )
     renderWithClient(<ToolsGuardrailsPage />)
     await screen.findByText("Web search")
@@ -554,5 +568,77 @@ describe("ToolsGuardrailsPage how-to-call card", () => {
     expect(
       screen.queryByRole("heading", { name: "MCP servers" }),
     ).not.toBeInTheDocument()
+  })
+})
+
+// otari-ai#1930: the Tools group is member-visible, but the service settings,
+// the pricing row, and the /v1/search tools are operator-only reads, so for
+// everyone else the page was a 403 banner, and the empty field list also
+// dropped the member-appropriate workspace cards nested under it.
+describe("ToolsGuardrailsPage by caller role", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("shows a non-operator the workspace cards and never fires the operator reads", async () => {
+    const fetchMock = mockApi({
+      context: organizationContext({
+        deployment_operator: false,
+        role: "member",
+      }),
+    })
+    renderWithClient(<ToolsGuardrailsPage />)
+
+    // The two workspace cards, in the state a harness with no selected
+    // workspace lands in; their real forms are covered by their own suites.
+    expect(
+      await screen.findByText(/Per-workspace web search is set on a workspace/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Per-workspace code execution is set on a workspace/),
+    ).toBeInTheDocument()
+
+    // No operator form, no deployment search-tools card, and no error banner.
+    expect(screen.queryByLabelText("web_search_url")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", { name: "Search tools" }),
+    ).not.toBeInTheDocument()
+    const urls = fetchMock.mock.calls.map(([input]) => String(input))
+    expect(urls.some((url) => url.includes("/v1/tool-settings"))).toBe(false)
+    expect(urls.some((url) => url.includes("/v1/search-tools"))).toBe(false)
+  })
+
+  it("keeps a narrowed service page working for a non-operator", async () => {
+    // The sidebar's per-service children render this page with `only`, so the
+    // member-appropriate card has to survive the narrowing too.
+    mockApi({
+      context: organizationContext({
+        deployment_operator: false,
+        role: "member",
+      }),
+    })
+    renderWithClient(<ToolsGuardrailsPage only="sandbox" />)
+
+    expect(
+      await screen.findByText(
+        /Per-workspace code execution is set on a workspace/,
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText("sandbox_url")).not.toBeInTheDocument()
+  })
+
+  it("still renders the operator forms alongside the workspace cards for an operator", async () => {
+    // The operator is a member too: gating the deployment-wide reads must not
+    // have cost them either half of the page.
+    mockApi()
+    renderWithClient(<ToolsGuardrailsPage only="web_search" />)
+
+    expect(await screen.findByLabelText("web_search_url")).toBeInTheDocument()
+    expect(
+      screen.getByRole("heading", { name: "Search tools" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Per-workspace web search is set on a workspace/),
+    ).toBeInTheDocument()
   })
 })

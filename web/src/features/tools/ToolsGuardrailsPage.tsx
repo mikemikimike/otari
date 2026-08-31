@@ -6,12 +6,14 @@ import type {
   ToolSettingField,
   UpdateToolSettingsRequest,
 } from "@/client"
+import { isDeploymentOperator } from "@/features/organization/roles"
 import { OrganizationGuardrailsCard } from "@/features/tools/OrganizationGuardrailsCard"
 import { SearchToolsCard } from "@/features/tools/SearchToolsCard"
 import { WorkspaceCodeExecutionPolicyCard } from "@/features/tools/WorkspaceCodeExecutionPolicyCard"
 import { WorkspaceMcpServersCard } from "@/features/tools/WorkspaceMcpServersCard"
 import { WorkspaceWebSearchCard } from "@/features/tools/WorkspaceWebSearchCard"
 import {
+  useOrganizationContext,
   usePricing,
   useSetPricing,
   useTestService,
@@ -625,9 +627,16 @@ function ServiceRow({
  * still points at.
  */
 export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
-  const query = useToolSettings()
-  const tools = useTools()
-  const pricing = usePricing()
+  // The Tools group is member-visible for the workspace and organization cards
+  // below, but the service settings, the pricing row, and the /v1/search tools
+  // are deployment-wide, and their reads are operator-only on the server. Gate
+  // them on the same answer the sidebar uses, so a workspace admin gets their
+  // cards rather than a 403 banner over a page of forms they cannot use.
+  const organization = useOrganizationContext()
+  const isOperator = isDeploymentOperator(organization.data)
+  const query = useToolSettings(isOperator)
+  const tools = useTools(isOperator)
+  const pricing = usePricing(isOperator)
   const setPricing = useSetPricing()
   const [pricedTool, setPricedTool] = useState<string | null>(null)
   const [priceErrors, setPriceErrors] = useState<Record<string, string>>({})
@@ -703,7 +712,11 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
               "Tools & Guardrails")
             : "Tools & Guardrails"
         }
-        description="Configure the built-in tool and guardrail service endpoints without a restart. Changes apply immediately and persist. URLs are validated for shape (http/https) and can be tested for reachability before saving; the network-safety gates for these services live on the Settings page."
+        description={
+          isOperator
+            ? "Configure the built-in tool and guardrail service endpoints without a restart. Changes apply immediately and persist. URLs are validated for shape (http/https) and can be tested for reachability before saving; the network-safety gates for these services live on the Settings page."
+            : "What your workspace may use of this deployment's built-in tools, and what your organization mandates. The service backends themselves are configured by a deployment operator."
+        }
       />
 
       <ErrorBanner error={query.error} />
@@ -722,7 +735,6 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
             (f) => f.service === service.key && !service.order.includes(f.key),
           )
           const fields = [...ordered, ...extra]
-          if (fields.length === 0) return null
           // Absent while /v1/tools is still loading, or if it failed: the card is
           // reference material, so its absence must not hide the editable settings.
           const managed = service.toolId
@@ -732,58 +744,69 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
             : undefined
           return (
             <Fragment key={service.key}>
-              <section className="flex flex-col gap-2">
-                {/* Dropped when the page is narrowed to this one service: the
+              {/* The deployment-wide settings card exists only once the
+                  operator-gated read produced this service's fields. The
+                  workspace and organization cards below sit outside this
+                  branch, because their audience is wider than the operator's
+                  and they must not disappear with a read their viewer may not
+                  make. */}
+              {fields.length === 0 ? null : (
+                <section className="flex flex-col gap-2">
+                  {/* Dropped when the page is narrowed to this one service: the
                     page title already says it, and repeating it reads as two
                     headings for the same thing. */}
-                {only ? null : <h2 className="text-title">{service.label}</h2>}
-                <p className="text-sm text-muted">{service.blurb}</p>
-                <Card>
-                  <Card.Content className="flex flex-col divide-y divide-border px-5 py-1">
-                    {service.pricingKey ? (
-                      <ToolPriceRow
-                        pricingKey={service.pricingKey}
-                        configured={
-                          currentRates.get(service.pricingKey) ?? null
-                        }
-                        onSave={(perCall) =>
-                          savePrice(service.pricingKey as string, perCall)
-                        }
-                        saving={pricedTool === service.pricingKey}
-                        saveError={
-                          priceErrors[service.pricingKey] ||
-                          (pricing.error
-                            ? "Could not load the current price. Reload before editing."
-                            : undefined)
-                        }
-                        // Also disabled when the load failed: an errored query leaves
-                        // `configured` null, which renders as "Not priced" and would
-                        // invite an operator to overwrite a rate they cannot see.
-                        disabled={pricing.isLoading || Boolean(pricing.error)}
-                      />
-                    ) : null}
-                    {fields.map((field) => (
-                      <ServiceRow
-                        key={field.key}
-                        field={field}
-                        onSave={(value) => save(field, value)}
-                        saveError={errors[field.key]}
-                        disabled={disabled}
-                      />
-                    ))}
-                    {managed ? <HowToCallCard tool={managed} /> : null}
-                  </Card.Content>
-                </Card>
-              </section>
+                  {only ? null : (
+                    <h2 className="text-title">{service.label}</h2>
+                  )}
+                  <p className="text-sm text-muted">{service.blurb}</p>
+                  <Card>
+                    <Card.Content className="flex flex-col divide-y divide-border px-5 py-1">
+                      {service.pricingKey ? (
+                        <ToolPriceRow
+                          pricingKey={service.pricingKey}
+                          configured={
+                            currentRates.get(service.pricingKey) ?? null
+                          }
+                          onSave={(perCall) =>
+                            savePrice(service.pricingKey as string, perCall)
+                          }
+                          saving={pricedTool === service.pricingKey}
+                          saveError={
+                            priceErrors[service.pricingKey] ||
+                            (pricing.error
+                              ? "Could not load the current price. Reload before editing."
+                              : undefined)
+                          }
+                          // Also disabled when the load failed: an errored query leaves
+                          // `configured` null, which renders as "Not priced" and would
+                          // invite an operator to overwrite a rate they cannot see.
+                          disabled={pricing.isLoading || Boolean(pricing.error)}
+                        />
+                      ) : null}
+                      {fields.map((field) => (
+                        <ServiceRow
+                          key={field.key}
+                          field={field}
+                          onSave={(value) => save(field, value)}
+                          saveError={errors[field.key]}
+                          disabled={disabled}
+                        />
+                      ))}
+                      {managed ? <HowToCallCard tool={managed} /> : null}
+                    </Card.Content>
+                  </Card>
+                </section>
+              )}
               {/* Directly below the in-loop web-search settings, because a searxng
                 search tool that declares no backend URL of its own inherits the
-                one set just above it. */}
+                one set just above it. Operator-only, like the settings above:
+                its rows are the deployment's own /v1/search credentials. */}
               {/* The workspace card goes below both, because it narrows the
                 backend set above it and the /v1/search tools beside it: a
                 workspace switched off may use neither. */}
               {service.key === "web_search" ? (
                 <>
-                  <SearchToolsCard onSaved={showToast} />
+                  {isOperator ? <SearchToolsCard onSaved={showToast} /> : null}
                   <WorkspaceWebSearchCard onSaved={showToast} />
                 </>
               ) : null}

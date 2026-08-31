@@ -870,21 +870,26 @@ export function useSendTestMail() {
   })
 }
 
-export function useToolSettings() {
+// GET /v1/tool-settings is deployment-operator-only, so the caller passes the
+// client half of that gate (`isDeploymentOperator`) as `enabled` rather than
+// firing a read whose only outcome for anyone else is a 403 banner.
+export function useToolSettings(enabled = true) {
   return useQuery({
     queryKey: [TOOL_SETTINGS],
     queryFn: () => apiFetch<ToolSettingsResponse>("/v1/tool-settings"),
     staleTime: 60_000,
+    enabled,
   })
 }
 
 // The declaration forms this deployment honors. Depends on tool settings
 // (interception, the backend URLs), so a settings save invalidates it.
-export function useTools() {
+export function useTools(enabled = true) {
   return useQuery({
     queryKey: [TOOLS],
     queryFn: () => apiFetch<ToolsResponse>("/v1/tools"),
     staleTime: 60_000,
+    enabled,
   })
 }
 
@@ -1015,10 +1020,11 @@ async function fetchAllPricing(): Promise<PricingResponse[]> {
   return all
 }
 
-export function usePricing() {
+export function usePricing(enabled = true) {
   return useQuery({
     queryKey: [PRICING],
     queryFn: fetchAllPricing,
+    enabled,
   })
 }
 
