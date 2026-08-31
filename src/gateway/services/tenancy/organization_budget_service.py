@@ -57,7 +57,7 @@ from datetime import UTC, datetime
 from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
@@ -528,9 +528,29 @@ class OrganizationBudgetService:
 
         Every ceiling naming it moves with it, which is the point of naming one:
         a budget is the figure, and the ceilings are where it applies.
+
+        **Changing the cadence retimes every ceiling naming this budget**, in this
+        transaction. A ceiling holds its own window and reads the cadence through
+        the budget, so leaving the windows alone would leave the two disagreeing,
+        and in one direction that is an enforcement bug rather than a cosmetic
+        one: ``_roll_expired_periods`` is guarded on ``period_end IS NOT NULL``,
+        so a budget moved from "no reset" to a periodic cadence would leave its
+        ceilings with NULL windows that never roll, accumulating spend forever
+        while this API reported the new cadence.
+
+        The counters are deliberately **not** zeroed, matching what repointing a
+        ceiling at a different budget already does: spend already recorded stays,
+        and the ceiling is the same allowance held to a different figure from here
+        on. ``reserved_spend`` is untouched so a hold taken before the change is
+        still released against the right counter.
         """
         organization = await self._managed_organization(user)
         budget = await self._require_own_budget(organization=organization, budget_id=budget_id)
+        # Read before the mutation, because that is what says whether the cadence
+        # moved at all: retiming a ceiling whose cadence did not change would
+        # restart its window for a rename or a figure change, throwing away the
+        # part of the period it had already spent.
+        cadence_before = (budget.budget_duration_sec, budget.reset_alignment)
 
         fields = request.model_fields_set
         if "name" in fields:
@@ -546,11 +566,41 @@ class OrganizationBudgetService:
         # refuses, and neither field alone looks wrong.
         _require_single_period_source(budget.budget_duration_sec, budget.reset_alignment)
 
+        if (budget.budget_duration_sec, budget.reset_alignment) != cadence_before:
+            await self._retime_ceilings(budget)
+
         await self.db.commit()
         await self.db.refresh(budget)
         return OrganizationBudgetPublic.from_model(
             budget,
             ceiling_count=await self._ceiling_count(budget.budget_id),
+        )
+
+    async def _retime_ceilings(self, budget: Budget) -> None:
+        """Move every ceiling naming this budget onto the cadence it now carries.
+
+        One statement rather than a row per ceiling: the window is the same for
+        all of them, since it is derived from the budget and from now, not from
+        anything the ceiling holds. Not committed here; the caller owns the
+        transaction, so a refused update takes the retiming back with it.
+
+        A cadence of neither kind clears the window rather than computing one,
+        which is what "no reset" means and what ``period_window`` returns None
+        for. That is the direction that has to clear rather than be left stale: a
+        row keeping an old ``period_end`` under no cadence would roll once, at the
+        moment that stale boundary passed, and zero its spend for no reason.
+        """
+        window = period_window(
+            datetime.now(UTC),
+            duration=budget.budget_duration_sec,
+            alignment=budget.reset_alignment,
+        )
+        period_start, period_end = window if window is not None else (None, None)
+        await self.db.execute(
+            update(ScopedBudget)
+            .where(ScopedBudget.budget_id == budget.budget_id)
+            .values(period_start=period_start, period_end=period_end)
+            .execution_options(synchronize_session=False)
         )
 
     async def delete_budget(self, *, user: User, budget_id: str) -> None:

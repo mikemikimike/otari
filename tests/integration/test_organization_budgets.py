@@ -17,6 +17,7 @@ tenant's.
 """
 
 import uuid
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -558,6 +559,148 @@ async def test_every_scope_kind_resolves_to_its_organization(async_db: AsyncSess
         assert created.manageable is True
 
     assert (await service.list_ceilings(user=owner)).count == len(scopes)
+
+
+@pytest.mark.asyncio
+async def test_giving_a_cadence_to_a_budget_that_had_none_retimes_its_ceilings(async_db: AsyncSession) -> None:
+    """The case that is an enforcement bug rather than a cosmetic one.
+
+    ``_roll_expired_periods`` only ever updates a row whose ``period_end`` is not
+    null, so a ceiling left with a NULL window under a periodic budget never rolls
+    at all: it accumulates spend forever while this API reports the new cadence.
+    """
+    organization = await _organization(async_db, slug="acme-cadence-none")
+    owner = await _member(async_db, organization, role="owner", full_name="Owner")
+    service = OrganizationBudgetService(async_db)
+    budget = await service.create_budget(
+        user=owner,
+        request=_create(name="No reset", reset_alignment=None, max_budget=50.0),
+    )
+    ceiling = await service.create_ceiling(
+        user=owner,
+        request=OrganizationScopedBudgetCreate(
+            scope_type="organization",
+            scope_id=str(organization.id),
+            budget_id=budget.budget_id,
+        ),
+    )
+    assert ceiling.period_start is None
+    assert ceiling.period_end is None
+
+    await service.update_budget(
+        user=owner,
+        budget_id=budget.budget_id,
+        request=OrganizationBudgetUpdate(reset_alignment="calendar_month"),
+    )
+
+    retimed = (await service.list_ceilings(user=owner)).data[0]
+    assert retimed.period_start is not None
+    assert retimed.period_end is not None
+    assert retimed.reset_alignment == "calendar_month"
+
+
+@pytest.mark.asyncio
+async def test_taking_a_cadence_away_clears_the_window(async_db: AsyncSession) -> None:
+    """The other direction, which would otherwise roll once at a stale boundary.
+
+    A ceiling keeping an old ``period_end`` under a budget that no longer resets
+    would zero its spend the moment that boundary passed, for no reason anyone
+    could point at.
+    """
+    organization = await _organization(async_db, slug="acme-cadence-drop")
+    owner = await _member(async_db, organization, role="owner", full_name="Owner")
+    service = OrganizationBudgetService(async_db)
+    budget = await service.create_budget(user=owner, request=_create())
+    await service.create_ceiling(
+        user=owner,
+        request=OrganizationScopedBudgetCreate(
+            scope_type="organization",
+            scope_id=str(organization.id),
+            budget_id=budget.budget_id,
+        ),
+    )
+
+    await service.update_budget(
+        user=owner,
+        budget_id=budget.budget_id,
+        request=OrganizationBudgetUpdate(reset_alignment=None),
+    )
+
+    cleared = (await service.list_ceilings(user=owner)).data[0]
+    assert cleared.period_start is None
+    assert cleared.period_end is None
+
+
+@pytest.mark.asyncio
+async def test_retiming_keeps_the_spend_already_recorded(async_db: AsyncSession) -> None:
+    """A cadence change is not a reset.
+
+    Same rule repointing a ceiling at a different budget already follows: the
+    window moves, the counters do not, so the allowance is held to a different
+    figure from here on rather than handed back.
+    """
+    organization = await _organization(async_db, slug="acme-cadence-spend")
+    owner = await _member(async_db, organization, role="owner", full_name="Owner")
+    service = OrganizationBudgetService(async_db)
+    budget = await service.create_budget(user=owner, request=_create())
+    created = await service.create_ceiling(
+        user=owner,
+        request=OrganizationScopedBudgetCreate(
+            scope_type="organization",
+            scope_id=str(organization.id),
+            budget_id=budget.budget_id,
+        ),
+    )
+    stored = await async_db.get(ScopedBudget, created.id)
+    assert stored is not None
+    stored.current_spend = Decimal("7.5")
+    stored.reserved_spend = Decimal("1.25")
+    await async_db.flush()
+
+    await service.update_budget(
+        user=owner,
+        budget_id=budget.budget_id,
+        request=OrganizationBudgetUpdate(reset_alignment="calendar_day"),
+    )
+
+    kept = (await service.list_ceilings(user=owner)).data[0]
+    assert kept.current_spend == 7.5
+    # Untouched, so a hold taken before the change still releases against the
+    # counter it was taken from.
+    assert kept.reserved_spend == 1.25
+
+
+@pytest.mark.asyncio
+async def test_a_change_that_is_not_the_cadence_leaves_the_window_alone(async_db: AsyncSession) -> None:
+    """Renaming or repricing must not restart a period.
+
+    Retiming on every update would throw away the part of the period a ceiling
+    had already spent, every time somebody fixed a typo in a budget's name.
+    """
+    organization = await _organization(async_db, slug="acme-cadence-stable")
+    owner = await _member(async_db, organization, role="owner", full_name="Owner")
+    service = OrganizationBudgetService(async_db)
+    budget = await service.create_budget(user=owner, request=_create())
+    created = await service.create_ceiling(
+        user=owner,
+        request=OrganizationScopedBudgetCreate(
+            scope_type="organization",
+            scope_id=str(organization.id),
+            budget_id=budget.budget_id,
+        ),
+    )
+
+    await service.update_budget(
+        user=owner,
+        budget_id=budget.budget_id,
+        request=OrganizationBudgetUpdate(name="Renamed", max_budget=999.0),
+    )
+
+    unchanged = (await service.list_ceilings(user=owner)).data[0]
+    assert unchanged.period_start == created.period_start
+    assert unchanged.period_end == created.period_end
+    # The figure did move, which is the whole point of naming a budget.
+    assert unchanged.max_budget == 999.0
 
 
 @pytest.mark.asyncio

@@ -382,6 +382,27 @@ describe("OrganizationBudgetsPage", () => {
     ])
   })
 
+  it("names a failed workspace roster instead of just offering no workspaces", async () => {
+    // Without this the owner sees the consequence (no workspace to pick, rows
+    // reading "A workspace") and never the cause.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes("/v1/workspaces")) {
+        return jsonResponse({ detail: "workspaces unavailable" }, 500)
+      }
+      if (url.includes("/v1/organizations/me/spend-ceilings")) {
+        return jsonResponse({ data: [], count: 0 })
+      }
+      if (url.includes("/v1/organizations/me/budgets")) {
+        return jsonResponse({ data: [organizationBudget()], count: 1 })
+      }
+      return jsonResponse([])
+    })
+    renderPage()
+
+    expect((await screen.findAllByRole("alert")).length).toBeGreaterThan(0)
+  })
+
   it("reports a failed read rather than an empty organization", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       jsonResponse({ detail: "nope" }, 500),

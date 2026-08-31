@@ -181,7 +181,15 @@ export function SpendCeilingsCard({
         the person it caps.
       </p>
 
-      <ErrorBanner error={ceilings.error} />
+      {/* All three reads, not just the ceilings. A failed workspace roster
+          leaves the dialog with no workspace to offer and the table naming
+          "A workspace" for rows it cannot resolve, and a failed budget list
+          leaves it with nothing to hold a ceiling to; without this the owner
+          sees the consequence and never the cause. First error wins, because
+          one banner saying something true beats three stacked. */}
+      <ErrorBanner
+        error={ceilings.error ?? workspaces.error ?? budgets.error}
+      />
 
       <Card>
         <Card.Content className="p-0">

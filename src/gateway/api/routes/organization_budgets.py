@@ -1,4 +1,10 @@
-"""The caller's organization's spend budgets and ceilings (standalone mode only).
+"""The caller's organization's spend budgets and ceilings (not hybrid mode).
+
+Mounted by ``_register_core_routers`` for standalone **and hosted** deployments;
+only hybrid mode has no management API. Spelled out rather than the "standalone
+mode only" shorthand the neighbouring ``/v1/organizations/me`` routers use,
+because on this surface the shorthand would name the wrong audience: a hosted
+organization's admin is exactly who otari-ai#1943 added it for.
 
 Thin composition over `gateway.services.tenancy.organization_budget_service`:
 resolve the caller's identity, call the service, return its typed result. The
