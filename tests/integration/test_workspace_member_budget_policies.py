@@ -838,3 +838,69 @@ async def test_bootstrap_survives_a_default_naming_a_budget_that_is_gone(
     # The marker landed, so the deployment is still bootstrappable rather than
     # re-provisioning (and re-failing) on every later request.
     assert (await ensure_bootstrap_identity(async_db)).id == operator.id
+
+
+async def test_a_default_may_not_name_another_organizations_budget(async_db: AsyncSession) -> None:
+    """The hole otari-ai#1943 would have opened, closed with the column it added.
+
+    Before ``b7e1c4a9d2f5`` every budget was the deployment's, defined by an
+    operator, so any of them was as valid a template as any other and there was
+    nothing to check. Now that an admin can define one, an unchecked ``budget_id``
+    here would let one organization's admin hand their own workspace another
+    organization's budget, and then move what that tenant is capped at by editing
+    it: the ceilings materialized from the default read the figure *through* the
+    budget.
+
+    404, not 403, for the reason every other foreign-row refusal here is.
+    """
+    theirs = await _organization(async_db, slug="globex-default")
+    their_owner = await _member(async_db, theirs, role="owner", full_name="Their owner")
+    their_budget_id = await _budget(async_db, max_budget=10.0)
+    their_budget = await async_db.get(Budget, their_budget_id)
+    assert their_budget is not None
+    their_budget.organization_id = theirs.id
+
+    mine = await _organization(async_db, slug="acme-default")
+    my_owner = await _member(async_db, mine, role="owner", full_name="My owner")
+    my_workspace = await _workspace(async_db, mine, name="Engineering", owner=my_owner)
+    await async_db.flush()
+    service = WorkspaceBudgetDefaultService(async_db)
+
+    with pytest.raises(WorkspaceBudgetDefaultBudgetNotFoundError):
+        await service.create_default(
+            user=my_owner,
+            workspace_id=my_workspace.id,
+            request=WorkspaceMemberBudgetPolicyCreate(budget_id=their_budget_id),
+        )
+
+    # Their own workspace may still name it, which is what makes the check about
+    # the tenant boundary rather than about the column being set at all.
+    their_workspace = await _workspace(async_db, theirs, name="Theirs", owner=their_owner)
+    created = await service.create_default(
+        user=their_owner,
+        workspace_id=their_workspace.id,
+        request=WorkspaceMemberBudgetPolicyCreate(budget_id=their_budget_id),
+    )
+    assert created.budget_id == their_budget_id
+
+
+async def test_a_default_may_still_name_a_deployment_budget(async_db: AsyncSession) -> None:
+    """A budget with no organization stays nameable, or upgrade breaks every default.
+
+    Those are the deployment's own: the ones an operator defined and the ones the
+    otari-ai cutover minted, all of which read NULL. Narrowing them out here would
+    refuse the very defaults that already exist.
+    """
+    organization = await _organization(async_db, slug="acme-deployment-budget")
+    owner = await _member(async_db, organization, role="owner", full_name="Owner")
+    workspace = await _workspace(async_db, organization, name="Engineering", owner=owner)
+    deployment_budget_id = await _budget(async_db, max_budget=10.0)
+    await async_db.flush()
+
+    created = await WorkspaceBudgetDefaultService(async_db).create_default(
+        user=owner,
+        workspace_id=workspace.id,
+        request=WorkspaceMemberBudgetPolicyCreate(budget_id=deployment_budget_id),
+    )
+
+    assert created.budget_id == deployment_budget_id

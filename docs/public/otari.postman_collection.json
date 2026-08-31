@@ -2636,6 +2636,287 @@
     {
       "item": [
         {
+          "name": "List Organization Budgets",
+          "request": {
+            "description": "List the budgets this organization has defined. Owners and admins only.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "organizations",
+                "me",
+                "budgets"
+              ],
+              "query": [
+                {
+                  "description": "Number of records to skip",
+                  "disabled": true,
+                  "key": "skip",
+                  "value": ""
+                },
+                {
+                  "description": "Maximum number of records to return",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/v1/organizations/me/budgets?skip=&limit="
+            }
+          }
+        },
+        {
+          "name": "Create Organization Budget",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"budget_duration_sec\": 0,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"reset_alignment\": \"string\"\n}"
+            },
+            "description": "Define a budget owned by this organization. Owners and admins only.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "organizations",
+                "me",
+                "budgets"
+              ],
+              "raw": "{{baseUrl}}/v1/organizations/me/budgets"
+            }
+          }
+        },
+        {
+          "name": "Update Organization Budget",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"budget_duration_sec\": 0,\n  \"max_budget\": 0,\n  \"name\": \"string\",\n  \"reset_alignment\": \"string\"\n}"
+            },
+            "description": "Change a budget's label, figure or period.\n\nEvery ceiling naming it is held to the new figure from here on, which is the\npoint of naming a budget rather than typing an amount per place it applies.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "organizations",
+                "me",
+                "budgets",
+                ":budget_id"
+              ],
+              "raw": "{{baseUrl}}/v1/organizations/me/budgets/:budget_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "budget_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Organization Budget",
+          "request": {
+            "description": "Delete a budget, refused with 409 while a ceiling or workspace default names it.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "organizations",
+                "me",
+                "budgets",
+                ":budget_id"
+              ],
+              "raw": "{{baseUrl}}/v1/organizations/me/budgets/:budget_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "budget_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Organization Spend Ceilings",
+          "request": {
+            "description": "List the ceilings capping identities inside this organization. Owners and admins only.\n\nA ceiling whose budget this organization does not own is listed with\n``manageable`` false rather than omitted: it is enforcing against this\norganization's spend, so leaving it out would let the page read as uncapped.",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "organizations",
+                "me",
+                "spend-ceilings"
+              ],
+              "query": [
+                {
+                  "description": "Number of records to skip",
+                  "disabled": true,
+                  "key": "skip",
+                  "value": ""
+                },
+                {
+                  "description": "Maximum number of records to return",
+                  "disabled": true,
+                  "key": "limit",
+                  "value": ""
+                }
+              ],
+              "raw": "{{baseUrl}}/v1/organizations/me/spend-ceilings?skip=&limit="
+            }
+          }
+        },
+        {
+          "name": "Create Organization Spend Ceiling",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"scope_type\": \"organization\",\n  \"scope_id\": \"string\",\n  \"budget_id\": \"string\"\n}"
+            },
+            "description": "Cap one identity in this organization at one of its budgets.\n\nAnswers 404 when the scope names nothing in this organization, rather than\ncreating a ceiling that can never bind, and 404 when the budget is not this\norganization's.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "organizations",
+                "me",
+                "spend-ceilings"
+              ],
+              "raw": "{{baseUrl}}/v1/organizations/me/spend-ceilings"
+            }
+          }
+        },
+        {
+          "name": "Update Organization Spend Ceiling",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"budget_id\": \"string\",\n  \"name\": \"string\"\n}"
+            },
+            "description": "Relabel a ceiling, or point it at a different budget of this organization's.\n\nThe scope and the provider narrowing are not editable: changing either would\nmove the ceiling to a different identity while carrying its spend, which is a\ndelete and a create.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "organizations",
+                "me",
+                "spend-ceilings",
+                ":ceiling_id"
+              ],
+              "raw": "{{baseUrl}}/v1/organizations/me/spend-ceilings/:ceiling_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "ceiling_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Organization Spend Ceiling",
+          "request": {
+            "description": "Remove a ceiling inside this organization.",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "organizations",
+                "me",
+                "spend-ceilings",
+                ":ceiling_id"
+              ],
+              "raw": "{{baseUrl}}/v1/organizations/me/spend-ceilings/:ceiling_id",
+              "variable": [
+                {
+                  "description": "path parameter",
+                  "key": "ceiling_id",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "organization-budgets"
+    },
+    {
+      "item": [
+        {
           "name": "List Organization Guardrails",
           "request": {
             "description": "List the guardrails the caller's organization mandates.\n\nOrganization owners and admins only, unlike the pricing overrides next door\nthat any member may read: these rows name the endpoints this gateway\nconnects to and say which of them carry a credential. A credential is never\nreturned, only whether one is set.",

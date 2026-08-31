@@ -1590,6 +1590,57 @@ export interface paths {
         patch: operations["update_active_organization_v1_organizations_me_patch"];
         trace?: never;
     };
+    "/v1/organizations/me/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Organization Budgets
+         * @description List the budgets this organization has defined. Owners and admins only.
+         */
+        get: operations["list_organization_budgets_v1_organizations_me_budgets_get"];
+        put?: never;
+        /**
+         * Create Organization Budget
+         * @description Define a budget owned by this organization. Owners and admins only.
+         */
+        post: operations["create_organization_budget_v1_organizations_me_budgets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organizations/me/budgets/{budget_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Organization Budget
+         * @description Delete a budget, refused with 409 while a ceiling or workspace default names it.
+         */
+        delete: operations["delete_organization_budget_v1_organizations_me_budgets__budget_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Organization Budget
+         * @description Change a budget's label, figure or period.
+         *
+         *     Every ceiling naming it is held to the new figure from here on, which is the
+         *     point of naming a budget rather than typing an amount per place it applies.
+         */
+        patch: operations["update_organization_budget_v1_organizations_me_budgets__budget_id__patch"];
+        trace?: never;
+    };
     "/v1/organizations/me/guardrails": {
         parameters: {
             query?: never;
@@ -2072,6 +2123,66 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/organizations/me/spend-ceilings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Organization Spend Ceilings
+         * @description List the ceilings capping identities inside this organization. Owners and admins only.
+         *
+         *     A ceiling whose budget this organization does not own is listed with
+         *     ``manageable`` false rather than omitted: it is enforcing against this
+         *     organization's spend, so leaving it out would let the page read as uncapped.
+         */
+        get: operations["list_organization_spend_ceilings_v1_organizations_me_spend_ceilings_get"];
+        put?: never;
+        /**
+         * Create Organization Spend Ceiling
+         * @description Cap one identity in this organization at one of its budgets.
+         *
+         *     Answers 404 when the scope names nothing in this organization, rather than
+         *     creating a ceiling that can never bind, and 404 when the budget is not this
+         *     organization's.
+         */
+        post: operations["create_organization_spend_ceiling_v1_organizations_me_spend_ceilings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organizations/me/spend-ceilings/{ceiling_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Organization Spend Ceiling
+         * @description Remove a ceiling inside this organization.
+         */
+        delete: operations["delete_organization_spend_ceiling_v1_organizations_me_spend_ceilings__ceiling_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Organization Spend Ceiling
+         * @description Relabel a ceiling, or point it at a different budget of this organization's.
+         *
+         *     The scope and the provider narrowing are not editable: changing either would
+         *     move the ceiling to a different identity while carrying its spend, which is a
+         *     delete and a create.
+         */
+        patch: operations["update_organization_spend_ceiling_v1_organizations_me_spend_ceilings__ceiling_id__patch"];
         trace?: never;
     };
     "/v1/organizations/me/switch": {
@@ -6761,6 +6872,107 @@ export interface components {
             data: components["schemas"]["OrgProviderKeyPublic"][];
         };
         /**
+         * OrganizationBudgetCreate
+         * @description Create one budget owned by the caller's organization.
+         */
+        OrganizationBudgetCreate: {
+            /**
+             * Budget Duration Sec
+             * @description Seconds between resets, counted from the last one. Mutually exclusive with reset_alignment
+             */
+            budget_duration_sec?: number | null;
+            /**
+             * Max Budget
+             * @description Maximum spend in USD over one period; null caps nothing
+             */
+            max_budget?: number | null;
+            /**
+             * Name
+             * @description Admin-facing label for the budget
+             */
+            name?: string | null;
+            /**
+             * Reset Alignment
+             * @description Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec
+             */
+            reset_alignment?: string | null;
+        };
+        /**
+         * OrganizationBudgetPublic
+         * @description One of the organization's budgets, and how much of its own config names it.
+         *
+         *     Carries no spend rollup. ``BudgetResponse`` on the deployment surface sums
+         *     ``users.spend`` over the gateway's ``users`` table, which is deployment-wide
+         *     and has no tenancy column, so the same figure here would be a cross-tenant
+         *     read. What an organization's own spend is, is a question for Usage.
+         *
+         *     ``ceiling_count`` is the organization-relevant fact instead: how many of its
+         *     ceilings this budget currently holds, which is what makes a delete refuse.
+         */
+        OrganizationBudgetPublic: {
+            /** Budget Duration Sec */
+            budget_duration_sec: number | null;
+            /** Budget Id */
+            budget_id: string;
+            /** Ceiling Count */
+            ceiling_count: number;
+            /** Created At */
+            created_at: string;
+            /** Max Budget */
+            max_budget: number | null;
+            /** Name */
+            name: string | null;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** Reset Alignment */
+            reset_alignment: string | null;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * OrganizationBudgetUpdate
+         * @description Replace a budget's label, figure and period.
+         *
+         *     A full statement rather than a patch, matching ``PATCH /v1/budgets/{id}``'s
+         *     own fields: every one is optional and an omitted one is left alone, so
+         *     clearing a cap back to uncapped is not expressible here and is a delete. The
+         *     period pair is still mutually exclusive, and setting one does not clear the
+         *     other, which is why :func:`_require_single_period_source` re-checks the
+         *     *resulting* pair rather than the submitted one.
+         */
+        OrganizationBudgetUpdate: {
+            /**
+             * Budget Duration Sec
+             * @description Seconds between resets, counted from the last one. Mutually exclusive with reset_alignment
+             */
+            budget_duration_sec?: number | null;
+            /**
+             * Max Budget
+             * @description Maximum spend in USD over one period; null caps nothing
+             */
+            max_budget?: number | null;
+            /**
+             * Name
+             * @description Admin-facing label for the budget
+             */
+            name?: string | null;
+            /**
+             * Reset Alignment
+             * @description Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec
+             */
+            reset_alignment?: string | null;
+        };
+        /** OrganizationBudgetsPublic */
+        OrganizationBudgetsPublic: {
+            /** Count */
+            count: number;
+            /** Data */
+            data: components["schemas"]["OrganizationBudgetPublic"][];
+        };
+        /**
          * OrganizationCreateRequest
          * @description Create an organization, with the caller as its owner.
          *
@@ -7186,6 +7398,103 @@ export interface components {
             slug: string;
             /** Updated At */
             updated_at?: string | null;
+        };
+        /**
+         * OrganizationScopedBudgetCreate
+         * @description Attach one of the organization's budgets to a scope inside it.
+         */
+        OrganizationScopedBudgetCreate: {
+            /**
+             * Budget Id
+             * @description The budget this ceiling enforces, which must be one this organization owns
+             */
+            budget_id: string;
+            /**
+             * Name
+             * @description Admin-facing label for this ceiling
+             */
+            name?: string | null;
+            /**
+             * Provider Key Id
+             * @description Narrow the cap to one provider instance; null caps spend across every provider
+             */
+            provider_key_id?: string | null;
+            /**
+             * Scope Id
+             * @description Id of the capped identity: this organization, one of its workspaces, a membership in either, or an API key in one
+             */
+            scope_id: string;
+            /**
+             * Scope Type
+             * @description Which kind of identity this ceiling caps
+             * @enum {string}
+             */
+            scope_type: "organization" | "workspace" | "workspace_member" | "org_member" | "api_token";
+        };
+        /**
+         * OrganizationScopedBudgetPublic
+         * @description One ceiling inside the organization, and the figures it enforces.
+         *
+         *     The limit and the period are read through the budget rather than stored here,
+         *     and carried on the wire so a page can render a ceiling without fetching every
+         *     budget to resolve one id. Same reasoning as ``ScopedBudgetResponse``, whose
+         *     shape this deliberately mirrors.
+         */
+        OrganizationScopedBudgetPublic: {
+            /** Budget Duration Sec */
+            budget_duration_sec: number | null;
+            /** Budget Id */
+            budget_id: string;
+            /** Created At */
+            created_at: string;
+            /** Current Spend */
+            current_spend: number;
+            /** Id */
+            id: string;
+            /** Manageable */
+            manageable: boolean;
+            /** Max Budget */
+            max_budget: number | null;
+            /** Name */
+            name: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Provider Key Id */
+            provider_key_id: string | null;
+            /** Reserved Spend */
+            reserved_spend: number;
+            /** Reset Alignment */
+            reset_alignment: string | null;
+            /** Scope Id */
+            scope_id: string;
+            /** Scope Type */
+            scope_type: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * OrganizationScopedBudgetUpdate
+         * @description Relabel a ceiling, or point it at a different budget of this organization's.
+         *
+         *     The scope and the provider narrowing are not editable, for the reason
+         *     ``PATCH /v1/scoped-budgets/{id}`` gives: changing either moves the ceiling to
+         *     a different identity while carrying its spend, which is a delete and a
+         *     create, not an update.
+         */
+        OrganizationScopedBudgetUpdate: {
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Name */
+            name?: string | null;
+        };
+        /** OrganizationScopedBudgetsPublic */
+        OrganizationScopedBudgetsPublic: {
+            /** Count */
+            count: number;
+            /** Data */
+            data: components["schemas"]["OrganizationScopedBudgetPublic"][];
         };
         /**
          * PasskeySessionResponse
@@ -12101,6 +12410,139 @@ export interface operations {
             };
         };
     };
+    list_organization_budgets_v1_organizations_me_budgets_get: {
+        parameters: {
+            query?: {
+                /** @description Number of records to skip */
+                skip?: number;
+                /** @description Maximum number of records to return */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationBudgetsPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_organization_budget_v1_organizations_me_budgets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationBudgetCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationBudgetPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_organization_budget_v1_organizations_me_budgets__budget_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_organization_budget_v1_organizations_me_budgets__budget_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationBudgetUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationBudgetPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_organization_guardrails_v1_organizations_me_guardrails_get: {
         parameters: {
             query?: {
@@ -13002,6 +13444,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyResponse"][];
+                };
+            };
+        };
+    };
+    list_organization_spend_ceilings_v1_organizations_me_spend_ceilings_get: {
+        parameters: {
+            query?: {
+                /** @description Number of records to skip */
+                skip?: number;
+                /** @description Maximum number of records to return */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationScopedBudgetsPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_organization_spend_ceiling_v1_organizations_me_spend_ceilings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationScopedBudgetCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationScopedBudgetPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_organization_spend_ceiling_v1_organizations_me_spend_ceilings__ceiling_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ceiling_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_organization_spend_ceiling_v1_organizations_me_spend_ceilings__ceiling_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ceiling_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationScopedBudgetUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationScopedBudgetPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

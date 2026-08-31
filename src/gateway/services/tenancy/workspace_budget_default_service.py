@@ -337,10 +337,25 @@ class WorkspaceBudgetDefaultService:
             raise WorkspaceBudgetDefaultBudgetNotFoundError(default.budget_id)
         return budget
 
-    async def _require_budget(self, budget_id: str) -> Budget:
-        """The budget a caller named, refused as 404 when it does not exist."""
+    async def _require_budget(self, budget_id: str, *, organization_id: uuid.UUID) -> Budget:
+        """The budget a caller named, refused as 404 when it is not theirs to name.
+
+        ``organization_id`` is the workspace's, and a budget carrying a different
+        one is refused as though it did not exist. Before ``b7e1c4a9d2f5`` there
+        was nothing to check: every budget was the deployment's, defined by an
+        operator, and any of them was as valid a template as any other. Now that
+        an admin can define one (otari-ai#1943), an unchecked id here would let
+        one organization's admin hand their workspace another organization's
+        budget, and then move what that other tenant is capped at by editing it.
+
+        A budget with **no** organization stays nameable: those are the
+        deployment's own, including the ones an operator defined and the ones the
+        otari-ai cutover minted, and a workspace default has always been able to
+        name one. Narrowing that too would break every existing default on
+        upgrade.
+        """
         budget = await self.db.get(Budget, budget_id)
-        if budget is None:
+        if budget is None or (budget.organization_id is not None and budget.organization_id != organization_id):
             raise WorkspaceBudgetDefaultBudgetNotFoundError(budget_id)
         return budget
 
@@ -456,7 +471,7 @@ class WorkspaceBudgetDefaultService:
 
         # Before the lock's write, so an unknown budget is a 404 rather than a
         # foreign-key violation reported as "this default already exists".
-        budget = await self._require_budget(request.budget_id)
+        budget = await self._require_budget(request.budget_id, organization_id=workspace.organization_id)
         default = WorkspaceBudgetDefault(
             workspace_id=workspace.id,
             budget_id=budget.budget_id,
@@ -506,7 +521,7 @@ class WorkspaceBudgetDefaultService:
         )
         default = await self._get_or_404(workspace, default_id)
 
-        budget = await self._require_budget(request.budget_id)
+        budget = await self._require_budget(request.budget_id, organization_id=workspace.organization_id)
         default.budget_id = budget.budget_id
 
         await self.db.commit()

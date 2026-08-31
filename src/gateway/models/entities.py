@@ -151,6 +151,26 @@ class Budget(Base):
 
     budget_id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str | None] = mapped_column(default=None)
+    # Which tenant defined this budget, and therefore who may change it.
+    #
+    # NULL means the deployment's own: every budget predating `b7e1c4a9d2f5`
+    # reads NULL, and so does every one the otari-ai cutover migration mints,
+    # because that migration deliberately shares one budget per distinct
+    # (cap, period) shape across the ceilings it writes and a shape shared by two
+    # tenants' ceilings has no single owner. NULL is not "unowned and up for
+    # grabs": the organization-scoped surface never lists, offers or repoints one,
+    # so from a tenant's side it does not exist.
+    #
+    # Nullable and set only on the tenant-scoped create path, which is what keeps
+    # that migration working with no backfill: its preflight refuses on a
+    # *missing* column and its inserts name theirs explicitly, so a new nullable
+    # one is invisible to it.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("organization.id", name="fk_budgets_organization_id", ondelete="CASCADE"),
+        default=None,
+        index=True,
+    )
     # Exact, like the counters it is compared against: the gate is
     # ``spend + reserved <= max_budget``, and a cap stored as a binary float
     # would decide a 403 against an amount an operator never typed

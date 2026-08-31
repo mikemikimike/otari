@@ -6057,6 +6057,228 @@
         "title": "OrgProviderKeysPublic",
         "type": "object"
       },
+      "OrganizationBudgetCreate": {
+        "description": "Create one budget owned by the caller's organization.",
+        "properties": {
+          "budget_duration_sec": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Seconds between resets, counted from the last one. Mutually exclusive with reset_alignment",
+            "title": "Budget Duration Sec"
+          },
+          "max_budget": {
+            "anyOf": [
+              {
+                "maximum": 999999999999.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Maximum spend in USD over one period; null caps nothing",
+            "title": "Max Budget"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Admin-facing label for the budget",
+            "title": "Name"
+          },
+          "reset_alignment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec",
+            "title": "Reset Alignment"
+          }
+        },
+        "title": "OrganizationBudgetCreate",
+        "type": "object"
+      },
+      "OrganizationBudgetPublic": {
+        "description": "One of the organization's budgets, and how much of its own config names it.\n\nCarries no spend rollup. ``BudgetResponse`` on the deployment surface sums\n``users.spend`` over the gateway's ``users`` table, which is deployment-wide\nand has no tenancy column, so the same figure here would be a cross-tenant\nread. What an organization's own spend is, is a question for Usage.\n\n``ceiling_count`` is the organization-relevant fact instead: how many of its\nceilings this budget currently holds, which is what makes a delete refuse.",
+        "properties": {
+          "budget_duration_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Duration Sec"
+          },
+          "budget_id": {
+            "title": "Budget Id",
+            "type": "string"
+          },
+          "ceiling_count": {
+            "title": "Ceiling Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "max_budget": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Budget"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "reset_alignment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Alignment"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget_id",
+          "organization_id",
+          "name",
+          "max_budget",
+          "budget_duration_sec",
+          "reset_alignment",
+          "ceiling_count",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OrganizationBudgetPublic",
+        "type": "object"
+      },
+      "OrganizationBudgetUpdate": {
+        "description": "Replace a budget's label, figure and period.\n\nA full statement rather than a patch, matching ``PATCH /v1/budgets/{id}``'s\nown fields: every one is optional and an omitted one is left alone, so\nclearing a cap back to uncapped is not expressible here and is a delete. The\nperiod pair is still mutually exclusive, and setting one does not clear the\nother, which is why :func:`_require_single_period_source` re-checks the\n*resulting* pair rather than the submitted one.",
+        "properties": {
+          "budget_duration_sec": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Seconds between resets, counted from the last one. Mutually exclusive with reset_alignment",
+            "title": "Budget Duration Sec"
+          },
+          "max_budget": {
+            "anyOf": [
+              {
+                "maximum": 999999999999.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Maximum spend in USD over one period; null caps nothing",
+            "title": "Max Budget"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Admin-facing label for the budget",
+            "title": "Name"
+          },
+          "reset_alignment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Reset on a UTC calendar boundary instead of a fixed number of seconds, which is the only way to express a calendar month. Mutually exclusive with budget_duration_sec",
+            "title": "Reset Alignment"
+          }
+        },
+        "title": "OrganizationBudgetUpdate",
+        "type": "object"
+      },
+      "OrganizationBudgetsPublic": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/OrganizationBudgetPublic"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data",
+          "count"
+        ],
+        "title": "OrganizationBudgetsPublic",
+        "type": "object"
+      },
       "OrganizationCreateRequest": {
         "description": "Create an organization, with the caller as its owner.\n\nName only. The slug is derived server-side and never sent, because it is\nunique where the name is not: two organizations may share a name, and a\nrename deliberately does not move the slug.",
         "properties": {
@@ -6845,6 +7067,261 @@
           "created_at"
         ],
         "title": "OrganizationPublic",
+        "type": "object"
+      },
+      "OrganizationScopedBudgetCreate": {
+        "description": "Attach one of the organization's budgets to a scope inside it.",
+        "properties": {
+          "budget_id": {
+            "description": "The budget this ceiling enforces, which must be one this organization owns",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Budget Id",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Admin-facing label for this ceiling",
+            "title": "Name"
+          },
+          "provider_key_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Narrow the cap to one provider instance; null caps spend across every provider",
+            "title": "Provider Key Id"
+          },
+          "scope_id": {
+            "description": "Id of the capped identity: this organization, one of its workspaces, a membership in either, or an API key in one",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "scope_type": {
+            "description": "Which kind of identity this ceiling caps",
+            "enum": [
+              "organization",
+              "workspace",
+              "workspace_member",
+              "org_member",
+              "api_token"
+            ],
+            "title": "Scope Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_type",
+          "scope_id",
+          "budget_id"
+        ],
+        "title": "OrganizationScopedBudgetCreate",
+        "type": "object"
+      },
+      "OrganizationScopedBudgetPublic": {
+        "description": "One ceiling inside the organization, and the figures it enforces.\n\nThe limit and the period are read through the budget rather than stored here,\nand carried on the wire so a page can render a ceiling without fetching every\nbudget to resolve one id. Same reasoning as ``ScopedBudgetResponse``, whose\nshape this deliberately mirrors.",
+        "properties": {
+          "budget_duration_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Duration Sec"
+          },
+          "budget_id": {
+            "title": "Budget Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_spend": {
+            "title": "Current Spend",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "manageable": {
+            "title": "Manageable",
+            "type": "boolean"
+          },
+          "max_budget": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Budget"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "provider_key_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Key Id"
+          },
+          "reserved_spend": {
+            "title": "Reserved Spend",
+            "type": "number"
+          },
+          "reset_alignment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Alignment"
+          },
+          "scope_id": {
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "scope_type": {
+            "title": "Scope Type",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope_type",
+          "scope_id",
+          "provider_key_id",
+          "budget_id",
+          "name",
+          "max_budget",
+          "current_spend",
+          "reserved_spend",
+          "budget_duration_sec",
+          "reset_alignment",
+          "period_start",
+          "period_end",
+          "manageable",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OrganizationScopedBudgetPublic",
+        "type": "object"
+      },
+      "OrganizationScopedBudgetUpdate": {
+        "description": "Relabel a ceiling, or point it at a different budget of this organization's.\n\nThe scope and the provider narrowing are not editable, for the reason\n``PATCH /v1/scoped-budgets/{id}`` gives: changing either moves the ceiling to\na different identity while carrying its spend, which is a delete and a\ncreate, not an update.",
+        "properties": {
+          "budget_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "OrganizationScopedBudgetUpdate",
+        "type": "object"
+      },
+      "OrganizationScopedBudgetsPublic": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/OrganizationScopedBudgetPublic"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data",
+          "count"
+        ],
+        "title": "OrganizationScopedBudgetsPublic",
         "type": "object"
       },
       "PasskeySessionResponse": {
@@ -17320,6 +17797,233 @@
         ]
       }
     },
+    "/v1/organizations/me/budgets": {
+      "get": {
+        "description": "List the budgets this organization has defined. Owners and admins only.",
+        "operationId": "list_organization_budgets_v1_organizations_me_budgets_get",
+        "parameters": [
+          {
+            "description": "Number of records to skip",
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Number of records to skip",
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum number of records to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Maximum number of records to return",
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationBudgetsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Organization Budgets",
+        "tags": [
+          "organization-budgets"
+        ]
+      },
+      "post": {
+        "description": "Define a budget owned by this organization. Owners and admins only.",
+        "operationId": "create_organization_budget_v1_organizations_me_budgets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationBudgetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationBudgetPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Create Organization Budget",
+        "tags": [
+          "organization-budgets"
+        ]
+      }
+    },
+    "/v1/organizations/me/budgets/{budget_id}": {
+      "delete": {
+        "description": "Delete a budget, refused with 409 while a ceiling or workspace default names it.",
+        "operationId": "delete_organization_budget_v1_organizations_me_budgets__budget_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "budget_id",
+            "required": true,
+            "schema": {
+              "title": "Budget Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Delete Organization Budget",
+        "tags": [
+          "organization-budgets"
+        ]
+      },
+      "patch": {
+        "description": "Change a budget's label, figure or period.\n\nEvery ceiling naming it is held to the new figure from here on, which is the\npoint of naming a budget rather than typing an amount per place it applies.",
+        "operationId": "update_organization_budget_v1_organizations_me_budgets__budget_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "budget_id",
+            "required": true,
+            "schema": {
+              "title": "Budget Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationBudgetUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationBudgetPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Organization Budget",
+        "tags": [
+          "organization-budgets"
+        ]
+      }
+    },
     "/v1/organizations/me/guardrails": {
       "get": {
         "description": "List the guardrails the caller's organization mandates.\n\nOrganization owners and admins only, unlike the pricing overrides next door\nthat any member may read: these rows name the endpoints this gateway\nconnects to and say which of them carry a credential. A credential is never\nreturned, only whether one is set.",
@@ -18889,6 +19593,233 @@
         "summary": "List Visible Routing Policies",
         "tags": [
           "routing"
+        ]
+      }
+    },
+    "/v1/organizations/me/spend-ceilings": {
+      "get": {
+        "description": "List the ceilings capping identities inside this organization. Owners and admins only.\n\nA ceiling whose budget this organization does not own is listed with\n``manageable`` false rather than omitted: it is enforcing against this\norganization's spend, so leaving it out would let the page read as uncapped.",
+        "operationId": "list_organization_spend_ceilings_v1_organizations_me_spend_ceilings_get",
+        "parameters": [
+          {
+            "description": "Number of records to skip",
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Number of records to skip",
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum number of records to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Maximum number of records to return",
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationScopedBudgetsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Organization Spend Ceilings",
+        "tags": [
+          "organization-budgets"
+        ]
+      },
+      "post": {
+        "description": "Cap one identity in this organization at one of its budgets.\n\nAnswers 404 when the scope names nothing in this organization, rather than\ncreating a ceiling that can never bind, and 404 when the budget is not this\norganization's.",
+        "operationId": "create_organization_spend_ceiling_v1_organizations_me_spend_ceilings_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationScopedBudgetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationScopedBudgetPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Create Organization Spend Ceiling",
+        "tags": [
+          "organization-budgets"
+        ]
+      }
+    },
+    "/v1/organizations/me/spend-ceilings/{ceiling_id}": {
+      "delete": {
+        "description": "Remove a ceiling inside this organization.",
+        "operationId": "delete_organization_spend_ceiling_v1_organizations_me_spend_ceilings__ceiling_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ceiling_id",
+            "required": true,
+            "schema": {
+              "title": "Ceiling Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Delete Organization Spend Ceiling",
+        "tags": [
+          "organization-budgets"
+        ]
+      },
+      "patch": {
+        "description": "Relabel a ceiling, or point it at a different budget of this organization's.\n\nThe scope and the provider narrowing are not editable: changing either would\nmove the ceiling to a different identity while carrying its spend, which is a\ndelete and a create.",
+        "operationId": "update_organization_spend_ceiling_v1_organizations_me_spend_ceilings__ceiling_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ceiling_id",
+            "required": true,
+            "schema": {
+              "title": "Ceiling Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationScopedBudgetUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationScopedBudgetPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Organization Spend Ceiling",
+        "tags": [
+          "organization-budgets"
         ]
       }
     },

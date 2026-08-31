@@ -30,6 +30,7 @@ from gateway.api.routes import (
     models,
     moderations,
     org_provider_keys,
+    organization_budgets,
     organization_guardrails,
     organization_keys,
     organization_pricing,
@@ -160,6 +161,8 @@ def _register_core_routers(app: FastAPI, config: GatewayConfig) -> None:
     app.include_router(keys.router)
     app.include_router(users.router)
     app.include_router(organizations.router)
+    app.include_router(organization_budgets.budgets_router)
+    app.include_router(organization_budgets.ceilings_router)
     app.include_router(organization_pricing.router)
     app.include_router(organization_guardrails.router)
     # The tenant-scoped read over the same rows ``/v1/usage`` serves to an
