@@ -719,9 +719,13 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
         }
       />
 
-      <ErrorBanner error={query.error} />
+      {/* Also gated on the caller, not just on the query being disabled: a
+          disabled query still serves whatever an earlier caller left in the
+          cache, so an operator demoted mid-session must not keep reading a
+          stale 403 banner or the settings they no longer hold. */}
+      {isOperator ? <ErrorBanner error={query.error} /> : null}
 
-      {query.isLoading ? <PageLoading /> : null}
+      {isOperator && query.isLoading ? <PageLoading /> : null}
 
       {SERVICES.filter((service) => !only || service.key === only).map(
         (service) => {
@@ -744,13 +748,15 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
             : undefined
           return (
             <Fragment key={service.key}>
-              {/* The deployment-wide settings card exists only once the
-                  operator-gated read produced this service's fields. The
+              {/* The deployment-wide settings card exists only for an operator
+                  whose gated read produced this service's fields. `isOperator`
+                  is checked as well as the fields, because disabling the query
+                  does not evict what an earlier operator session cached. The
                   workspace and organization cards below sit outside this
                   branch, because their audience is wider than the operator's
                   and they must not disappear with a read their viewer may not
                   make. */}
-              {fields.length === 0 ? null : (
+              {!isOperator || fields.length === 0 ? null : (
                 <section className="flex flex-col gap-2">
                   {/* Dropped when the page is narrowed to this one service: the
                     page title already says it, and repeating it reads as two

@@ -116,10 +116,12 @@ const TOOLS: ToolsResponse = {
   ],
 }
 
-function renderWithClient(ui: ReactElement) {
-  const client = new QueryClient({
+function renderWithClient(
+  ui: ReactElement,
+  client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
-  })
+  }),
+) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
 }
 
@@ -625,6 +627,28 @@ describe("ToolsGuardrailsPage by caller role", () => {
       ),
     ).toBeInTheDocument()
     expect(screen.queryByLabelText("sandbox_url")).not.toBeInTheDocument()
+  })
+
+  it("does not render cached operator settings to a caller who is not one", async () => {
+    // Disabling the query does not evict its cache, so a caller demoted
+    // mid-session could otherwise keep reading what their operator session
+    // fetched. The section gates on the caller as well as on the fields.
+    mockApi({
+      context: organizationContext({
+        deployment_operator: false,
+        role: "member",
+      }),
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    client.setQueryData(["tool-settings"], RESPONSE)
+    renderWithClient(<ToolsGuardrailsPage />, client)
+
+    expect(
+      await screen.findByText(/Per-workspace web search is set on a workspace/),
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText("web_search_url")).not.toBeInTheDocument()
   })
 
   it("still renders the operator forms alongside the workspace cards for an operator", async () => {
