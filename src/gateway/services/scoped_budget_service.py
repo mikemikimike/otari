@@ -1,4 +1,4 @@
-"""Enforcement for ``scoped_budgets``: the tenancy-scoped USD ceilings.
+"""Enforcement for ``scoped_budgets``: the tenancy-scoped spending ceilings.
 
 The legacy per-user path in :mod:`gateway.services.budget_service` is unchanged
 and still enforced; this is a second mechanism beside it. A request resolves the
@@ -10,6 +10,13 @@ Each row is an independent ceiling. There is deliberately no check that the
 children of a scope sum to less than their parent: the parent ceiling already
 bounds the total, so the extra rule would refuse configurations that cannot
 overspend.
+
+**Three axes, one hold.** The budget a ceiling names can cap dollars, tokens and
+requests independently (``max_budget``, ``token_limit``, ``request_limit``), so a
+reservation holds on all three at once and a ceiling admits it only when every
+capped axis has room. The dollar and token amounts are estimates reconciled at
+settlement; the request count is exact at admission, so its hold is what
+settlement records.
 
 **No row locks.** ``budget_service.reserve_budget`` is lock-free by design, and
 this path stays that way: one conditional UPDATE per ceiling, each committed on
@@ -27,9 +34,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from sqlalchemy import and_, case, or_, select, update
+from sqlalchemy.orm import Mapped
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
@@ -117,6 +125,17 @@ class ApplicableBudget:
     budget_id: str
     scope_type: str
     provider_key_id: str | None
+    # The non-USD caps of the budget this ceiling names, carried so a caller can
+    # tell whether an axis is capped anywhere without reading every budget again.
+    # The reserve path reads them from the row instead, inside its one conditional
+    # UPDATE, so these are not what enforcement is decided on.
+    token_limit: int | None = None
+    request_limit: int | None = None
+
+    @property
+    def caps_counts(self) -> bool:
+        """Whether this ceiling caps tokens or requests as well as dollars."""
+        return self.token_limit is not None or self.request_limit is not None
 
     @property
     def subject(self) -> str:
@@ -216,8 +235,8 @@ async def _roll_expired_periods(
     Guarded on ``period_end`` so it is the same lock-free compare-and-swap the
     per-user reset uses: concurrent requests at the boundary all issue it, one
     wins, and the losers see zero rows and carry on against the rolled window.
-    ``reserved_spend`` is untouched, so a hold taken before the roll is still
-    released against the right counter after it.
+    Every ``current_*`` counter is zeroed and no hold is, so a hold taken before
+    the roll is still released against the right counter after it, on each axis.
 
     No backfill either way: a ceiling untouched for two months lands in the
     current window with fresh counters, not in each window it slept through.
@@ -245,6 +264,8 @@ async def _roll_expired_periods(
             )
             .values(
                 current_spend=ZERO,
+                current_tokens=0,
+                current_requests=0,
                 period_start=period_start,
                 period_end=period_end,
             )
@@ -292,6 +313,8 @@ async def applicable_budgets(
                 Budget.budget_duration_sec,
                 Budget.reset_alignment,
                 ScopedBudget.period_end,
+                Budget.token_limit,
+                Budget.request_limit,
             )
             .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
             .where(ident_clause, key_clause)
@@ -303,15 +326,21 @@ async def applicable_budgets(
     now = datetime.now(UTC)
     expired = [
         (budget_id, duration, alignment)
-        for budget_id, _scope_type, _provider, duration, alignment, period_end in rows
+        for budget_id, _scope_type, _provider, duration, alignment, period_end, _tokens, _requests in rows
         if (parsed := _as_utc(period_end)) is not None and now >= parsed
     ]
     if expired:
         await _roll_expired_periods(db, expired, now)
 
     resolved = [
-        ApplicableBudget(budget_id=budget_id, scope_type=scope_type, provider_key_id=provider)
-        for budget_id, scope_type, provider, _duration, _alignment, _period_end in rows
+        ApplicableBudget(
+            budget_id=budget_id,
+            scope_type=scope_type,
+            provider_key_id=provider,
+            token_limit=token_limit,
+            request_limit=request_limit,
+        )
+        for budget_id, scope_type, provider, _duration, _alignment, _period_end, token_limit, request_limit in rows
     ]
     # Most specific first, provider-narrowed before aggregate within a scope, then
     # the id so the order stays total when two ceilings tie on both.
@@ -326,7 +355,7 @@ async def applicable_budgets(
 
 
 def _release_expression(amount: Decimal) -> object:
-    """Subtract ``amount`` from the hold, clamped at zero.
+    """Subtract ``amount`` from the money hold, clamped at zero.
 
     CASE rather than GREATEST, matching the per-user release, because SQLite has
     no GREATEST. Both arms are ``Decimal`` so the CASE resolves as ``numeric``.
@@ -337,21 +366,42 @@ def _release_expression(amount: Decimal) -> object:
     )
 
 
+def _release_count_expression(column: Mapped[int], amount: int) -> object:
+    """The same clamp for a token or request hold, whose arms are integers."""
+    return case((column - amount < 0, 0), else_=column - amount)
+
+
 async def release(
-    db: AsyncSession, budget_ids: Sequence[str], amount: Decimal, *, commit: bool = True
+    db: AsyncSession,
+    budget_ids: Sequence[str],
+    amount: Decimal,
+    *,
+    tokens: int = 0,
+    requests: int = 0,
+    commit: bool = True,
 ) -> None:
-    """Give a held amount back to every ceiling that took it.
+    """Give a held amount back to every ceiling that took it, on every axis.
+
+    Each axis is released only when the reservation held something on it, so a
+    caller that took a dollar hold alone issues the same UPDATE it always did.
 
     ``commit=False`` folds this into a surrounding unit of work, which is what
     lets the reservation ledger land a hold's terminal status and the release it
     authorizes in one transaction instead of two.
     """
-    if not budget_ids or amount <= ZERO:
+    values: dict[str, object] = {}
+    if amount > ZERO:
+        values["reserved_spend"] = _release_expression(amount)
+    if tokens > 0:
+        values["reserved_tokens"] = _release_count_expression(ScopedBudget.reserved_tokens, tokens)
+    if requests > 0:
+        values["reserved_requests"] = _release_count_expression(ScopedBudget.reserved_requests, requests)
+    if not budget_ids or not values:
         return
     await db.execute(
         update(ScopedBudget)
         .where(ScopedBudget.id.in_(list(budget_ids)))
-        .values(reserved_spend=_release_expression(amount))
+        .values(**values)
         .execution_options(synchronize_session=False)
     )
     if commit:
@@ -361,48 +411,160 @@ async def release(
 async def reserve(
     db: AsyncSession,
     budgets: Sequence[ApplicableBudget],
-    amount: Decimal,
+    amount: Decimal | None,
+    *,
+    tokens: int = 0,
+    requests: int = 1,
+    new_request: bool = True,
 ) -> ApplicableBudget | None:
-    """Hold ``amount`` on every ceiling, or hold none and name the one that refused.
+    """Hold a request on every ceiling, or hold none and name the one that refused.
 
     One conditional UPDATE per ceiling, each committed before the next is
     attempted, so no lock spans two rows. A ceiling with no limit still takes the
     hold, which keeps the release arithmetic uniform and makes concurrent spend
-    visible immediately. Zero rows means this request does not fit, or the
-    ceiling is already at its cap (which is what the strict comparison catches,
-    including for a zero-cost request): the holds already taken are released and
-    the caller rejects.
+    visible immediately. Zero rows means the request does not fit, per
+    :func:`admits`: the holds already taken are released and the caller rejects.
+
+    Every capped axis has to admit the request, and the hold is placed on all
+    three at once so a later refusal gives back exactly what was taken. An axis
+    the budget leaves NULL admits any hold, which is how a dollars-only budget
+    keeps behaving as it did before tokens and requests could be capped.
+
+    ``new_request=False`` grows a request this ceiling has already admitted, and
+    is asked only whether the delta fits. A top-up is otherwise refused by its
+    own hold: on a request cap of one, the reservation it is growing has already
+    taken the only slot.
+
+    ``amount=None`` is a request with no dollar amount, which is a free-priced
+    model: the dollar axis is neither held nor gated, because the request cannot
+    spend, while the token and request axes hold and gate as they do for any
+    other request. It still consumes tokens and is still a request.
     """
     taken: list[str] = []
-    # The cap is a column on the budget this ceiling names, read as a correlated
+    usd = amount if amount is not None else ZERO
+
+    # Each cap is a column on the budget this ceiling names, read as a correlated
     # subquery so the whole check stays inside the one conditional UPDATE. Reading
-    # it first and comparing in Python would reintroduce the read-then-write race
-    # this service exists to close.
-    cap = (
-        select(Budget.max_budget).where(Budget.budget_id == ScopedBudget.budget_id).scalar_subquery()
-    )
+    # them first and comparing in Python would reintroduce the read-then-write
+    # race this service exists to close. Three subqueries over one row rather than
+    # a join: the row is the same buffered page for all three, and a join here
+    # would have to be an UPDATE ... FROM, which SQLite does not take.
+    def cap_of(column: Mapped[Decimal | None] | Mapped[int | None]) -> Any:
+        return select(column).where(Budget.budget_id == ScopedBudget.budget_id).scalar_subquery()
+
+    def admits(committed: Any, held: Any, cap: Any) -> ColumnElement[bool]:
+        """Whether one axis has room, or has no cap at all.
+
+        Two clauses on an arrival: it is refused when the axis is already at or
+        over its cap (which is what catches a request estimating nothing against
+        an exhausted ceiling), and refused when this hold would push it past.
+        Only the second on a top-up, per ``new_request``.
+        """
+        fits: ColumnElement[bool] = committed + held <= cap
+        if new_request:
+            fits = and_(committed < cap, fits)
+        return or_(cap.is_(None), fits)
+
+    # An axis whose amount is None is not part of this request and is not asked.
+    gates = [
+        admits(committed, held, cap)
+        for committed, held, cap in (
+            (ScopedBudget.current_spend + ScopedBudget.reserved_spend, amount, cap_of(Budget.max_budget)),
+            (ScopedBudget.current_tokens + ScopedBudget.reserved_tokens, tokens, cap_of(Budget.token_limit)),
+            (ScopedBudget.current_requests + ScopedBudget.reserved_requests, requests, cap_of(Budget.request_limit)),
+        )
+        if held is not None
+    ]
     for budget in budgets:
         result = await db.execute(
             update(ScopedBudget)
             .where(
                 ScopedBudget.id == budget.budget_id,
-                or_(
-                    cap.is_(None),
-                    and_(
-                        ScopedBudget.current_spend + ScopedBudget.reserved_spend < cap,
-                        ScopedBudget.current_spend + ScopedBudget.reserved_spend + amount <= cap,
-                    ),
-                ),
+                *gates,
             )
-            .values(reserved_spend=ScopedBudget.reserved_spend + amount)
+            .values(
+                reserved_spend=ScopedBudget.reserved_spend + usd,
+                reserved_tokens=ScopedBudget.reserved_tokens + tokens,
+                reserved_requests=ScopedBudget.reserved_requests + requests,
+            )
             .execution_options(synchronize_session=False)
         )
         await db.commit()
         if not getattr(result, "rowcount", 0):
-            await release(db, taken, amount)
+            await release(db, taken, usd, tokens=tokens, requests=requests)
             return budget
         taken.append(budget.budget_id)
     return None
+
+
+async def blocked_axis(
+    db: AsyncSession,
+    budget: ApplicableBudget,
+    *,
+    amount: Decimal | None,
+    tokens: int,
+    requests: int,
+    new_request: bool,
+) -> str:
+    """Which capped axis left this ceiling no room, for the refusal message.
+
+    :func:`reserve` refuses by matching no row, so nothing in its result says
+    which of three caps bound. Read here instead, on the refusal path only, and
+    named in the 403: "has exceeded budget limit" alone cannot tell an operator a
+    spent allowance from a spent token allowance, which is the signal a cutover
+    onto a token or request cap needs.
+
+    Both of the clauses :func:`admits` builds, and for its reason: an arrival is
+    refused either because the axis is already at its cap or because this hold
+    would push it past, and a helper reproducing one of them finds no axis for
+    the other shape. ``amount=None`` skips the dollar axis, which :func:`reserve`
+    likewise does not ask about. The hold therefore has to come from the caller, since the
+    row cannot say what was being asked of it. The dollar axis is called
+    "budget", so its message is unchanged; see
+    ``budget_service._blocked_axis``.
+    """
+    row = (
+        await db.execute(
+            select(
+                Budget.max_budget,
+                ScopedBudget.current_spend,
+                ScopedBudget.reserved_spend,
+                Budget.token_limit,
+                ScopedBudget.current_tokens,
+                ScopedBudget.reserved_tokens,
+                Budget.request_limit,
+                ScopedBudget.current_requests,
+                ScopedBudget.reserved_requests,
+            )
+            .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
+            .where(ScopedBudget.id == budget.budget_id)
+        )
+    ).first()
+    if row is None:
+        # The ceiling went away between the refusal and here, so there is no axis
+        # to name and guessing one would be worse than saying nothing.
+        return "budget"
+    axes = (
+        # Skipped when the request has no dollar amount, which is a free-priced
+        # model: :func:`reserve` does not gate that axis, so it cannot be what
+        # refused, and naming it would point at the one cap with room.
+        ("budget", row[0] if amount is not None else None, row[1], row[2], amount or ZERO),
+        ("token", row[3], row[4], row[5], tokens),
+        ("request", row[6], row[7], row[8], requests),
+    )
+    for name, cap, spent, reserved, wanted in axes:
+        if cap is None:
+            continue
+        # Compared as Decimals whatever the driver handed back: a NUMERIC column
+        # arrives as Decimal on PostgreSQL and can arrive as a float on SQLite,
+        # and adding one of each raises rather than comparing.
+        committed = Decimal(str(spent)) + Decimal(str(reserved))
+        limit = Decimal(str(cap))
+        if committed + Decimal(str(wanted)) > limit:
+            return name
+        if new_request and committed >= limit:
+            return name
+    return "budget"
 
 
 async def settle(
@@ -411,10 +573,20 @@ async def settle(
     *,
     actual_cost: Decimal,
     held: Decimal,
+    actual_tokens: int = 0,
+    held_tokens: int = 0,
+    requests: int = 0,
+    held_requests: int = 0,
     counts_toward_budget: bool = True,
     commit: bool = True,
 ) -> None:
-    """Record the real cost on every ceiling and release what the request held.
+    """Record what the request really used on every ceiling and release its holds.
+
+    What is recorded and what is released are separate arguments on every axis,
+    because they diverge in two ways. A dollar or token estimate is released while
+    the measured figure is recorded; and a reservation the TTL sweep already
+    reclaimed has a figure to record and nothing left to release, which is what
+    the ``held_*`` arguments express when they are zero.
 
     ``commit=False`` folds this into a surrounding unit of work; see
     :func:`release`.
@@ -426,6 +598,14 @@ async def settle(
         values["current_spend"] = ScopedBudget.current_spend + actual_cost
     if held > ZERO:
         values["reserved_spend"] = _release_expression(held)
+    if actual_tokens > 0 and counts_toward_budget:
+        values["current_tokens"] = ScopedBudget.current_tokens + actual_tokens
+    if held_tokens > 0:
+        values["reserved_tokens"] = _release_count_expression(ScopedBudget.reserved_tokens, held_tokens)
+    if requests > 0 and counts_toward_budget:
+        values["current_requests"] = ScopedBudget.current_requests + requests
+    if held_requests > 0:
+        values["reserved_requests"] = _release_count_expression(ScopedBudget.reserved_requests, held_requests)
     if not values:
         return
     await db.execute(
@@ -453,6 +633,7 @@ __all__ = [
     "ApplicableBudget",
     "BudgetScopeRequest",
     "applicable_budgets",
+    "blocked_axis",
     "period_window",
     "release",
     "reserve",

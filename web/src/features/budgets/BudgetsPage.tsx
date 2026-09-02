@@ -36,8 +36,8 @@ import {
   resolveSelectedIds,
   useTableSelection,
 } from "@/shared/helpers/tableSelection"
-
 import { OrganizationBudgetsPage } from "./OrganizationBudgetsPage"
+import { hasNoLimit, limitLabel } from "./organizationBudget"
 
 // ---------- formatting ----------
 
@@ -333,7 +333,10 @@ function UsageCell({ budget }: { budget: Budget }) {
     return (
       <span className="text-xs text-foreground">
         {formatUSD(spent)} spent
-        <span className="text-muted"> · no limit</span>
+        {/* "dollar", because this cell is a spend bar and the budget may still
+            cap tokens or requests: the Limit column beside it names those, and
+            an unqualified "no limit" here contradicts it. */}
+        <span className="text-muted"> · no dollar limit</span>
       </span>
     )
   }
@@ -639,12 +642,11 @@ function DeploymentBudgetsPage() {
       {
         id: "limit",
         header: "Limit (per user)",
-        cell: (b) =>
-          b.max_budget === null ? (
-            <span className="text-muted">Unlimited</span>
-          ) : (
-            formatUSD(b.max_budget)
-          ),
+        cell: (b) => (
+          <span className={hasNoLimit(b) ? "text-muted" : undefined}>
+            {limitLabel(b)}
+          </span>
+        ),
       },
       {
         id: "reset",

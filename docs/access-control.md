@@ -86,13 +86,31 @@ Two budget forms exist:
 - A scoped budget limits an organization, workspace, membership, or API key and
   can optionally narrow the limit to one provider.
 
+A budget caps up to three things over its period, each set independently and
+each unlimited when left unset: spend in USD (`max_budget`), total tokens
+(`token_limit`), and requests (`request_limit`). A request must have room on
+every axis the budget caps. Spend and tokens are held at an upper bound before
+dispatch and reconciled to the measured figures afterwards; only the unused part
+of an over-estimate is released, and what the request measurably used stays
+charged. A request counts as one request when it is admitted. A model priced at
+zero spends no dollars, and still spends tokens and one request.
+Endpoints that hold no token estimate (embeddings, rerank, and the other
+pass-through routes) are refused once a token cap is exhausted rather than
+reserving headroom for themselves, so a token cap can be passed by the requests
+already in flight when it runs out.
+
 Scoped budgets can use a rolling duration or a UTC calendar boundary. A key with
 `exclude_from_budget`, or a deployment with `budget_strategy: disabled`,
 bypasses enforcement.
 
 Imported usage is retrospective and never counts toward a budget. Batch cost is
 also settled after submission, so operators should not treat those paths as a
-hard real-time cap. See [Importing external usage](external-usage.md).
+hard real-time cap. Batch settles dollars alone: its results arrive outside the
+reservation that gated the submission, so a batch counts as the one request that
+created it and contributes no tokens to a token cap, however many prompts it
+carried. The same holds for the vision side-call a request makes to describe an
+attachment. Cap batch-heavy workloads in dollars rather than in tokens. See
+[Importing external usage](external-usage.md).
 
 ## Workspace-scoped spend
 

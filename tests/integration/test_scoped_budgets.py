@@ -23,6 +23,7 @@ from gateway.models.tenancy import Organization, OrganizationMember, Workspace, 
 from gateway.models.tenancy import User as TenancyUser
 from gateway.services.budget_service import (
     ReservationHandle,
+    increase_reservation,
     reconcile_reservation,
     refund_reservation,
     reserve_budget,
@@ -108,12 +109,32 @@ async def _counters(db: AsyncSession, budget_id: str) -> tuple[float, float]:
     return float(row[0]), float(row[1])
 
 
+async def _token_counters(db: AsyncSession, budget_id: str) -> tuple[int, int]:
+    row = (
+        await db.execute(
+            select(ScopedBudget.current_tokens, ScopedBudget.reserved_tokens).where(ScopedBudget.id == budget_id)
+        )
+    ).one()
+    return int(row[0]), int(row[1])
+
+
+async def _request_counters(db: AsyncSession, budget_id: str) -> tuple[int, int]:
+    row = (
+        await db.execute(
+            select(ScopedBudget.current_requests, ScopedBudget.reserved_requests).where(ScopedBudget.id == budget_id)
+        )
+    ).one()
+    return int(row[0]), int(row[1])
+
+
 async def _scoped(
     db: AsyncSession,
     *,
     scope_type: str,
     scope_id: str,
     max_budget: float | None,
+    token_limit: int | None = None,
+    request_limit: int | None = None,
     provider_key_id: str | None = None,
     budget_duration_sec: int | None = None,
     reset_alignment: str | None = None,
@@ -128,6 +149,8 @@ async def _scoped(
     """
     budget = Budget(
         max_budget=max_budget,
+        token_limit=token_limit,
+        request_limit=request_limit,
         budget_duration_sec=budget_duration_sec,
         reset_alignment=reset_alignment,
     )
@@ -887,3 +910,318 @@ def test_unknown_scope_type_is_refused(client: Any, master_key_header: dict[str,
         headers=master_key_header,
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_token_ceiling_holds_the_estimate_and_records_the_measured_total(
+    async_db: AsyncSession, tenancy: Fixture
+) -> None:
+    """A token cap holds the request's upper bound, then settles at what it really used."""
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=None,
+        token_limit=10_000,
+    )
+    async_db.add(cap)
+    await async_db.commit()
+
+    handle = await reserve_budget(
+        async_db, tenancy.user_id, 0.0, estimated_tokens=4_000, scope=tenancy.scope()
+    )
+
+    # The ceiling leg, because this fixture's user has no budget row: the per-user
+    # leg holds nothing, which is what the split makes explicit.
+    assert (handle.token_estimate, handle.scoped_token_estimate) == (0, 4_000)
+    assert await _token_counters(async_db, cap.id) == (0, 4_000)
+
+    await reconcile_reservation(async_db, handle, 0.0, actual_tokens=1_200)
+
+    # The estimate goes back and the measured figure is what the next request is
+    # gated against, so an over-estimate costs the ceiling nothing.
+    assert await _token_counters(async_db, cap.id) == (1_200, 0)
+
+
+@pytest.mark.asyncio
+async def test_token_ceiling_refuses_a_request_that_would_exceed_it(
+    async_db: AsyncSession, tenancy: Fixture
+) -> None:
+    """A hold larger than the remaining token headroom is refused, and nothing is held."""
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=None,
+        token_limit=1_000,
+    )
+    async_db.add(cap)
+    await async_db.commit()
+
+    with pytest.raises(HTTPException) as refusal:
+        await reserve_budget(async_db, tenancy.user_id, 0.0, estimated_tokens=1_001, scope=tenancy.scope())
+
+    assert refusal.value.status_code == 403
+    assert await _token_counters(async_db, cap.id) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_token_ceiling_refuses_even_a_request_that_estimates_nothing(
+    async_db: AsyncSession, tenancy: Fixture
+) -> None:
+    """The strict comparison is what stops a path with no token estimate slipping through.
+
+    Embeddings and the other pass-through endpoints hold no token estimate, so
+    without it a cap already at its limit would keep admitting them.
+    """
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=None,
+        token_limit=500,
+    )
+    cap.current_tokens = 500
+    async_db.add(cap)
+    await async_db.commit()
+
+    with pytest.raises(HTTPException) as refusal:
+        await reserve_budget(async_db, tenancy.user_id, 0.0, estimated_tokens=0, scope=tenancy.scope())
+
+    assert refusal.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_request_ceiling_counts_one_per_reservation(async_db: AsyncSession, tenancy: Fixture) -> None:
+    """Two requests fit a cap of two; the third is refused."""
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=None,
+        request_limit=2,
+    )
+    async_db.add(cap)
+    await async_db.commit()
+
+    for _ in range(2):
+        handle = await reserve_budget(async_db, tenancy.user_id, 0.0, scope=tenancy.scope())
+        await reconcile_reservation(async_db, handle, 0.0)
+
+    assert await _request_counters(async_db, cap.id) == (2, 0)
+
+    with pytest.raises(HTTPException) as refusal:
+        await reserve_budget(async_db, tenancy.user_id, 0.0, scope=tenancy.scope())
+
+    assert refusal.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_a_refunded_request_gives_back_every_axis(async_db: AsyncSession, tenancy: Fixture) -> None:
+    """A provider failure releases the dollar, token and request holds together."""
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=10.0,
+        token_limit=10_000,
+        request_limit=5,
+    )
+    async_db.add(cap)
+    await async_db.commit()
+
+    handle = await reserve_budget(
+        async_db, tenancy.user_id, 1.0, estimated_tokens=2_000, scope=tenancy.scope()
+    )
+    assert await _counters(async_db, cap.id) == (0.0, 1.0)
+    assert await _token_counters(async_db, cap.id) == (0, 2_000)
+    assert await _request_counters(async_db, cap.id) == (0, 1)
+
+    await refund_reservation(async_db, handle)
+
+    assert await _counters(async_db, cap.id) == (0.0, 0.0)
+    assert await _token_counters(async_db, cap.id) == (0, 0)
+    assert await _request_counters(async_db, cap.id) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_rolled_period_zeroes_every_axis_and_leaves_the_holds(
+    async_db: AsyncSession, tenancy: Fixture
+) -> None:
+    """An expired window starts fresh on all three counters, so a spent cap admits again."""
+    now = datetime.now(UTC)
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=None,
+        token_limit=1_000,
+        request_limit=1,
+        budget_duration_sec=3600,
+        period_start=now - timedelta(hours=2),
+        period_end=now - timedelta(hours=1),
+    )
+    cap.current_tokens = 1_000
+    cap.current_requests = 1
+    cap.reserved_tokens = 7
+    async_db.add(cap)
+    await async_db.commit()
+
+    handle = await reserve_budget(async_db, tenancy.user_id, 0.0, estimated_tokens=10, scope=tenancy.scope())
+
+    assert handle.scoped_budget_ids == (cap.id,)
+    current_tokens, reserved_tokens = await _token_counters(async_db, cap.id)
+    assert current_tokens == 0
+    # The roll left the pre-existing hold alone and this request added its own.
+    assert reserved_tokens == 17
+    assert await _request_counters(async_db, cap.id) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_token_top_up_on_a_ceiling_is_released_when_the_user_has_no_budget(
+    async_db: AsyncSession, tenancy: Fixture
+) -> None:
+    """The shape every other top-up test misses: ceilings only, no per-user budget.
+
+    The ceilings grow whenever the request has any, while the per-user leg grows
+    only when it has a budget to grow. Held as one figure, the delta was released
+    from whichever leg wrote it last and stranded on the other, and nothing
+    reclaims a stranded hold: the reservation goes terminal and no sweep revisits
+    it, so the ceiling loses that headroom until its window rolls.
+    """
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=10.0,
+        token_limit=10_000,
+    )
+    async_db.add(cap)
+    await async_db.commit()
+
+    handle = await reserve_budget(
+        async_db, tenancy.user_id, 1.0, estimated_tokens=1_000, scope=tenancy.scope()
+    )
+
+    assert not handle.reserved, "this fixture's user has no budget row"
+    assert await _token_counters(async_db, cap.id) == (0, 1_000)
+
+    await increase_reservation(async_db, handle, Decimal("0.5"), additional_tokens=500)
+
+    assert handle.scoped_token_estimate == 1_500
+    assert await _token_counters(async_db, cap.id) == (0, 1_500)
+
+    await reconcile_reservation(async_db, handle, 1.4, actual_tokens=1_400)
+
+    # Every token held is given back, and the measured total is what the next
+    # request is gated against.
+    assert await _token_counters(async_db, cap.id) == (1_400, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_top_up_leaves_no_token_hold_behind(
+    async_db: AsyncSession, tenancy: Fixture
+) -> None:
+    """A refund can only release what the handle records, so the growth is recorded first."""
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=None,
+        token_limit=1_200,
+    )
+    async_db.add(cap)
+    await async_db.commit()
+
+    handle = await reserve_budget(
+        async_db, tenancy.user_id, 0.0, estimated_tokens=1_000, scope=tenancy.scope()
+    )
+
+    with pytest.raises(HTTPException):
+        await increase_reservation(async_db, handle, Decimal("0"), additional_tokens=500)
+
+    # Refused, so nothing grew: the ceiling still holds only the original hold.
+    assert await _token_counters(async_db, cap.id) == (0, 1_000)
+
+    await refund_reservation(async_db, handle)
+
+    assert await _token_counters(async_db, cap.id) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_names_the_axis_that_bound(async_db: AsyncSession, tenancy: Fixture) -> None:
+    """The gate refuses by matching no row, so the axis has to be read back for the 403.
+
+    Without it a cutover onto a token cap has no way to tell a spent allowance
+    from a spent token allowance.
+    """
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=10.0,
+        token_limit=1_000,
+    )
+    cap.current_tokens = 1_000
+    async_db.add(cap)
+    await async_db.commit()
+
+    with pytest.raises(HTTPException) as refusal:
+        await reserve_budget(async_db, tenancy.user_id, 0.0, estimated_tokens=1, scope=tenancy.scope())
+
+    assert refusal.value.status_code == 403
+    # The dollar cap has room, so naming "budget" would point at the wrong one.
+    assert "token limit" in str(refusal.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_spent_dollar_cap_still_reads_as_a_budget_refusal(
+    async_db: AsyncSession, tenancy: Fixture
+) -> None:
+    """The counterpart, so the axis is read rather than always reported as tokens.
+
+    The dollar axis keeps the word it always had, so a caller keying on "budget"
+    is unaffected by the two axes that gained one.
+    """
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=10.0,
+        token_limit=1_000,
+    )
+    cap.current_spend = Decimal("10.0")
+    async_db.add(cap)
+    await async_db.commit()
+
+    with pytest.raises(HTTPException) as refusal:
+        await reserve_budget(async_db, tenancy.user_id, 0.0, estimated_tokens=1, scope=tenancy.scope())
+
+    assert "budget limit" in str(refusal.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_names_the_axis_a_hold_would_push_past(
+    async_db: AsyncSession, tenancy: Fixture
+) -> None:
+    """The other refusal shape: room now, none once this request's hold lands.
+
+    The ceiling is under its cap, so a helper testing only "already at the cap"
+    finds no axis and falls back to the unqualified word. Both clauses of the
+    gate have to be reproduced, which is why the hold comes from the caller.
+    """
+    cap = await _scoped(
+        async_db,
+        scope_type="workspace",
+        scope_id=str(tenancy.workspace_id),
+        max_budget=None,
+        token_limit=1_000,
+    )
+    cap.current_tokens = 900
+    async_db.add(cap)
+    await async_db.commit()
+
+    with pytest.raises(HTTPException) as refusal:
+        await reserve_budget(async_db, tenancy.user_id, 0.0, estimated_tokens=200, scope=tenancy.scope())
+
+    assert "token limit" in str(refusal.value.detail)
