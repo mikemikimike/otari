@@ -655,6 +655,7 @@ class FormatAdapter(Protocol, Generic[ResultT, ChunkT]):
         on_first_response: Callable[[], None] | None = None,
         *,
         emit_native_web_search: bool = False,
+        max_web_search_uses: int | None = None,
     ) -> ResultT: ...
 
     def open_tool_loop_stream(
@@ -664,6 +665,7 @@ class FormatAdapter(Protocol, Generic[ResultT, ChunkT]):
         max_iterations: int,
         *,
         emit_native_web_search: bool = False,
+        max_web_search_uses: int | None = None,
     ) -> AsyncIterator[ChunkT]: ...
 
     def inject_hints(
@@ -2030,6 +2032,14 @@ class ToolContext:
         return self.use_web_search and declares_native_web_search(self.web_search_tool_entry)
 
     @property
+    def max_web_search_uses(self) -> int | None:
+        """The positive native web-search use cap, when the caller supplied one."""
+        if not self.emit_native_web_search:
+            return None
+        value = (self.web_search_tool_entry or {}).get("max_uses")
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+    @property
     def intercepts_web_search(self) -> bool:
         """Whether this deployment claims the provider-named web-search keywords.
 
@@ -3204,12 +3214,16 @@ async def dispatch_non_stream(
         tally=tool_ctx.tally,
     ) as web_backend:
         kwargs = adapter.inject_hints(call_kwargs, web_backend.purpose_hints(), header=tool_ctx.tools_header)
+        loop_options: dict[str, Any] = {}
+        if tool_ctx.max_web_search_uses is not None:
+            loop_options["max_web_search_uses"] = tool_ctx.max_web_search_uses
         return await adapter.run_tool_loop(
             kwargs,
             web_backend,
             tool_ctx.max_tool_iterations,
             on_first_response,
             emit_native_web_search=tool_ctx.emit_native_web_search,
+            **loop_options,
         )
 
 
@@ -3243,6 +3257,11 @@ async def _eager_backend_stream(
             backend,
             tool_ctx.max_tool_iterations,
             emit_native_web_search=tool_ctx.emit_native_web_search,
+            **(
+                {"max_web_search_uses": tool_ctx.max_web_search_uses}
+                if tool_ctx.max_web_search_uses is not None
+                else {}
+            ),
         ):
             yield event
     finally:
@@ -3934,6 +3953,11 @@ async def run_streaming_with_fallback(
             pool_for_loop,
             tool_ctx.max_tool_iterations,
             emit_native_web_search=tool_ctx.emit_native_web_search,
+            **(
+                {"max_web_search_uses": tool_ctx.max_web_search_uses}
+                if tool_ctx.max_web_search_uses is not None
+                else {}
+            ),
         )
 
     # See run_platform_non_stream: BackgroundTasks only run after a successful

@@ -238,3 +238,29 @@ def test_a_provider_error_result_is_kept() -> None:
     ]
 
     assert _strip_gateway_minted_blocks(messages) == messages
+
+
+def test_a_gateway_max_uses_error_result_is_stripped() -> None:
+    """A max-uses error is gateway-owned, while the same unmarked provider error survives."""
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_gw", "name": "web_search", "input": {}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_gw",
+                    "content": {
+                        "type": "web_search_tool_result_error",
+                        "error_code": "max_uses_exceeded",
+                        "gateway_minted": True,
+                    },
+                },
+                {"type": "text", "text": "done"},
+            ],
+        }
+    ]
+
+    assert _strip_gateway_minted_blocks(messages) == [
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]}
+    ]

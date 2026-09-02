@@ -1252,6 +1252,110 @@ async def test_native_blocks_for_each_of_several_searches(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+async def test_native_max_uses_stops_further_searches_and_reports_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_1", "first")]),
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_2", "second")]),
+        _message_response(stop_reason="end_turn", content=[_text_block("done")]),
+    ]
+    calls: list[list[dict[str, Any]]] = []
+
+    async def fake_amessages(**kwargs: Any) -> MessageResponse:
+        calls.append(kwargs["messages"])
+        return responses.pop(0)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+    pool = _FakeSearchPool()
+
+    result = await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        emit_native_web_search=True,
+        max_web_search_uses=1,
+    )
+
+    assert pool.calls == [("web_search", {"query": "first"})]
+    assert [block.type for block in result.content] == [
+        "server_tool_use",
+        "web_search_tool_result",
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+    ]
+    error_result = cast(Any, result.content[3])
+    error_content = cast(Any, error_result.content)
+    assert error_content.type == "web_search_tool_result_error"
+    assert error_content.error_code == "max_uses_exceeded"
+    blocked_tool_result = calls[2][-1]["content"][0]
+    assert blocked_tool_result["content"] == "[tool error] max_uses_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_stream_native_max_uses_stops_further_searches_and_reports_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    streams = iter(
+        [
+            _async_iter(
+                _msg_start_event(),
+                _tool_use_block_start(0, "tu_1", "web_search"),
+                _input_json_delta(0, '{"query": "first"}'),
+                _content_block_stop(0),
+                _msg_delta_event("tool_use"),
+                _msg_stop_event(),
+            ),
+            _async_iter(
+                _msg_start_event(),
+                _tool_use_block_start(0, "tu_2", "web_search"),
+                _input_json_delta(0, '{"query": "second"}'),
+                _content_block_stop(0),
+                _msg_delta_event("tool_use"),
+                _msg_stop_event(),
+            ),
+            _async_iter(
+                _msg_start_event(),
+                _text_block_start(0),
+                _text_delta(0, "done"),
+                _content_block_stop(0),
+                _msg_delta_event("end_turn"),
+                _msg_stop_event(),
+            ),
+        ]
+    )
+
+    async def fake_amessages(**kwargs: Any) -> AsyncIterator[MessageStreamEvent]:
+        return next(streams)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+    pool = _FakeSearchPool()
+    events = [
+        event
+        async for event in anthropic_tool_loop_stream(
+            completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+            pool=cast(Any, pool),
+            max_iterations=5,
+            emit_native_web_search=True,
+            max_web_search_uses=1,
+        )
+    ]
+
+    assert pool.calls == [("web_search", {"query": "first"})]
+    native_starts = [event.content_block for event in events if event.type == "content_block_start"]
+    assert [block.type for block in native_starts[:4]] == [
+        "server_tool_use",
+        "web_search_tool_result",
+        "server_tool_use",
+        "web_search_tool_result",
+    ]
+    error_content = cast(Any, native_starts[3]).content
+    assert error_content.type == "web_search_tool_result_error"
+    assert error_content.error_code == "max_uses_exceeded"
+
+
+@pytest.mark.asyncio
 async def test_stream_emits_native_blocks_with_gapless_indices(monkeypatch: pytest.MonkeyPatch) -> None:
     """The synthetic blocks take the swallowed tool_use events' place on the wire.
 

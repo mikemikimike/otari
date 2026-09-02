@@ -1135,11 +1135,18 @@ def test_intercept_routes_provider_keywords_to_the_gateway_backend(
     monkeypatch.setenv("OTARI_WEB_SEARCH_INTERCEPT", "true")
 
     pool_seen: list[Any] = []
+    max_uses_seen: list[int | None] = []
 
     async def fake_loop(
-        *, completion_kwargs: Any, pool: Any, max_iterations: int, emit_native_web_search: bool = False
+        *,
+        completion_kwargs: Any,
+        pool: Any,
+        max_iterations: int,
+        emit_native_web_search: bool = False,
+        max_web_search_uses: int | None = None,
     ) -> MessageResponse:
         pool_seen.append(pool)
+        max_uses_seen.append(max_web_search_uses)
         return _text_response("via-web-search-loop")
 
     fake_backend = AsyncMock()
@@ -1166,6 +1173,7 @@ def test_intercept_routes_provider_keywords_to_the_gateway_backend(
 
     assert resp.status_code == 200, resp.text
     assert pool_seen == [fake_backend], "declaration was forwarded instead of intercepted"
+    assert max_uses_seen == [tool_entry.get("max_uses")]
 
 
 def test_intercept_emits_native_blocks_only_for_a_native_declaration(

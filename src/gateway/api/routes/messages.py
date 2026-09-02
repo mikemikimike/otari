@@ -134,19 +134,26 @@ def _is_gateway_minted_result(block: Any) -> bool:
     field with a signed blob, and the gateway cannot, so it sends the field empty
     (see ``mcp_loop_messages._native_web_search_blocks``). A result block whose hits
     all carry an empty value is therefore ours; one carrying real signed content came
-    from a provider that ran the search itself and must survive untouched.
+    from a provider that ran the search itself and must survive untouched. The
+    gateway's max-uses error uses an explicit additive marker because the error
+    variant has no encrypted-content field.
 
     An empty ``content`` list counts as ours: that is what a gateway search with no
-    usable hits produces, and a provider reporting no results uses the error shape
-    instead.
+    usable hits produces, and a provider reporting no results uses the unmarked error
+    shape instead.
     """
     if not isinstance(block, dict) or block.get("type") != "web_search_tool_result":
         return False
     hits = block.get("content")
     if not isinstance(hits, list):
-        # The error shape (``web_search_tool_result_error``) is a dict, and only a
-        # provider produces it. Never ours.
-        return False
+        # The gateway's max-uses error carries an additive provenance marker so an
+        # echoed response can be scrubbed without misclassifying provider errors.
+        return (
+            isinstance(hits, dict)
+            and hits.get("type") == "web_search_tool_result_error"
+            and hits.get("error_code") == "max_uses_exceeded"
+            and hits.get("gateway_minted") is True
+        )
     return all(isinstance(hit, dict) and not hit.get("encrypted_content") for hit in hits)
 
 
@@ -424,12 +431,15 @@ class _MessagesAdapter:
         on_first_response: Callable[[], None] | None = None,
         *,
         emit_native_web_search: bool = False,
+        max_web_search_uses: int | None = None,
     ) -> MessageResponse:
         # Standalone dispatch has no lock-in callback; only pass the kwarg on
         # the platform-attempt path so test fakes can mirror each call shape.
         extra: dict[str, Any] = {}
         if on_first_response is not None:
             extra["on_first_response"] = on_first_response
+        if max_web_search_uses is not None:
+            extra["max_web_search_uses"] = max_web_search_uses
         return await anthropic_tool_loop(
             completion_kwargs=kwargs,
             pool=pool,
@@ -445,12 +455,17 @@ class _MessagesAdapter:
         max_iterations: int,
         *,
         emit_native_web_search: bool = False,
+        max_web_search_uses: int | None = None,
     ) -> AsyncIterator[MessageStreamEvent]:
+        extra: dict[str, Any] = {}
+        if max_web_search_uses is not None:
+            extra["max_web_search_uses"] = max_web_search_uses
         return anthropic_tool_loop_stream(
             completion_kwargs=kwargs,
             pool=pool,
             max_iterations=max_iterations,
             emit_native_web_search=emit_native_web_search,
+            **extra,
         )
 
     def inject_hints(

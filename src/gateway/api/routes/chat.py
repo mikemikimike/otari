@@ -234,6 +234,7 @@ class _ChatAdapter:
         on_first_response: Callable[[], None] | None = None,
         *,
         emit_native_web_search: bool = False,
+        max_web_search_uses: int | None = None,
     ) -> ChatCompletion:
         # ``emit_native_web_search`` is accepted for interface parity and ignored:
         # this format has no native vocabulary for a server-side tool call, so a
@@ -257,6 +258,7 @@ class _ChatAdapter:
         max_iterations: int,
         *,
         emit_native_web_search: bool = False,
+        max_web_search_uses: int | None = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         return mcp_tool_loop_stream(
             completion_kwargs=kwargs,
