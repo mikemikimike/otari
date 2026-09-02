@@ -38,6 +38,7 @@ from gateway.services.tool_format import (
     inject_purpose_hints_anthropic,
     openai_to_anthropic_tools,
 )
+from gateway.services.web_search_budget import WebSearchBudget
 
 
 class _FakePool:
@@ -1274,7 +1275,7 @@ async def test_native_max_uses_stops_further_searches_and_reports_an_error(
         pool=cast(Any, pool),
         max_iterations=5,
         emit_native_web_search=True,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     assert pool.calls == [("web_search", {"query": "first"})]
@@ -1338,7 +1339,7 @@ async def test_stream_native_max_uses_stops_further_searches_and_reports_an_erro
             pool=cast(Any, pool),
             max_iterations=5,
             emit_native_web_search=True,
-            max_web_search_uses=1,
+            web_search_budget=WebSearchBudget(1),
         )
     ]
 
@@ -1381,7 +1382,7 @@ async def test_native_max_uses_error_block_is_anthropic_schema_only(
         pool=cast(Any, _FakeSearchPool()),
         max_iterations=5,
         emit_native_web_search=True,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     error_content = cast(Any, cast(Any, result.content[3]).content)
@@ -1413,7 +1414,7 @@ async def test_native_max_uses_is_not_spent_by_a_failed_search(
         pool=cast(Any, pool),
         max_iterations=5,
         emit_native_web_search=True,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     assert pool.calls == [("web_search", {"query": "first"}), ("web_search", {"query": "second"})]
@@ -1475,7 +1476,7 @@ async def test_native_max_uses_does_not_cap_a_foreign_tool_named_web_search(
         completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
         pool=cast(Any, pool),
         max_iterations=5,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     assert pool.calls == [("web_search", {"query": "first"}), ("web_search", {"query": "second"})]
@@ -1694,7 +1695,7 @@ async def test_stream_mixed_batch_exit_still_honors_the_cap(
             pool=cast(Any, pool),
             max_iterations=5,
             emit_native_web_search=True,
-            max_web_search_uses=1,
+            web_search_budget=WebSearchBudget(1),
         )
     ]
 

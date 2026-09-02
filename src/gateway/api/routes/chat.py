@@ -51,6 +51,7 @@ from gateway.services.mcp_loop import (
     mcp_tool_loop,
     mcp_tool_loop_stream,
 )
+from gateway.services.web_search_budget import WebSearchBudget
 from gateway.streaming import OPENAI_STREAM_FORMAT, StreamFormat
 from gateway.types.attempt import Attempt
 
@@ -234,20 +235,20 @@ class _ChatAdapter:
         on_first_response: Callable[[], None] | None = None,
         *,
         emit_native_web_search: bool = False,
-        max_web_search_uses: int | None = None,
+        web_search_budget: WebSearchBudget | None = None,
     ) -> ChatCompletion:
         # ``emit_native_web_search`` is accepted for interface parity and ignored:
         # this format has no native vocabulary for a server-side tool call, so a
         # gateway-run search stays invisible on the wire (see docs/tools.md).
-        # ``max_web_search_uses`` is not: the cap bounds what the caller is billed
+        # ``web_search_budget`` is not: the cap bounds what the caller is billed
         # for, which every format owes whether or not it can describe the search.
         # Standalone dispatch has no lock-in callback; only pass the kwarg on
         # the platform-attempt path so test fakes can mirror each call shape.
         extra: dict[str, Any] = {}
         if on_first_response is not None:
             extra["on_first_response"] = on_first_response
-        if max_web_search_uses is not None:
-            extra["max_web_search_uses"] = max_web_search_uses
+        if web_search_budget is not None:
+            extra["web_search_budget"] = web_search_budget
         return await mcp_tool_loop(
             completion_kwargs=kwargs,
             pool=pool,
@@ -262,11 +263,11 @@ class _ChatAdapter:
         max_iterations: int,
         *,
         emit_native_web_search: bool = False,
-        max_web_search_uses: int | None = None,
+        web_search_budget: WebSearchBudget | None = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         extra: dict[str, Any] = {}
-        if max_web_search_uses is not None:
-            extra["max_web_search_uses"] = max_web_search_uses
+        if web_search_budget is not None:
+            extra["web_search_budget"] = web_search_budget
         return mcp_tool_loop_stream(
             completion_kwargs=kwargs,
             pool=pool,

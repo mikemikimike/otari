@@ -210,3 +210,38 @@ def test_max_uses_bounds_the_searches_on_the_openai_shaped_endpoint(
         "tool_call_id": "call_1",
         "content": "[tool error] max_uses_exceeded",
     }
+
+
+def test_max_uses_zero_refuses_the_first_search_rather_than_uncapping_it(
+    client: TestClient,
+    api_key_header: dict[str, str],
+) -> None:
+    """A cap of zero is a cap, so the backend is never reached."""
+    search = AsyncMock(return_value="never called")
+    captured: list[dict[str, Any]] = []
+
+    async def fake_acompletion(**kwargs: Any) -> ChatCompletion:
+        captured.append(kwargs)
+        return [_completion(tool_call=True), _completion(tool_call=False)][len(captured) - 1]
+
+    with (
+        patch("gateway.services.mcp_loop.acompletion", new=fake_acompletion),
+        patch("gateway.services.web_search_backend.WebSearchBackend._search_tool", new=search),
+        patch.dict(
+            "os.environ",
+            {"OTARI_WEB_SEARCH_URL": "http://web-search.invalid", "OTARI_WEB_SEARCH_INTERCEPT": "true"},
+        ),
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": MODEL_NAME,
+                "messages": [{"role": "user", "content": "what is otari"}],
+                "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 0}],
+            },
+            headers=api_key_header,
+        )
+
+    assert response.status_code == 200, response.text
+    assert search.await_count == 0, "a cap of zero was read as no cap"
+    assert captured[1]["messages"][-1]["content"] == "[tool error] max_uses_exceeded"

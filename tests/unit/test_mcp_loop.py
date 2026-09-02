@@ -33,6 +33,7 @@ from gateway.services.mcp_loop import (
     mcp_tool_loop,
     mcp_tool_loop_stream,
 )
+from gateway.services.web_search_budget import WebSearchBudget
 
 _FinishReason = Literal["stop", "length", "tool_calls", "content_filter", "function_call"]
 
@@ -342,7 +343,7 @@ async def test_max_uses_stops_further_searches_and_reports_a_tool_error(
         completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}]},
         pool=cast(Any, pool),
         max_iterations=5,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     assert pool.calls == [("web_search", {"query": "first"})]
@@ -383,7 +384,7 @@ async def test_stream_max_uses_stops_further_searches(monkeypatch: pytest.Monkey
         completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}]},
         pool=cast(Any, pool),
         max_iterations=5,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     ):
         pass
 
@@ -416,10 +417,45 @@ async def test_max_uses_is_not_spent_by_a_failed_search(monkeypatch: pytest.Monk
         completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}]},
         pool=cast(Any, pool),
         max_iterations=5,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     assert pool.calls == [("web_search", {"query": "first"}), ("web_search", {"query": "second"})]
+
+
+@pytest.mark.asyncio
+async def test_max_uses_is_not_spent_by_a_search_that_returned_a_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backends disagree about raising: an empty query comes back as a string.
+
+    ``WebSearchBackend`` returns the ``[tool error]`` sentinel for an empty query
+    rather than raising, and ``ToolUsageTally`` reads that as not billed, so the
+    cap must not be spent by it either.
+    """
+    responses = iter(
+        [
+            _completion(finish="tool_calls", tool_calls=[_search_call("c1", "")]),
+            _completion(finish="tool_calls", tool_calls=[_search_call("c2", "second")]),
+            _completion(finish="stop", content="done"),
+        ]
+    )
+
+    async def fake_acompletion(**kwargs: Any) -> ChatCompletion:
+        return next(responses)
+
+    monkeypatch.setattr(mcp_loop_module, "acompletion", fake_acompletion)
+    pool = _FakePool(tool_names=["web_search"], results={"web_search": "[tool error] empty query"})
+    pool.take_last_results = lambda: []  # type: ignore[attr-defined]
+
+    await mcp_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}]},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        web_search_budget=WebSearchBudget(1),
+    )
+
+    assert pool.calls == [("web_search", {"query": ""}), ("web_search", {"query": "second"})]
 
 
 @pytest.mark.asyncio
@@ -445,7 +481,7 @@ async def test_max_uses_does_not_cap_a_foreign_tool_named_web_search(
         completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}]},
         pool=pool,
         max_iterations=5,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     assert pool.calls == [("web_search", {"query": "first"}), ("web_search", {"query": "second"})]

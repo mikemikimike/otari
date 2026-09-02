@@ -391,8 +391,17 @@ def test_no_max_uses_leaves_the_searches_uncapped() -> None:
     assert _capped_context(None).max_web_search_uses is None
 
 
+def test_a_zero_max_uses_caps_the_searches_at_none_rather_than_at_no_limit() -> None:
+    """A spend control must not read a limit of zero as permission to spend freely."""
+    entry = {"type": "web_search_20250305", "max_uses": 0}
+    ctx = _capped_context(entry)
+    assert ctx.max_web_search_uses == 0
+    assert ctx.web_search_budget is not None
+    assert ctx.web_search_budget.exhausted(), "the first search must already be over the cap"
+
+
 def test_a_nonsensical_max_uses_is_ignored_rather_than_guessed_at() -> None:
-    """Zero, negative, boolean and non-numeric caps are caller mistakes, not budgets."""
-    for value in (0, -1, True, False, "2", 1.5, None):
+    """Negative, boolean and non-numeric caps are caller mistakes, not budgets."""
+    for value in (-1, True, False, "2", 1.5, None):
         entry = {"type": "web_search_20250305", "max_uses": value}
         assert _capped_context(entry).max_web_search_uses is None, value

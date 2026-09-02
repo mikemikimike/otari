@@ -195,6 +195,7 @@ from gateway.services.tool_usage import (
 from gateway.services.upstream_redaction import redact_upstream_message
 from gateway.services.url_safety import UnsafeURLError, validate_mcp_url
 from gateway.services.web_search_backend import WEB_SEARCH_TOOL_NAME, WebSearchNotReachableError
+from gateway.services.web_search_budget import WebSearchBudget
 from gateway.services.workspace_scope import (
     organization_for_workspace_id,
     resolve_workspace_id,
@@ -655,7 +656,7 @@ class FormatAdapter(Protocol, Generic[ResultT, ChunkT]):
         on_first_response: Callable[[], None] | None = None,
         *,
         emit_native_web_search: bool = False,
-        max_web_search_uses: int | None = None,
+        web_search_budget: WebSearchBudget | None = None,
     ) -> ResultT: ...
 
     def open_tool_loop_stream(
@@ -665,7 +666,7 @@ class FormatAdapter(Protocol, Generic[ResultT, ChunkT]):
         max_iterations: int,
         *,
         emit_native_web_search: bool = False,
-        max_web_search_uses: int | None = None,
+        web_search_budget: WebSearchBudget | None = None,
     ) -> AsyncIterator[ChunkT]: ...
 
     def inject_hints(
@@ -1991,6 +1992,12 @@ class ToolContext:
         # request shares one tally across attempts: every executed call was paid
         # for, whether or not its attempt won.
         self.tally = ToolUsageTally()
+        # One budget per request, for the reason the tally is: a multi-attempt
+        # request re-runs its searches on the attempt that serves, and every one of
+        # them is billed, so the cap has to be spent by the request rather than
+        # refilled per attempt.
+        cap = self.max_web_search_uses
+        self.web_search_budget = WebSearchBudget(cap) if cap is not None else None
 
     def build_sandbox_backend(self) -> SandboxBackend:
         """The one place a ``SandboxBackend`` is constructed for this request.
@@ -2033,7 +2040,7 @@ class ToolContext:
 
     @property
     def max_web_search_uses(self) -> int | None:
-        """The positive web-search use cap, when the caller supplied one.
+        """The web-search use cap, when the caller supplied a usable one.
 
         Not gated on :attr:`emit_native_web_search`: the cap bounds what the request
         is billed for, so it is honored on every declaration shape and in every wire
@@ -2041,12 +2048,18 @@ class ToolContext:
         ``max_uses_exceeded`` result block where the caller can read one and a plain
         tool error everywhere else.
 
-        A ``bool`` is rejected outright rather than counted as its integer value: a
-        cap of ``True`` is a caller mistake, and reading it as 1 would silently
-        answer a spend question they did not ask.
+        ``0`` is a cap of zero searches, not the absence of one. Reading it as
+        "uncapped" would answer a spend limit with unlimited spend, which is the one
+        direction this must not fail; a caller who meant "do not search" is better
+        served by every search being refused than by a bill.
+
+        A ``bool`` is rejected outright rather than counted as its integer value,
+        and so is a negative: a cap of ``True`` or ``-1`` is a caller mistake, and
+        guessing at what it meant would silently answer a spend question they did
+        not ask.
         """
         value = (self.web_search_tool_entry or {}).get("max_uses")
-        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
     @property
     def intercepts_web_search(self) -> bool:
@@ -3195,10 +3208,13 @@ def _loop_options(tool_ctx: ToolContext) -> dict[str, Any]:
     Presence-encoded rather than passed as ``None``, for the reason
     ``on_first_response`` is: a test fake mirrors the call shape a given request
     actually produces, so a kwarg appearing at all is itself the signal.
+
+    The budget itself travels, not the number it was built from: every attempt of
+    one request draws on the same one.
     """
-    if tool_ctx.max_web_search_uses is None:
+    if tool_ctx.web_search_budget is None:
         return {}
-    return {"max_web_search_uses": tool_ctx.max_web_search_uses}
+    return {"web_search_budget": tool_ctx.web_search_budget}
 
 
 async def dispatch_non_stream(

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from gateway.services.tool_usage import is_tool_error
 from gateway.services.web_search_backend import WEB_SEARCH_TOOL_NAME
 
 if TYPE_CHECKING:
@@ -24,9 +25,13 @@ class WebSearchBudget:
     """The searches one request has left.
 
     Created only when the caller declared a positive cap, so an uncapped request
-    carries no budget and the loops keep their previous behavior. Requests never
-    share one: the tool loops run a request's rounds sequentially, so no locking
-    is needed, but two requests must not see each other's count.
+    carries no budget and the loops keep their previous behavior. One belongs to
+    one request, for the reason :class:`~gateway.services.tool_usage.ToolUsageTally`
+    does: a multi-attempt request re-runs its searches and every one of them is
+    billed, so the cap has to be spent by the request rather than refilled per
+    attempt. It is built once on ``ToolContext`` and handed to whichever loop runs.
+    Requests never share one: the tool loops run a request's rounds sequentially,
+    so no locking is needed, but two requests must not see each other's count.
     """
 
     def __init__(self, max_uses: int) -> None:
@@ -36,14 +41,19 @@ class WebSearchBudget:
         """Whether the next search would exceed the cap."""
         return self._remaining <= 0
 
-    def record(self) -> None:
-        """Charge one search against the cap.
+    def record(self, result: str) -> None:
+        """Charge ``result``'s search against the cap unless it failed.
 
-        Called after a search succeeds, not before it is attempted: the cap bounds
-        what the caller is billed for, and a failed search is never billed (see
-        :mod:`gateway.services.tool_usage`). ``max_tool_iterations`` is what bounds
-        a model that keeps retrying a broken backend.
+        Failure is read off the ``[tool error]`` sentinel rather than off an
+        exception, because that is what decides billable in
+        :class:`~gateway.services.tool_usage.ToolUsageTally` and the two numbers have
+        to agree: ``WebSearchBackend`` raises when its backend is unreachable but
+        returns the sentinel for an empty query, and neither is billed.
+        ``max_tool_iterations`` is what bounds a model that keeps retrying a broken
+        backend.
         """
+        if is_tool_error(result):
+            return
         self._remaining -= 1
 
 

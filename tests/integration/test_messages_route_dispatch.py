@@ -1135,7 +1135,7 @@ def test_intercept_routes_provider_keywords_to_the_gateway_backend(
     monkeypatch.setenv("OTARI_WEB_SEARCH_INTERCEPT", "true")
 
     pool_seen: list[Any] = []
-    max_uses_seen: list[int | None] = []
+    budgets_seen: list[Any] = []
 
     async def fake_loop(
         *,
@@ -1143,10 +1143,10 @@ def test_intercept_routes_provider_keywords_to_the_gateway_backend(
         pool: Any,
         max_iterations: int,
         emit_native_web_search: bool = False,
-        max_web_search_uses: int | None = None,
+        web_search_budget: Any = None,
     ) -> MessageResponse:
         pool_seen.append(pool)
-        max_uses_seen.append(max_web_search_uses)
+        budgets_seen.append(web_search_budget)
         return _text_response("via-web-search-loop")
 
     fake_backend = AsyncMock()
@@ -1173,7 +1173,17 @@ def test_intercept_routes_provider_keywords_to_the_gateway_backend(
 
     assert resp.status_code == 200, resp.text
     assert pool_seen == [fake_backend], "declaration was forwarded instead of intercepted"
-    assert max_uses_seen == [tool_entry.get("max_uses")]
+    cap = tool_entry.get("max_uses")
+    budget = budgets_seen[0]
+    if cap is None:
+        assert budget is None
+    else:
+        # The cap arrived by value, not just as "some budget": spending it exactly
+        # ``max_uses`` times is what exhausts it.
+        assert not budget.exhausted()
+        for _ in range(cap):
+            budget.record("results")
+        assert budget.exhausted()
 
 
 def test_intercept_emits_native_blocks_only_for_a_native_declaration(

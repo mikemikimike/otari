@@ -216,7 +216,7 @@ async def _execute_mcp_calls(
             text = f"[tool error] {exc}"
         else:
             if capped and budget is not None:
-                budget.record()
+                budget.record(text)
         out.append({"role": "tool", "tool_call_id": tc["id"] or "", "content": text})
     return out
 
@@ -271,10 +271,10 @@ class _ChatToolLoopStrategy:
 
     transcript_key = "messages"
 
-    def __init__(self, *, max_web_search_uses: int | None = None) -> None:
+    def __init__(self, *, budget: WebSearchBudget | None = None) -> None:
         # Absent unless the caller capped the searches, which keeps the shared
         # instance in ``_strategy_for`` free of per-request state.
-        self._budget = WebSearchBudget(max_web_search_uses) if max_web_search_uses is not None else None
+        self._budget = budget
 
     def coerce_transcript(self, value: Any) -> list[Any]:
         return list(value or [])
@@ -508,15 +508,15 @@ class _ChatToolLoopStrategy:
 _CHAT_STRATEGY = _ChatToolLoopStrategy()
 
 
-def _strategy_for(max_web_search_uses: int | None) -> _ChatToolLoopStrategy:
+def _strategy_for(budget: WebSearchBudget | None) -> _ChatToolLoopStrategy:
     """The shared strategy, or a per-request one when the caller capped searches.
 
     Only a capped request has anything per-request to hold, so every other request
     keeps reusing the single module-level instance.
     """
-    if max_web_search_uses is None:
+    if budget is None:
         return _CHAT_STRATEGY
-    return _ChatToolLoopStrategy(max_web_search_uses=max_web_search_uses)
+    return _ChatToolLoopStrategy(budget=budget)
 
 
 async def mcp_tool_loop_stream(
@@ -524,7 +524,7 @@ async def mcp_tool_loop_stream(
     completion_kwargs: dict[str, Any],
     pool: ToolBackend,
     max_iterations: int,
-    max_web_search_uses: int | None = None,
+    web_search_budget: WebSearchBudget | None = None,
 ) -> AsyncGenerator[ChatCompletionChunk, None]:
     """Yield chunks across multiple `acompletion(stream=True)` calls, with MCP execution between rounds.
 
@@ -546,7 +546,7 @@ async def mcp_tool_loop_stream(
     # instead of waiting for event-loop async-generator finalization.
     async with aclosing(
         run_tool_loop_stream(
-            strategy=_strategy_for(max_web_search_uses),
+            strategy=_strategy_for(web_search_budget),
             completion_kwargs=completion_kwargs,
             pool=pool,
             max_iterations=max_iterations,
@@ -562,7 +562,7 @@ async def mcp_tool_loop(
     pool: ToolBackend,
     max_iterations: int,
     on_first_response: Callable[[], None] | None = None,
-    max_web_search_uses: int | None = None,
+    web_search_budget: WebSearchBudget | None = None,
 ) -> ChatCompletion:
     """Non-streaming variant. Accumulates usage across iterations into the returned completion.
 
@@ -571,7 +571,7 @@ async def mcp_tool_loop(
     loop in :mod:`gateway.api.routes.chat` is the consumer.
     """
     return await run_tool_loop(
-        strategy=_strategy_for(max_web_search_uses),
+        strategy=_strategy_for(web_search_budget),
         completion_kwargs=completion_kwargs,
         pool=pool,
         max_iterations=max_iterations,

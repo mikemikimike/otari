@@ -217,7 +217,7 @@ async def _execute_tool_uses(
             text = f"[tool error] {exc}"
         else:
             if capped and budget is not None:
-                budget.record()
+                budget.record(text)
             if native_blocks is not None:
                 native_blocks.extend(_native_blocks_for_call(pool, block.name, arguments))
         out.append({"type": "tool_result", "tool_use_id": block.id, "content": text})
@@ -351,7 +351,7 @@ async def _execute_stream_owned(
             text = f"[tool error] {exc}"
         else:
             if capped and budget is not None:
-                budget.record()
+                budget.record(text)
             if native_blocks is not None:
                 native_blocks.extend(_native_blocks_for_call(pool, spec["name"], parsed_input))
         results.append({"type": "tool_result", "tool_use_id": spec["id"], "content": text})
@@ -405,12 +405,12 @@ class _MessagesToolLoopStrategy:
         self,
         *,
         emit_native_web_search: bool = False,
-        max_web_search_uses: int | None = None,
+        budget: WebSearchBudget | None = None,
     ) -> None:
         self._emit_native_web_search = emit_native_web_search
         # Absent unless the caller capped the searches, so the shared instance in
         # ``_strategy_for`` stays free of per-request state.
-        self._budget = WebSearchBudget(max_web_search_uses) if max_web_search_uses is not None else None
+        self._budget = budget
 
     def _native_sink(self, sink: list[Any]) -> list[Any] | None:
         """``sink`` when native emission is on, else ``None`` (collect nothing)."""
@@ -760,7 +760,7 @@ _MESSAGES_STRATEGY = _MessagesToolLoopStrategy()
 
 def _strategy_for(
     emit_native_web_search: bool,
-    max_web_search_uses: int | None,
+    budget: WebSearchBudget | None,
 ) -> _MessagesToolLoopStrategy:
     """The shared strategy, or a per-request one when either option is set.
 
@@ -768,10 +768,10 @@ def _strategy_for(
     module-level instance; an uncapped, non-native request has nothing per-request
     to hold and keeps reusing it.
     """
-    if emit_native_web_search or max_web_search_uses is not None:
+    if emit_native_web_search or budget is not None:
         return _MessagesToolLoopStrategy(
             emit_native_web_search=emit_native_web_search,
-            max_web_search_uses=max_web_search_uses,
+            budget=budget,
         )
     return _MESSAGES_STRATEGY
 
@@ -783,7 +783,7 @@ async def anthropic_tool_loop(
     max_iterations: int,
     on_first_response: Callable[[], None] | None = None,
     emit_native_web_search: bool = False,
-    max_web_search_uses: int | None = None,
+    web_search_budget: WebSearchBudget | None = None,
 ) -> MessageResponse:
     """Non-streaming Anthropic Messages tool-use loop.
 
@@ -809,7 +809,7 @@ async def anthropic_tool_loop(
     ``server_tool_use`` / ``web_search_tool_result`` pair per gateway-run search.
     """
     return await run_tool_loop(
-        strategy=_strategy_for(emit_native_web_search, max_web_search_uses),
+        strategy=_strategy_for(emit_native_web_search, web_search_budget),
         completion_kwargs=completion_kwargs,
         pool=pool,
         max_iterations=max_iterations,
@@ -823,7 +823,7 @@ async def anthropic_tool_loop_stream(
     pool: ToolBackend,
     max_iterations: int,
     emit_native_web_search: bool = False,
-    max_web_search_uses: int | None = None,
+    web_search_budget: WebSearchBudget | None = None,
 ) -> AsyncGenerator[MessageStreamEvent, None]:
     """Streaming Anthropic Messages tool-use loop.
 
@@ -855,7 +855,7 @@ async def anthropic_tool_loop_stream(
     # instead of waiting for event-loop async-generator finalization.
     async with aclosing(
         run_tool_loop_stream(
-            strategy=_strategy_for(emit_native_web_search, max_web_search_uses),
+            strategy=_strategy_for(emit_native_web_search, web_search_budget),
             completion_kwargs=completion_kwargs,
             pool=pool,
             max_iterations=max_iterations,

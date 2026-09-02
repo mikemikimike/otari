@@ -36,6 +36,7 @@ from gateway.services.tool_format import (
     inject_purpose_hints_responses,
     openai_to_responses_tools,
 )
+from gateway.services.web_search_budget import WebSearchBudget
 
 
 class _FakePool:
@@ -271,7 +272,7 @@ async def test_max_uses_stops_further_searches_and_announces_only_the_one_that_r
         completion_kwargs={"model": "fake", "input_data": [{"role": "user", "content": "hi"}]},
         pool=cast(Any, pool),
         max_iterations=5,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     assert pool.calls == [("web_search", {"query": "first"})]
@@ -308,7 +309,7 @@ async def test_max_uses_does_not_cap_a_foreign_tool_named_web_search(
         completion_kwargs={"model": "fake", "input_data": [{"role": "user", "content": "hi"}]},
         pool=cast(Any, pool),
         max_iterations=5,
-        max_web_search_uses=1,
+        web_search_budget=WebSearchBudget(1),
     )
 
     assert pool.calls == [("web_search", {"query": "first"}), ("web_search", {"query": "second"})]

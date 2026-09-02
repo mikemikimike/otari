@@ -115,7 +115,7 @@ async def _execute_function_calls(
             text = f"[tool error] {exc}"
         else:
             if capped and budget is not None:
-                budget.record()
+                budget.record(text)
         out.append({"type": "function_call_output", "call_id": item.call_id, "output": text})
     return out
 
@@ -297,7 +297,7 @@ async def _execute_stream_owned(
             text = f"[tool error] {exc}"
         else:
             if capped and budget is not None:
-                budget.record()
+                budget.record(text)
         results.append({"type": "function_call_output", "call_id": spec["call_id"], "output": text})
     return results
 
@@ -377,10 +377,10 @@ class _ResponsesToolLoopStrategy:
 
     transcript_key = "input_data"
 
-    def __init__(self, *, max_web_search_uses: int | None = None) -> None:
+    def __init__(self, *, budget: WebSearchBudget | None = None) -> None:
         # Absent unless the caller capped the searches, which keeps the shared
         # instance in ``_strategy_for`` free of per-request state.
-        self._budget = WebSearchBudget(max_web_search_uses) if max_web_search_uses is not None else None
+        self._budget = budget
 
     def coerce_transcript(self, value: Any) -> list[Any]:
         return _coerce_input_to_list(value)
@@ -718,15 +718,15 @@ class _ResponsesToolLoopStrategy:
 _RESPONSES_STRATEGY = _ResponsesToolLoopStrategy()
 
 
-def _strategy_for(max_web_search_uses: int | None) -> _ResponsesToolLoopStrategy:
+def _strategy_for(budget: WebSearchBudget | None) -> _ResponsesToolLoopStrategy:
     """The shared strategy, or a per-request one when the caller capped searches.
 
     Only a capped request has anything per-request to hold, so every other request
     keeps reusing the single module-level instance.
     """
-    if max_web_search_uses is None:
+    if budget is None:
         return _RESPONSES_STRATEGY
-    return _ResponsesToolLoopStrategy(max_web_search_uses=max_web_search_uses)
+    return _ResponsesToolLoopStrategy(budget=budget)
 
 
 async def responses_tool_loop(
@@ -735,7 +735,7 @@ async def responses_tool_loop(
     pool: ToolBackend,
     max_iterations: int,
     on_first_response: Callable[[], None] | None = None,
-    max_web_search_uses: int | None = None,
+    web_search_budget: WebSearchBudget | None = None,
 ) -> Response:
     """Non-streaming OpenAI Responses tool-use loop.
 
@@ -759,7 +759,7 @@ async def responses_tool_loop(
     reasoning items that can't be replayed against another provider.
     """
     return await run_tool_loop(
-        strategy=_strategy_for(max_web_search_uses),
+        strategy=_strategy_for(web_search_budget),
         completion_kwargs=completion_kwargs,
         pool=pool,
         max_iterations=max_iterations,
@@ -772,7 +772,7 @@ async def responses_tool_loop_stream(
     completion_kwargs: dict[str, Any],
     pool: ToolBackend,
     max_iterations: int,
-    max_web_search_uses: int | None = None,
+    web_search_budget: WebSearchBudget | None = None,
 ) -> AsyncGenerator[ResponseStreamEvent, None]:
     """Streaming OpenAI Responses tool-use loop.
 
@@ -793,7 +793,7 @@ async def responses_tool_loop_stream(
     # instead of waiting for event-loop async-generator finalization.
     async with aclosing(
         run_tool_loop_stream(
-            strategy=_strategy_for(max_web_search_uses),
+            strategy=_strategy_for(web_search_budget),
             completion_kwargs=completion_kwargs,
             pool=pool,
             max_iterations=max_iterations,
