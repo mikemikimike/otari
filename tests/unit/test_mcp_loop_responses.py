@@ -8,6 +8,7 @@ input items shape.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
@@ -702,6 +703,61 @@ async def test_stream_passes_text_events_through_and_terminates(monkeypatch: pyt
         "response.output_text.delta",
         "response.completed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_max_uses_announces_only_the_search_that_ran(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused search gets no ``web_search_call`` item on the wire.
+
+    ``synthetic_events`` runs after ``advance_stream_transcript``, so the refusal
+    has to be recorded on the per-iteration state for it to be skipped there.
+    Without that, the stream would announce a search the cap stopped.
+    """
+
+    def _search_round(call_id: str, item_id: str, query: str) -> AsyncIterator[ResponseStreamEvent]:
+        arguments = json.dumps({"query": query})
+        return _async_iter(
+            _output_item_added(0, _function_call(call_id, "web_search", "")),
+            _function_call_args_delta(0, item_id, arguments),
+            _function_call_args_done(0, item_id, "web_search", arguments),
+            _output_item_done(0, _function_call(call_id, "web_search", arguments)),
+            _response_completed(),
+        )
+
+    iter_streams = iter(
+        [
+            _search_round("c1", "fc_1", "first"),
+            _search_round("c2", "fc_2", "second"),
+            _async_iter(_text_delta("msg_1", 0, "done"), _response_completed()),
+        ]
+    )
+
+    async def fake_aresponses(**kwargs: Any) -> AsyncIterator[ResponseStreamEvent]:
+        return next(iter_streams)
+
+    monkeypatch.setattr(responses_loop_module, "aresponses", fake_aresponses)
+    pool = _FakeSearchPool()
+
+    events = [
+        event
+        async for event in responses_tool_loop_stream(
+            completion_kwargs={"model": "fake", "input_data": "go"},
+            pool=cast(Any, pool),
+            max_iterations=5,
+            web_search_budget=WebSearchBudget(1),
+        )
+    ]
+
+    assert pool.calls == [("web_search", {"query": "first"})]
+    announced = [
+        event
+        for event in events
+        if event.type == "response.output_item.added"
+        and getattr(event.item, "type", None) == "web_search_call"
+    ]
+    assert len(announced) == 1, "a refused search must not be announced as a completed one"
 
 
 @pytest.mark.asyncio
