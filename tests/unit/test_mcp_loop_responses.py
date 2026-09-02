@@ -232,6 +232,88 @@ async def test_loop_executes_owned_function_call_and_completes(monkeypatch: pyte
     assert out.status == "completed"
 
 
+class _FakeSearchPool(_FakePool):
+    """A pool that owns ``web_search`` and buffers hits like the real search backend.
+
+    ``take_last_results`` is what marks it as the gateway's own search rather than
+    an MCP server that happens to expose the same tool name.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(tool_names=["web_search"], results={"web_search": "[1] Result\nhttps://a"})
+
+    def take_last_results(self) -> list[dict[str, Any]]:
+        return [{"url": "https://a", "title": "A"}]
+
+
+@pytest.mark.asyncio
+async def test_max_uses_stops_further_searches_and_announces_only_the_one_that_ran(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refused search is a tool error, and no ``web_search_call`` claims it happened."""
+    responses = iter(
+        [
+            _response(output=[_function_call("c1", "web_search", '{"query": "first"}')]),
+            _response(output=[_function_call("c2", "web_search", '{"query": "second"}')]),
+            _response(output=[], status="completed"),
+        ]
+    )
+    captured_inputs: list[Any] = []
+
+    async def fake_aresponses(**kwargs: Any) -> Response:
+        captured_inputs.append(list(kwargs["input_data"]))
+        return next(responses)
+
+    monkeypatch.setattr(responses_loop_module, "aresponses", fake_aresponses)
+    pool = _FakeSearchPool()
+
+    out = await responses_tool_loop(
+        completion_kwargs={"model": "fake", "input_data": [{"role": "user", "content": "hi"}]},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        max_web_search_uses=1,
+    )
+
+    assert pool.calls == [("web_search", {"query": "first"})]
+    refused = next(
+        item
+        for item in captured_inputs[2]
+        if isinstance(item, dict) and item.get("type") == "function_call_output" and item.get("call_id") == "c2"
+    )
+    assert refused["output"] == "[tool error] max_uses_exceeded"
+    announced = [item for item in (out.output or []) if getattr(item, "type", None) == "web_search_call"]
+    assert len(announced) == 1, "a refused search must not be announced as a completed one"
+
+
+@pytest.mark.asyncio
+async def test_max_uses_does_not_cap_a_foreign_tool_named_web_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pool with no result buffer is not the search backend, so its tool is the caller's."""
+    responses = iter(
+        [
+            _response(output=[_function_call("c1", "web_search", '{"query": "first"}')]),
+            _response(output=[_function_call("c2", "web_search", '{"query": "second"}')]),
+            _response(output=[], status="completed"),
+        ]
+    )
+
+    async def fake_aresponses(**kwargs: Any) -> Response:
+        return next(responses)
+
+    monkeypatch.setattr(responses_loop_module, "aresponses", fake_aresponses)
+    pool = _FakePool(tool_names=["web_search"], results={"web_search": "ok"})
+
+    await responses_tool_loop(
+        completion_kwargs={"model": "fake", "input_data": [{"role": "user", "content": "hi"}]},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        max_web_search_uses=1,
+    )
+
+    assert pool.calls == [("web_search", {"query": "first"}), ("web_search", {"query": "second"})]
+
+
 @pytest.mark.asyncio
 async def test_loop_replays_and_returns_compaction_from_hidden_iteration(
     monkeypatch: pytest.MonkeyPatch,

@@ -222,7 +222,7 @@ def test_a_result_with_no_hits_is_treated_as_ours() -> None:
 
 
 def test_a_provider_error_result_is_kept() -> None:
-    """The error shape is a dict, not a hit list, and only a provider produces it."""
+    """An error code the gateway never mints came from the provider and survives."""
     messages: list[dict[str, Any]] = [
         {
             "role": "assistant",
@@ -231,7 +231,7 @@ def test_a_provider_error_result_is_kept() -> None:
                 {
                     "type": "web_search_tool_result",
                     "tool_use_id": "srvtoolu_prov",
-                    "content": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"},
+                    "content": {"type": "web_search_tool_result_error", "error_code": "unavailable"},
                 },
             ],
         }
@@ -240,8 +240,12 @@ def test_a_provider_error_result_is_kept() -> None:
     assert _strip_gateway_minted_blocks(messages) == messages
 
 
-def test_a_gateway_max_uses_error_result_is_stripped() -> None:
-    """A max-uses error is gateway-owned, while the same unmarked provider error survives."""
+def test_a_max_uses_error_result_is_stripped() -> None:
+    """``max_uses_exceeded`` is the one error the gateway mints, so it is scrubbed.
+
+    No marker travels on the wire to say so: the response the client echoed is
+    Anthropic's schema and nothing else, and the block carries no results to lose.
+    """
     messages: list[dict[str, Any]] = [
         {
             "role": "assistant",
@@ -250,11 +254,7 @@ def test_a_gateway_max_uses_error_result_is_stripped() -> None:
                 {
                     "type": "web_search_tool_result",
                     "tool_use_id": "srvtoolu_gw",
-                    "content": {
-                        "type": "web_search_tool_result_error",
-                        "error_code": "max_uses_exceeded",
-                        "gateway_minted": True,
-                    },
+                    "content": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"},
                 },
                 {"type": "text", "text": "done"},
             ],

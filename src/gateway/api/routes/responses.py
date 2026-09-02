@@ -336,11 +336,15 @@ class _ResponsesAdapter:
         # ``emit_native_web_search`` is accepted for interface parity and ignored:
         # this format has no native vocabulary for a server-side tool call, so a
         # gateway-run search stays invisible on the wire (see docs/tools.md).
+        # ``max_web_search_uses`` is not: the cap bounds what the caller is billed
+        # for, which every format owes whether or not it can describe the search.
         # Standalone dispatch has no lock-in callback; only pass the kwarg on
         # the platform-attempt path so test fakes can mirror each call shape.
         extra: dict[str, Any] = {}
         if on_first_response is not None:
             extra["on_first_response"] = on_first_response
+        if max_web_search_uses is not None:
+            extra["max_web_search_uses"] = max_web_search_uses
         return await responses_tool_loop(
             completion_kwargs=kwargs,
             pool=pool,
@@ -357,10 +361,14 @@ class _ResponsesAdapter:
         emit_native_web_search: bool = False,
         max_web_search_uses: int | None = None,
     ) -> AsyncIterator[ResponseStreamEvent]:
+        extra: dict[str, Any] = {}
+        if max_web_search_uses is not None:
+            extra["max_web_search_uses"] = max_web_search_uses
         return responses_tool_loop_stream(
             completion_kwargs=kwargs,
             pool=pool,
             max_iterations=max_iterations,
+            **extra,
         )
 
     def inject_hints(

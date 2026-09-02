@@ -38,6 +38,7 @@ from gateway.services.mcp_loop import (
 )
 from gateway.services.tool_format import openai_to_anthropic_tools
 from gateway.services.web_search_backend import WEB_SEARCH_TOOL_NAME
+from gateway.services.web_search_budget import MAX_USES_EXCEEDED_ERROR, WebSearchBudget, is_capped_search
 
 if TYPE_CHECKING:
     from any_llm.types.messages import (
@@ -125,18 +126,23 @@ def _native_web_search_max_uses_error_blocks(query: str) -> list[Any]:
         WebSearchToolResultBlock(
             tool_use_id=tool_use_id,
             type="web_search_tool_result",
-            # The extra marker lets the inbound-message scrubber distinguish this
-            # gateway-generated error from a provider-generated error block when a
-            # client echoes the response into its next request.
-            content=WebSearchToolResultError.model_validate(
-                {
-                    "type": "web_search_tool_result_error",
-                    "error_code": "max_uses_exceeded",
-                    "gateway_minted": True,
-                }
+            content=WebSearchToolResultError(
+                type="web_search_tool_result_error",
+                error_code="max_uses_exceeded",
             ),
         ),
     ]
+
+
+def _max_uses_exceeded_result(
+    tool_use_id: str,
+    query: str,
+    native_blocks: list[Any] | None,
+) -> dict[str, Any]:
+    """The tool_result for a search the cap refused, collecting its native pair."""
+    if native_blocks is not None:
+        native_blocks.extend(_native_web_search_max_uses_error_blocks(query))
+    return {"type": "tool_result", "tool_use_id": tool_use_id, "content": MAX_USES_EXCEEDED_ERROR}
 
 
 def _native_blocks_for_call(pool: ToolBackend, name: str, arguments: dict[str, Any]) -> list[Any]:
@@ -181,8 +187,7 @@ async def _execute_tool_uses(
     blocks: list[Any],
     *,
     native_blocks: list[Any] | None = None,
-    max_web_search_uses: int | None = None,
-    web_search_uses: list[int] | None = None,
+    budget: WebSearchBudget | None = None,
 ) -> list[dict[str, Any]]:
     """Run each owned tool_use block and return the Anthropic tool_result blocks.
 
@@ -201,32 +206,18 @@ async def _execute_tool_uses(
     out: list[dict[str, Any]] = []
     for block in blocks:
         arguments = dict(block.input or {})
-        if (
-            max_web_search_uses is not None
-            and web_search_uses is not None
-            and block.name == WEB_SEARCH_TOOL_NAME
-            and web_search_uses[0] >= max_web_search_uses
-        ):
-            if native_blocks is not None:
-                native_blocks.extend(
-                    _native_web_search_max_uses_error_blocks(str(arguments.get("query") or ""))
-                )
-            out.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": "[tool error] max_uses_exceeded",
-                }
-            )
+        capped = is_capped_search(budget, pool, block.name)
+        if capped and budget is not None and budget.exhausted():
+            out.append(_max_uses_exceeded_result(block.id, str(arguments.get("query") or ""), native_blocks))
             continue
-        if web_search_uses is not None and block.name == WEB_SEARCH_TOOL_NAME:
-            web_search_uses[0] += 1
         try:
             text = await pool.call_tool(block.name, arguments)
         except Exception as exc:  # noqa: BLE001 — see docstring
             logger.warning("MCP tool %s execution failed: %s", block.name, exc)
             text = f"[tool error] {exc}"
         else:
+            if capped and budget is not None:
+                budget.record()
             if native_blocks is not None:
                 native_blocks.extend(_native_blocks_for_call(pool, block.name, arguments))
         out.append({"type": "tool_result", "tool_use_id": block.id, "content": text})
@@ -334,8 +325,7 @@ async def _execute_stream_owned(
     pool: ToolBackend,
     *,
     native_blocks: list[Any] | None = None,
-    max_web_search_uses: int | None = None,
-    web_search_uses: list[int] | None = None,
+    budget: WebSearchBudget | None = None,
 ) -> list[dict[str, Any]]:
     """Run the stream's gateway-owned tool_use blocks, returning tool_result blocks.
 
@@ -350,32 +340,18 @@ async def _execute_stream_owned(
             parsed_input = json.loads(state.tool_use_json_bufs.get(spec["index"], "") or "{}")
         except json.JSONDecodeError:
             parsed_input = {}
-        if (
-            max_web_search_uses is not None
-            and web_search_uses is not None
-            and spec["name"] == WEB_SEARCH_TOOL_NAME
-            and web_search_uses[0] >= max_web_search_uses
-        ):
-            if native_blocks is not None:
-                native_blocks.extend(
-                    _native_web_search_max_uses_error_blocks(str(parsed_input.get("query") or ""))
-                )
-            results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": spec["id"],
-                    "content": "[tool error] max_uses_exceeded",
-                }
-            )
+        capped = is_capped_search(budget, pool, spec["name"])
+        if capped and budget is not None and budget.exhausted():
+            results.append(_max_uses_exceeded_result(spec["id"], str(parsed_input.get("query") or ""), native_blocks))
             continue
-        if web_search_uses is not None and spec["name"] == WEB_SEARCH_TOOL_NAME:
-            web_search_uses[0] += 1
         try:
             text = await pool.call_tool(spec["name"], parsed_input)
         except Exception as exc:  # noqa: BLE001 (same tool-error-as-message idiom as the non-stream loop)
             logger.warning("MCP tool %s execution failed: %s", spec["name"], exc)
             text = f"[tool error] {exc}"
         else:
+            if capped and budget is not None:
+                budget.record()
             if native_blocks is not None:
                 native_blocks.extend(_native_blocks_for_call(pool, spec["name"], parsed_input))
         results.append({"type": "tool_result", "tool_use_id": spec["id"], "content": text})
@@ -432,8 +408,9 @@ class _MessagesToolLoopStrategy:
         max_web_search_uses: int | None = None,
     ) -> None:
         self._emit_native_web_search = emit_native_web_search
-        self._max_web_search_uses = max_web_search_uses
-        self._web_search_uses = [0]
+        # Absent unless the caller capped the searches, so the shared instance in
+        # ``_strategy_for`` stays free of per-request state.
+        self._budget = WebSearchBudget(max_web_search_uses) if max_web_search_uses is not None else None
 
     def _native_sink(self, sink: list[Any]) -> list[Any] | None:
         """``sink`` when native emission is on, else ``None`` (collect nothing)."""
@@ -496,8 +473,7 @@ class _MessagesToolLoopStrategy:
             pool,
             owned,
             native_blocks=native_sink,
-            max_web_search_uses=self._max_web_search_uses,
-            web_search_uses=self._web_search_uses,
+            budget=self._budget,
         )
 
     def filter_owned(self, result: MessageResponse, owned: list[Any], pool: ToolBackend) -> None:
@@ -538,8 +514,7 @@ class _MessagesToolLoopStrategy:
                     pool,
                     owned,
                     native_blocks=native_sink,
-                    max_web_search_uses=self._max_web_search_uses,
-                    web_search_uses=self._web_search_uses,
+                    budget=self._budget,
                 ),
             }
         )
@@ -686,8 +661,7 @@ class _MessagesToolLoopStrategy:
                 state,
                 pool,
                 native_blocks=self._native_sink(state.native_blocks),
-                max_web_search_uses=self._max_web_search_uses,
-                web_search_uses=self._web_search_uses,
+                budget=self._budget,
             )
 
     def terminal_events(
@@ -774,8 +748,7 @@ class _MessagesToolLoopStrategy:
             state,
             pool,
             native_blocks=self._native_sink(state.native_blocks),
-            max_web_search_uses=self._max_web_search_uses,
-            web_search_uses=self._web_search_uses,
+            budget=self._budget,
         )
 
         transcript.append({"role": "assistant", "content": assistant_content})
@@ -789,10 +762,11 @@ def _strategy_for(
     emit_native_web_search: bool,
     max_web_search_uses: int | None,
 ) -> _MessagesToolLoopStrategy:
-    """The shared strategy, or a per-request one when native emission is on.
+    """The shared strategy, or a per-request one when either option is set.
 
-    Strategies are stateless apart from that flag, so the common case keeps reusing
-    the single module-level instance.
+    A capped request carries a per-request search budget, so it never reuses the
+    module-level instance; an uncapped, non-native request has nothing per-request
+    to hold and keeps reusing it.
     """
     if emit_native_web_search or max_web_search_uses is not None:
         return _MessagesToolLoopStrategy(

@@ -1356,6 +1356,132 @@ async def test_stream_native_max_uses_stops_further_searches_and_reports_an_erro
 
 
 @pytest.mark.asyncio
+async def test_native_max_uses_error_block_is_anthropic_schema_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing gateway-internal rides out on the wire beside the error.
+
+    The inbound scrubber recognizes the block from its ``error_code``, so it needs
+    no marker field, and a client parsing the response sees Anthropic's schema and
+    nothing else.
+    """
+    responses = [
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_1", "first")]),
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_2", "second")]),
+        _message_response(stop_reason="end_turn", content=[_text_block("done")]),
+    ]
+
+    async def fake_amessages(**kwargs: Any) -> MessageResponse:
+        return responses.pop(0)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+
+    result = await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+        pool=cast(Any, _FakeSearchPool()),
+        max_iterations=5,
+        emit_native_web_search=True,
+        max_web_search_uses=1,
+    )
+
+    error_content = cast(Any, cast(Any, result.content[3]).content)
+    assert error_content.model_dump() == {
+        "type": "web_search_tool_result_error",
+        "error_code": "max_uses_exceeded",
+    }
+
+
+@pytest.mark.asyncio
+async def test_native_max_uses_is_not_spent_by_a_failed_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A search that errored was never billed, so it does not consume the cap."""
+    responses = [
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_1", "first")]),
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_2", "second")]),
+        _message_response(stop_reason="end_turn", content=[_text_block("done")]),
+    ]
+
+    async def fake_amessages(**kwargs: Any) -> MessageResponse:
+        return responses.pop(0)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+    pool = _FakeSearchPool(fail=True)
+
+    await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        emit_native_web_search=True,
+        max_web_search_uses=1,
+    )
+
+    assert pool.calls == [("web_search", {"query": "first"}), ("web_search", {"query": "second"})]
+
+
+@pytest.mark.asyncio
+async def test_native_max_uses_leaves_no_state_on_the_shared_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An uncapped request keeps reusing the module-level strategy, which holds no count.
+
+    A per-request counter on the shared instance would accumulate across every
+    request the process ever serves, and a later capped request reaching it would
+    be refused on someone else's searches.
+    """
+    responses = [
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_1", "first")]),
+        _message_response(stop_reason="end_turn", content=[_text_block("done")]),
+    ]
+
+    async def fake_amessages(**kwargs: Any) -> MessageResponse:
+        return responses.pop(0)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+    pool = _FakeSearchPool()
+
+    await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+        pool=cast(Any, pool),
+        max_iterations=5,
+    )
+
+    assert pool.calls == [("web_search", {"query": "first"})]
+    assert messages_loop_module._MESSAGES_STRATEGY._budget is None
+
+
+@pytest.mark.asyncio
+async def test_native_max_uses_does_not_cap_a_foreign_tool_named_web_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cap bounds the gateway's own search, not an MCP tool that shares its name.
+
+    A pool with no structured-result buffer is not the web-search backend, so its
+    ``web_search`` is the caller's own tool and keeps running past the cap.
+    """
+    responses = [
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_1", "first")]),
+        _message_response(stop_reason="tool_use", content=[_search_use("tu_2", "second")]),
+        _message_response(stop_reason="end_turn", content=[_text_block("done")]),
+    ]
+
+    async def fake_amessages(**kwargs: Any) -> MessageResponse:
+        return responses.pop(0)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+    pool = _FakePool(tool_names=["web_search"], results={"web_search": "ok"})
+
+    await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        max_web_search_uses=1,
+    )
+
+    assert pool.calls == [("web_search", {"query": "first"}), ("web_search", {"query": "second"})]
+
+
+@pytest.mark.asyncio
 async def test_stream_emits_native_blocks_with_gapless_indices(monkeypatch: pytest.MonkeyPatch) -> None:
     """The synthetic blocks take the swallowed tool_use events' place on the wire.
 
@@ -1519,6 +1645,68 @@ async def test_mixed_batch_emits_no_native_blocks_when_not_requested(
     )
 
     assert [b.type for b in result.content] == ["tool_use"]
+
+
+@pytest.mark.asyncio
+async def test_stream_mixed_batch_exit_still_honors_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mixed-batch exit runs owned calls for their side effects, cap included.
+
+    That path executes the gateway's search outside the continue loop, so it needs
+    the same budget: without it a caller could spend the cap and then exceed it on
+    the round that hands a foreign tool back.
+    """
+    streams = iter(
+        [
+            _async_iter(
+                _msg_start_event(),
+                _tool_use_block_start(0, "tu_1", "web_search"),
+                _input_json_delta(0, '{"query": "first"}'),
+                _content_block_stop(0),
+                _msg_delta_event("tool_use"),
+                _msg_stop_event(),
+            ),
+            _async_iter(
+                _msg_start_event(),
+                _tool_use_block_start(0, "tu_2", "web_search"),
+                _input_json_delta(0, '{"query": "second"}'),
+                _content_block_stop(0),
+                _tool_use_block_start(1, "tu_3", "get_weather"),
+                _input_json_delta(1, "{}"),
+                _content_block_stop(1),
+                _msg_delta_event("tool_use"),
+                _msg_stop_event(),
+            ),
+        ]
+    )
+
+    async def fake_amessages(**kwargs: Any) -> AsyncIterator[MessageStreamEvent]:
+        return next(streams)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+    pool = _FakeSearchPool()
+
+    events = [
+        event
+        async for event in anthropic_tool_loop_stream(
+            completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+            pool=cast(Any, pool),
+            max_iterations=5,
+            emit_native_web_search=True,
+            max_web_search_uses=1,
+        )
+    ]
+
+    assert pool.calls == [("web_search", {"query": "first"})]
+    results = [
+        cast(Any, event.content_block).content
+        for event in events
+        if event.type == "content_block_start"
+        and getattr(cast(Any, event.content_block), "type", None) == "web_search_tool_result"
+    ]
+    assert isinstance(results[0], list), "the first search ran, so it carries citations"
+    assert results[1].error_code == "max_uses_exceeded"
 
 
 @pytest.mark.asyncio

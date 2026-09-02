@@ -165,3 +165,48 @@ def test_a_caller_function_named_web_search_is_never_intercepted(
     assert response.status_code == 200, response.text
     assert captured.get("tools") == [own_tool]
     assert search.await_count == 0
+
+
+def test_max_uses_bounds_the_searches_on_the_openai_shaped_endpoint(
+    client: TestClient,
+    api_key_header: dict[str, str],
+) -> None:
+    """The cap is billing, not formatting, so it holds where there is no native error shape.
+
+    The model asks twice with ``max_uses: 1``; the second call never reaches the
+    backend and comes back as a tool error the model can answer around.
+    """
+    search = AsyncMock(return_value="search results for otari")
+    captured: list[dict[str, Any]] = []
+
+    async def fake_acompletion(**kwargs: Any) -> ChatCompletion:
+        captured.append(kwargs)
+        return [_completion(tool_call=True), _completion(tool_call=True), _completion(tool_call=False)][
+            len(captured) - 1
+        ]
+
+    with (
+        patch("gateway.services.mcp_loop.acompletion", new=fake_acompletion),
+        patch("gateway.services.web_search_backend.WebSearchBackend._search_tool", new=search),
+        patch.dict(
+            "os.environ",
+            {"OTARI_WEB_SEARCH_URL": "http://web-search.invalid", "OTARI_WEB_SEARCH_INTERCEPT": "true"},
+        ),
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": MODEL_NAME,
+                "messages": [{"role": "user", "content": "what is otari"}],
+                "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}],
+            },
+            headers=api_key_header,
+        )
+
+    assert response.status_code == 200, response.text
+    assert search.await_count == 1, "the cap did not stop the second search"
+    assert captured[2]["messages"][-1] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "[tool error] max_uses_exceeded",
+    }

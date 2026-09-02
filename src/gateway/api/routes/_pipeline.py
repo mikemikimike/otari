@@ -2033,9 +2033,18 @@ class ToolContext:
 
     @property
     def max_web_search_uses(self) -> int | None:
-        """The positive native web-search use cap, when the caller supplied one."""
-        if not self.emit_native_web_search:
-            return None
+        """The positive web-search use cap, when the caller supplied one.
+
+        Not gated on :attr:`emit_native_web_search`: the cap bounds what the request
+        is billed for, so it is honored on every declaration shape and in every wire
+        format. Only the *refusal* is format-specific, an Anthropic
+        ``max_uses_exceeded`` result block where the caller can read one and a plain
+        tool error everywhere else.
+
+        A ``bool`` is rejected outright rather than counted as its integer value: a
+        cap of ``True`` is a caller mistake, and reading it as 1 would silently
+        answer a spend question they did not ask.
+        """
         value = (self.web_search_tool_entry or {}).get("max_uses")
         return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
@@ -3180,6 +3189,18 @@ async def _log_failure_and_refund(
 # ---------------------------------------------------------------------------
 
 
+def _loop_options(tool_ctx: ToolContext) -> dict[str, Any]:
+    """Tool-loop kwargs this request carries, omitting the ones it never set.
+
+    Presence-encoded rather than passed as ``None``, for the reason
+    ``on_first_response`` is: a test fake mirrors the call shape a given request
+    actually produces, so a kwarg appearing at all is itself the signal.
+    """
+    if tool_ctx.max_web_search_uses is None:
+        return {}
+    return {"max_web_search_uses": tool_ctx.max_web_search_uses}
+
+
 async def dispatch_non_stream(
     *,
     adapter: FormatAdapter[ResultT, Any],
@@ -3214,16 +3235,13 @@ async def dispatch_non_stream(
         tally=tool_ctx.tally,
     ) as web_backend:
         kwargs = adapter.inject_hints(call_kwargs, web_backend.purpose_hints(), header=tool_ctx.tools_header)
-        loop_options: dict[str, Any] = {}
-        if tool_ctx.max_web_search_uses is not None:
-            loop_options["max_web_search_uses"] = tool_ctx.max_web_search_uses
         return await adapter.run_tool_loop(
             kwargs,
             web_backend,
             tool_ctx.max_tool_iterations,
             on_first_response,
             emit_native_web_search=tool_ctx.emit_native_web_search,
-            **loop_options,
+            **_loop_options(tool_ctx),
         )
 
 
@@ -3257,11 +3275,7 @@ async def _eager_backend_stream(
             backend,
             tool_ctx.max_tool_iterations,
             emit_native_web_search=tool_ctx.emit_native_web_search,
-            **(
-                {"max_web_search_uses": tool_ctx.max_web_search_uses}
-                if tool_ctx.max_web_search_uses is not None
-                else {}
-            ),
+            **_loop_options(tool_ctx),
         ):
             yield event
     finally:
@@ -3953,11 +3967,7 @@ async def run_streaming_with_fallback(
             pool_for_loop,
             tool_ctx.max_tool_iterations,
             emit_native_web_search=tool_ctx.emit_native_web_search,
-            **(
-                {"max_web_search_uses": tool_ctx.max_web_search_uses}
-                if tool_ctx.max_web_search_uses is not None
-                else {}
-            ),
+            **_loop_options(tool_ctx),
         )
 
     # See run_platform_non_stream: BackgroundTasks only run after a successful
