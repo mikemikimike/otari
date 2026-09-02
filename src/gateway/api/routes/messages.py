@@ -155,11 +155,7 @@ def _is_gateway_minted_result(block: Any) -> bool:
         return False
     hits = block.get("content")
     if not isinstance(hits, list):
-        return (
-            isinstance(hits, dict)
-            and hits.get("type") == "web_search_tool_result_error"
-            and hits.get("error_code") == "max_uses_exceeded"
-        )
+        return False
     return all(isinstance(hit, dict) and not hit.get("encrypted_content") for hit in hits)
 
 

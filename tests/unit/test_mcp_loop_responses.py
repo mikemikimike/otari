@@ -285,6 +285,7 @@ async def test_max_uses_stops_further_searches_and_announces_only_the_one_that_r
     assert refused["output"] == "[tool error] max_uses_exceeded"
     announced = [item for item in (out.output or []) if getattr(item, "type", None) == "web_search_call"]
     assert len(announced) == 1, "a refused search must not be announced as a completed one"
+    assert announced[0].id == "c1"
 
 
 @pytest.mark.asyncio
@@ -448,6 +449,34 @@ async def test_loop_mixed_calls_executes_owned_and_returns_only_foreign(
         if getattr(item, "type", None) == "function_call"
     ]
     assert remaining_call_ids == ["foreign_id"]
+
+
+@pytest.mark.asyncio
+async def test_loop_mixed_capped_search_returns_refusal_with_foreign_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_aresponses(**kwargs: Any) -> Response:
+        return _response(
+            output=[
+                _function_call("search_id", "web_search", '{"query": "x"}'),
+                _function_call("foreign_id", "user_tool", "{}"),
+            ],
+        )
+
+    monkeypatch.setattr(responses_loop_module, "aresponses", fake_aresponses)
+    pool = _FakeSearchPool()
+    out = await responses_tool_loop(
+        completion_kwargs={"model": "fake", "input_data": "go"},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        web_search_budget=WebSearchBudget(0),
+    )
+
+    assert pool.calls == []
+    output = cast(Any, out.output or [])
+    assert any(getattr(item, "call_id", None) == "foreign_id" for item in output)
+    refusal = next(item for item in output if isinstance(item, dict) and item.get("call_id") == "search_id")
+    assert refusal["output"] == "[tool error] max_uses_exceeded"
 
 
 @pytest.mark.asyncio
@@ -1061,3 +1090,44 @@ async def test_stream_mixed_batch_hides_runs_and_strips_the_gateway_call(
     assert names == ["user_tool"]
 
     assert pool.calls == [("fetch_url", {"u": "x"})]
+
+
+@pytest.mark.asyncio
+async def test_stream_mixed_capped_search_returns_refusal_with_foreign_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owned = _function_call("call_owned", "web_search", '{"query": "x"}')
+    foreign = _function_call("call_foreign", "user_tool", "{}")
+    iter_streams = iter(
+        [
+            _async_iter(
+                _output_item_added(0, owned),
+                _function_call_args_done(0, "fc_owned", "web_search", '{"query": "x"}'),
+                _output_item_added(1, foreign),
+                _function_call_args_done(1, "fc_foreign", "user_tool", "{}"),
+                _response_completed(output=[owned, foreign]),
+            ),
+        ]
+    )
+
+    async def fake_aresponses(**kwargs: Any) -> AsyncIterator[ResponseStreamEvent]:
+        return next(iter_streams)
+
+    monkeypatch.setattr(responses_loop_module, "aresponses", fake_aresponses)
+    pool = _FakeSearchPool()
+    events = [
+        event
+        async for event in responses_tool_loop_stream(
+            completion_kwargs={"model": "fake", "input_data": "go"},
+            pool=cast(Any, pool),
+            max_iterations=5,
+            web_search_budget=WebSearchBudget(0),
+        )
+    ]
+
+    completed = next(e for e in events if e.type == "response.completed")
+    output = cast(Any, completed.response.output)
+    assert any(getattr(item, "call_id", None) == "call_foreign" for item in output)
+    refusal = next(item for item in output if getattr(item, "call_id", None) == "call_owned")
+    assert getattr(refusal, "output", None) == "[tool error] max_uses_exceeded"
+    assert pool.calls == []
