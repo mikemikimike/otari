@@ -17,6 +17,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+from fastapi import HTTPException, status
+
 from gateway.api.routes._pipeline import ToolContext
 from gateway.api.routes._tools import (
     _extract_code_execution_tool,
@@ -400,8 +403,11 @@ def test_a_zero_max_uses_caps_the_searches_at_none_rather_than_at_no_limit() -> 
     assert ctx.web_search_budget.exhausted(), "the first search must already be over the cap"
 
 
-def test_a_nonsensical_max_uses_is_ignored_rather_than_guessed_at() -> None:
-    """Negative, boolean and non-numeric caps are caller mistakes, not budgets."""
+def test_a_nonsensical_max_uses_is_rejected_instead_of_becoming_uncapped() -> None:
+    """Malformed spend controls fail closed instead of allowing unlimited searches."""
     for value in (-1, True, False, "2", 1.5, None):
         entry = {"type": "web_search_20250305", "max_uses": value}
-        assert _capped_context(entry).max_web_search_uses is None, value
+        with pytest.raises(HTTPException) as exc_info:
+            _capped_context(entry)
+        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST, value
+        assert exc_info.value.detail == "web_search max_uses must be a non-negative integer"

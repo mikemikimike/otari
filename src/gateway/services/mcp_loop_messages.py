@@ -37,7 +37,6 @@ from gateway.services.mcp_loop import (
     ToolBackend,
 )
 from gateway.services.tool_format import openai_to_anthropic_tools
-from gateway.services.tool_usage import is_tool_error
 from gateway.services.web_search_backend import WEB_SEARCH_TOOL_NAME
 from gateway.services.web_search_budget import MAX_USES_EXCEEDED_ERROR, WebSearchBudget, is_capped_search
 
@@ -217,9 +216,9 @@ async def _execute_tool_uses(
             logger.warning("MCP tool %s execution failed: %s", block.name, exc)
             text = f"[tool error] {exc}"
         else:
-            if capped and budget is not None and not is_tool_error(text):
+            if capped and budget is not None:
                 budget.record(text)
-            if native_blocks is not None and not is_tool_error(text):
+            if native_blocks is not None:
                 native_blocks.extend(_native_blocks_for_call(pool, block.name, arguments))
         out.append({"type": "tool_result", "tool_use_id": block.id, "content": text})
     return out
@@ -351,9 +350,9 @@ async def _execute_stream_owned(
             logger.warning("MCP tool %s execution failed: %s", spec["name"], exc)
             text = f"[tool error] {exc}"
         else:
-            if capped and budget is not None and not is_tool_error(text):
+            if capped and budget is not None:
                 budget.record(text)
-            if native_blocks is not None and not is_tool_error(text):
+            if native_blocks is not None:
                 native_blocks.extend(_native_blocks_for_call(pool, spec["name"], parsed_input))
         results.append({"type": "tool_result", "tool_use_id": spec["id"], "content": text})
     return results

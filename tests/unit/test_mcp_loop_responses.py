@@ -452,7 +452,7 @@ async def test_loop_mixed_calls_executes_owned_and_returns_only_foreign(
 
 
 @pytest.mark.asyncio
-async def test_loop_mixed_capped_search_returns_refusal_with_foreign_call(
+async def test_loop_mixed_capped_search_hides_refusal_and_returns_foreign_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_aresponses(**kwargs: Any) -> Response:
@@ -473,10 +473,7 @@ async def test_loop_mixed_capped_search_returns_refusal_with_foreign_call(
     )
 
     assert pool.calls == []
-    output = cast(Any, out.output or [])
-    assert any(getattr(item, "call_id", None) == "foreign_id" for item in output)
-    refusal = next(item for item in output if isinstance(item, dict) and item.get("call_id") == "search_id")
-    assert refusal["output"] == "[tool error] max_uses_exceeded"
+    assert [getattr(item, "call_id", None) for item in out.output or []] == ["foreign_id"]
 
 
 @pytest.mark.asyncio
@@ -1093,7 +1090,7 @@ async def test_stream_mixed_batch_hides_runs_and_strips_the_gateway_call(
 
 
 @pytest.mark.asyncio
-async def test_stream_mixed_capped_search_returns_refusal_with_foreign_call(
+async def test_stream_mixed_capped_search_hides_refusal_and_returns_foreign_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owned = _function_call("call_owned", "web_search", '{"query": "x"}')
@@ -1126,8 +1123,5 @@ async def test_stream_mixed_capped_search_returns_refusal_with_foreign_call(
     ]
 
     completed = next(e for e in events if e.type == "response.completed")
-    output = cast(Any, completed.response.output)
-    assert any(getattr(item, "call_id", None) == "call_foreign" for item in output)
-    refusal = next(item for item in output if getattr(item, "call_id", None) == "call_owned")
-    assert getattr(refusal, "output", None) == "[tool error] max_uses_exceeded"
+    assert [getattr(item, "call_id", None) for item in completed.response.output] == ["call_foreign"]
     assert pool.calls == []

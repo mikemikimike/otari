@@ -141,21 +141,19 @@ def _is_gateway_minted_result(block: Any) -> bool:
     usable hits produces, and a provider reporting no results uses the error shape
     instead.
 
-    The error shape has no ``encrypted_content`` to reason about, so provenance is
-    read from the code: the gateway emits exactly one, ``max_uses_exceeded``, and it
-    is only reachable under interception, where the gateway claimed the keyword and
-    the provider never ran a search of its own. A provider's other error codes are
-    left alone. Where that inference is wrong (a transcript captured against a
-    provider directly, then echoed here) the block is dropped anyway, which is the
-    direction ``responses._strip_gateway_minted_items`` already takes for the same
-    ambiguity: an error block describes a search rather than carrying its results,
-    so dropping one loses nothing the model needs.
+    The error shape has no ``encrypted_content`` to reason about. The gateway emits
+    only ``max_uses_exceeded``, so that error is treated as gateway-minted while
+    other provider errors are preserved.
     """
     if not isinstance(block, dict) or block.get("type") != "web_search_tool_result":
         return False
     hits = block.get("content")
     if not isinstance(hits, list):
-        return False
+        return (
+            isinstance(hits, dict)
+            and hits.get("type") == "web_search_tool_result_error"
+            and hits.get("error_code") == "max_uses_exceeded"
+        )
     return all(isinstance(hit, dict) and not hit.get("encrypted_content") for hit in hits)
 
 

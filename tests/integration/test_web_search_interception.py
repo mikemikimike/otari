@@ -245,3 +245,39 @@ def test_max_uses_zero_refuses_the_first_search_rather_than_uncapping_it(
     assert response.status_code == 200, response.text
     assert search.await_count == 0, "a cap of zero was read as no cap"
     assert captured[1]["messages"][-1]["content"] == "[tool error] max_uses_exceeded"
+
+
+@pytest.mark.parametrize("invalid_max_uses", [-1, True, False, "2", 1.5, None])
+def test_invalid_max_uses_is_rejected_instead_of_becoming_uncapped(
+    client: TestClient,
+    api_key_header: dict[str, str],
+    invalid_max_uses: Any,
+) -> None:
+    search = AsyncMock(return_value="never called")
+
+    with (
+        patch("gateway.services.web_search_backend.WebSearchBackend._search_tool", new=search),
+        patch.dict(
+            "os.environ",
+            {"OTARI_WEB_SEARCH_URL": "http://web-search.invalid", "OTARI_WEB_SEARCH_INTERCEPT": "true"},
+        ),
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": MODEL_NAME,
+                "messages": [{"role": "user", "content": "what is otari"}],
+                "tools": [
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": invalid_max_uses,
+                    }
+                ],
+            },
+            headers=api_key_header,
+        )
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": "web_search max_uses must be a non-negative integer"}
+    assert search.await_count == 0

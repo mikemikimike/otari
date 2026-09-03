@@ -25,11 +25,10 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from any_llm import aresponses
 from openai.types.responses import ResponseFunctionWebSearch
-from openai.types.responses.response_function_tool_call_output_item import ResponseFunctionToolCallOutputItem
 from openai.types.responses.response_function_web_search import ActionSearch
 from openai.types.responses.response_output_item_added_event import ResponseOutputItemAddedEvent
 from openai.types.responses.response_output_item_done_event import ResponseOutputItemDoneEvent
@@ -87,14 +86,15 @@ async def _execute_function_calls(
     items: list[Any],
     *,
     budget: WebSearchBudget | None = None,
+    refused_call_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Run each owned function_call and return the Responses function_call_output items.
 
     Tool failures convert to a ``[tool error] ...`` string in the output so the
     model can recover. Only cancellation-class exceptions escape; same idiom
     as :func:`gateway.services.mcp_loop._execute_mcp_calls`. A search past
-    ``budget`` is refused as one of those errors, and
-    :func:`_refused_call_ids` reads the refusals back so no native
+    ``budget`` is refused as one of those errors. When supplied,
+    ``refused_call_ids`` records that decision at its source so no native
     ``web_search_call`` item claims a search that never ran.
     """
     out: list[dict[str, Any]] = []
@@ -105,6 +105,8 @@ async def _execute_function_calls(
             args = {}
         capped = is_capped_search(budget, pool, item.name)
         if capped and budget is not None and budget.exhausted():
+            if refused_call_ids is not None:
+                refused_call_ids.add(str(item.call_id))
             out.append(
                 {"type": "function_call_output", "call_id": item.call_id, "output": MAX_USES_EXCEEDED_ERROR}
             )
@@ -119,15 +121,6 @@ async def _execute_function_calls(
                 budget.record(text)
         out.append({"type": "function_call_output", "call_id": item.call_id, "output": text})
     return out
-
-
-def _refused_call_ids(outputs: list[dict[str, Any]]) -> set[str]:
-    """``call_id``s whose search the ``max_uses`` cap refused."""
-    return {
-        str(output.get("call_id"))
-        for output in outputs
-        if output.get("output") == MAX_USES_EXCEEDED_ERROR
-    }
 
 
 def _items_to_dicts(items: list[Any]) -> list[dict[str, Any]]:
@@ -359,7 +352,6 @@ class _ResponsesStreamState:
         # ``call_id``s the max_uses cap refused this iteration, so their native
         # ``web_search_call`` item is not emitted.
         self.refused_call_ids: set[str] = set()
-        self.refused_outputs: list[dict[str, Any]] = []
         # Output items the gateway runs itself. Their events are swallowed: the
         # client can never be sent a ``function_call_output`` for a call the
         # gateway consumed, so showing it the call is a dead end.
@@ -383,7 +375,6 @@ class _ResponsesToolLoopStrategy:
         # Absent unless the caller capped the searches, which keeps the shared
         # instance in ``_strategy_for`` free of per-request state.
         self._budget = budget
-        self._mixed_outputs: list[dict[str, Any]] = []
 
     def coerce_transcript(self, value: Any) -> list[Any]:
         return _coerce_input_to_list(value)
@@ -435,8 +426,7 @@ class _ResponsesToolLoopStrategy:
     ) -> list[dict[str, Any]]:
         # ``acc`` is accepted for interface parity and unused: this format has no
         # native vocabulary for a server-side tool call to report on a mixed batch.
-        self._mixed_outputs = await _execute_function_calls(pool, owned, budget=self._budget)
-        return self._mixed_outputs
+        return await _execute_function_calls(pool, owned, budget=self._budget)
 
     def filter_owned(self, result: Response, owned: list[Any], pool: ToolBackend) -> None:
         # Mixed batch: the owned subset was executed for its side effects;
@@ -445,14 +435,14 @@ class _ResponsesToolLoopStrategy:
         owned_call_ids = {item.call_id for item in owned}
         output = list(result.output or [])
         try:
-            result.output = cast(Any, [
+            result.output = [
                 item
                 for item in output
                 if not (
                     getattr(item, "type", None) == "function_call"
                     and getattr(item, "call_id", None) in owned_call_ids
                 )
-            ] + [item for item in self._mixed_outputs if item["output"] == MAX_USES_EXCEEDED_ERROR])
+            ]
         except (AttributeError, TypeError):
             logger.warning(
                 "Responses-mixed: could not filter output on response; client will see function_call "
@@ -473,11 +463,17 @@ class _ResponsesToolLoopStrategy:
         # compaction item on every continuation.
         output = list(result.output or [])
         transcript.extend(_items_to_dicts(_replay_items(output, owned)))
-        outputs = await _execute_function_calls(pool, owned, budget=self._budget)
+        refused_call_ids: set[str] = set()
+        outputs = await _execute_function_calls(
+            pool,
+            owned,
+            budget=self._budget,
+            refused_call_ids=refused_call_ids,
+        )
         transcript.extend(outputs)
         if acc is not None:
             acc["compactions"].extend(_compaction_items(output))
-            acc["searches"].extend(_web_search_items_for(owned, _refused_call_ids(outputs)))
+            acc["searches"].extend(_web_search_items_for(owned, refused_call_ids))
 
     # ---- streaming hooks ----
 
@@ -626,8 +622,7 @@ class _ResponsesToolLoopStrategy:
         # stream, so run them for their side effects rather than dropping the model's
         # request. Matches the non-streaming loop's mixed-batch handling.
         if state.owned_specs:
-            outputs = await _execute_stream_owned(state, pool, budget=self._budget)
-            state.refused_outputs = [item for item in outputs if item["output"] == MAX_USES_EXCEEDED_ERROR]
+            await _execute_stream_owned(state, pool, budget=self._budget)
 
     def terminal_events(self, state: _ResponsesStreamState, acc: dict[str, Any]) -> list[ResponseStreamEvent]:
         if state.deferred_completed is None:
@@ -638,17 +633,7 @@ class _ResponsesToolLoopStrategy:
         # client just accumulated, and hand it a call it cannot dispatch.
         hidden = _hidden_call_ids(state)
         folded = _without_output_items(state.deferred_completed, hidden) if hidden else state.deferred_completed
-        refusal_items = [
-            ResponseFunctionToolCallOutputItem(
-                id=str(item["call_id"]),
-                call_id=str(item["call_id"]),
-                output=str(item["output"]),
-                status="completed",
-                type="function_call_output",
-            )
-            for item in state.refused_outputs
-        ]
-        folded = _prepend_output_items(folded, refusal_items + acc["compactions"])
+        folded = _prepend_output_items(folded, acc["compactions"])
         folded = _maybe_fold_response_completed_usage(folded, acc["output_tokens"])
         # The terminal event is the last thing the client sees, so it continues the
         # same sequence as the events forwarded before it.

@@ -45,7 +45,7 @@ A failed search does not count against it, matching what is billed.
 
 `max_uses: 0` is a cap of zero searches, not the absence of a cap, so every
 search is refused. A negative or non-numeric value is a caller mistake and is
-ignored rather than guessed at.
+rejected with a 400 rather than guessed at.
 
 Past the cap, the model is told the search was refused and can answer without it.
 An Anthropic-native declaration is answered in its own vocabulary, a

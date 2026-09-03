@@ -262,6 +262,7 @@ WEB_SEARCH_CONFLICT_DETAIL = (
     "otari_web_search cannot be combined with otari_code_execution or mcp_servers in the same request yet; pick one."
 )
 WEB_SEARCH_NOT_ENABLED_DETAIL = "web search is not enabled for this workspace"
+WEB_SEARCH_MAX_USES_INVALID_DETAIL = "web_search max_uses must be a non-negative integer"
 SANDBOX_NOT_ENABLED_DETAIL = "code execution is not enabled for this workspace"
 SANDBOX_TOOLS_EXCLUDED_DETAIL = (
     "code execution is not available to this workspace: its policy's tool list excludes "
@@ -1953,6 +1954,15 @@ async def resolve_request_context(
 # ---------------------------------------------------------------------------
 
 
+def _read_web_search_max_uses(entry: dict[str, Any] | None) -> int | None:
+    if entry is None or "max_uses" not in entry:
+        return None
+    value = entry["max_uses"]
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(WEB_SEARCH_MAX_USES_INVALID_DETAIL)
+    return value
+
+
 class ToolContext:
     """Resolved gateway-tool configuration for one request."""
 
@@ -2055,7 +2065,7 @@ class ToolContext:
 
     @property
     def max_web_search_uses(self) -> int | None:
-        """The web-search use cap, when the caller supplied a usable one.
+        """The web-search use cap, when the caller supplied one.
 
         Not gated on :attr:`emit_native_web_search`: the cap bounds what the request
         is billed for, so it is honored on every declaration shape and in every wire
@@ -2068,13 +2078,16 @@ class ToolContext:
         direction this must not fail; a caller who meant "do not search" is better
         served by every search being refused than by a bill.
 
-        A ``bool`` is rejected outright rather than counted as its integer value,
-        and so is a negative: a cap of ``True`` or ``-1`` is a caller mistake, and
-        guessing at what it meant would silently answer a spend question they did
-        not ask.
+        Invalid values are rejected rather than treated as uncapped, matching the
+        provider contract and preventing malformed spend controls from failing open.
         """
-        value = (self.web_search_tool_entry or {}).get("max_uses")
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        try:
+            return _read_web_search_max_uses(self.web_search_tool_entry)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=WEB_SEARCH_MAX_USES_INVALID_DETAIL,
+            ) from exc
 
     @property
     def intercepts_web_search(self) -> bool:
@@ -2544,6 +2557,10 @@ async def prepare_gateway_tools(
             tools_after_sandbox,
             intercept=intercept_web_search,
         )
+        try:
+            _read_web_search_max_uses(web_search_tool_entry)
+        except ValueError as exc:
+            raise adapter.error(400, WEB_SEARCH_MAX_USES_INVALID_DETAIL, ErrorKind.INVALID_REQUEST) from exc
         # Forwarded to the search backend as `X-Gateway-Token`. Only set in
         # hybrid mode, where the backend may be the platform-hosted web-search
         # endpoint that authenticates the gateway. Standalone backends (SearXNG /
