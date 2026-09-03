@@ -219,7 +219,7 @@ async def _execute_tool_uses(
         else:
             if capped and budget is not None and not is_tool_error(text):
                 budget.record(text)
-            if native_blocks is not None:
+            if native_blocks is not None and not is_tool_error(text):
                 native_blocks.extend(_native_blocks_for_call(pool, block.name, arguments))
         out.append({"type": "tool_result", "tool_use_id": block.id, "content": text})
     return out
@@ -353,7 +353,7 @@ async def _execute_stream_owned(
         else:
             if capped and budget is not None and not is_tool_error(text):
                 budget.record(text)
-            if native_blocks is not None:
+            if native_blocks is not None and not is_tool_error(text):
                 native_blocks.extend(_native_blocks_for_call(pool, spec["name"], parsed_input))
         results.append({"type": "tool_result", "tool_use_id": spec["id"], "content": text})
     return results

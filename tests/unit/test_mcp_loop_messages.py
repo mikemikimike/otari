@@ -1091,16 +1091,21 @@ class _FakeSearchPool(_FakePool):
         *,
         results: list[dict[str, Any]] | None = None,
         fail: bool = False,
+        tool_error: bool = False,
     ) -> None:
         super().__init__(tool_names=["web_search"], results={"web_search": "[1] Result\nhttps://a"})
         self._structured = results if results is not None else [{"url": "https://a", "title": "A"}]
         self._fail = fail
+        self._tool_error = tool_error
         self._taken = False
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         if self._fail:
             self.calls.append((name, arguments))
             raise RuntimeError("backend down")
+        if self._tool_error:
+            self.calls.append((name, arguments))
+            return "[tool error] empty query"
         return await super().call_tool(name, arguments)
 
     def take_last_results(self) -> list[dict[str, Any]]:
@@ -1176,6 +1181,22 @@ async def test_failed_search_contributes_no_native_blocks(monkeypatch: pytest.Mo
     """A search that never returned results has nothing to cite."""
     monkeypatch.setattr(messages_loop_module, "amessages", _fake_amessages_for(_two_round_responses()))
     pool = _FakeSearchPool(fail=True)
+
+    result = await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        emit_native_web_search=True,
+    )
+
+    assert [b.type for b in result.content] == ["text"]
+
+
+@pytest.mark.asyncio
+async def test_tool_error_search_contributes_no_native_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sentinel error must not turn stale structured results into citations."""
+    monkeypatch.setattr(messages_loop_module, "amessages", _fake_amessages_for(_two_round_responses()))
+    pool = _FakeSearchPool(tool_error=True)
 
     result = await anthropic_tool_loop(
         completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
