@@ -1091,16 +1091,21 @@ class _FakeSearchPool(_FakePool):
         *,
         results: list[dict[str, Any]] | None = None,
         fail: bool = False,
+        error: bool = False,
     ) -> None:
         super().__init__(tool_names=["web_search"], results={"web_search": "[1] Result\nhttps://a"})
         self._structured = results if results is not None else [{"url": "https://a", "title": "A"}]
         self._fail = fail
+        self._error = error
         self._taken = False
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         if self._fail:
             self.calls.append((name, arguments))
             raise RuntimeError("backend down")
+        if self._error:
+            self.calls.append((name, arguments))
+            return "[tool error] empty query"
         return await super().call_tool(name, arguments)
 
     def take_last_results(self) -> list[dict[str, Any]]:
@@ -1185,6 +1190,23 @@ async def test_failed_search_contributes_no_native_blocks(monkeypatch: pytest.Mo
     )
 
     assert [b.type for b in result.content] == ["text"]
+
+
+@pytest.mark.asyncio
+async def test_tool_error_search_contributes_no_native_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sentinel tool error must not be represented as a completed search."""
+    monkeypatch.setattr(messages_loop_module, "amessages", _fake_amessages_for(_two_round_responses()))
+    pool = _FakeSearchPool(error=True)
+
+    result = await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+        pool=cast(Any, pool),
+        max_iterations=5,
+        emit_native_web_search=True,
+    )
+
+    assert [b.type for b in result.content] == ["text"]
+    assert not pool._taken
 
 
 @pytest.mark.asyncio
@@ -1597,6 +1619,51 @@ async def test_stream_emits_no_native_blocks_by_default(monkeypatch: pytest.Monk
         "message_delta",
         "message_stop",
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_tool_error_search_contributes_no_native_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A streaming sentinel tool error must not be represented as a search."""
+    iter_streams = iter(
+        [
+            _async_iter(
+                _msg_start_event(),
+                _tool_use_block_start(0, "tu_1", "web_search"),
+                _input_json_delta(0, '{"query": "python"}'),
+                _content_block_stop(0),
+                _msg_delta_event("tool_use"),
+                _msg_stop_event(),
+            ),
+            _async_iter(
+                _msg_start_event(),
+                _text_block_start(0),
+                _text_delta(0, "done"),
+                _content_block_stop(0),
+                _msg_delta_event("end_turn"),
+                _msg_stop_event(),
+            ),
+        ]
+    )
+
+    async def fake_amessages(**kwargs: Any) -> AsyncIterator[MessageStreamEvent]:
+        return next(iter_streams)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+    pool = _FakeSearchPool(error=True)
+
+    events = [
+        event
+        async for event in anthropic_tool_loop_stream(
+            completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+            pool=cast(Any, pool),
+            max_iterations=5,
+            emit_native_web_search=True,
+        )
+    ]
+
+    starts = [event for event in events if event.type == "content_block_start"]
+    assert [event.content_block.type for event in starts] == ["text"]
+    assert not pool._taken
 
 
 @pytest.mark.asyncio

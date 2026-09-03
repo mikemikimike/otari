@@ -392,6 +392,7 @@ def test_max_uses_is_honored_on_a_declaration_with_no_native_response_shape() ->
 def test_no_max_uses_leaves_the_searches_uncapped() -> None:
     assert _capped_context({"type": "web_search_20250305"}).max_web_search_uses is None
     assert _capped_context(None).max_web_search_uses is None
+    assert _capped_context({"type": "web_search_20250305", "max_uses": None}).max_web_search_uses is None
 
 
 def test_a_zero_max_uses_caps_the_searches_at_none_rather_than_at_no_limit() -> None:
@@ -405,7 +406,7 @@ def test_a_zero_max_uses_caps_the_searches_at_none_rather_than_at_no_limit() -> 
 
 def test_a_nonsensical_max_uses_is_rejected_instead_of_becoming_uncapped() -> None:
     """Malformed spend controls fail closed instead of allowing unlimited searches."""
-    for value in (-1, True, False, "2", 1.5, None):
+    for value in (-1, True, False, "2", 1.5):
         entry = {"type": "web_search_20250305", "max_uses": value}
         with pytest.raises(HTTPException) as exc_info:
             _capped_context(entry)

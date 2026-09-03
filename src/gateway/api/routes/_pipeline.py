@@ -1955,7 +1955,7 @@ async def resolve_request_context(
 
 
 def _read_web_search_max_uses(entry: dict[str, Any] | None) -> int | None:
-    if entry is None or "max_uses" not in entry:
+    if entry is None or entry.get("max_uses") is None:
         return None
     value = entry["max_uses"]
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:

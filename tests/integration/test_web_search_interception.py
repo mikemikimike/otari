@@ -247,7 +247,7 @@ def test_max_uses_zero_refuses_the_first_search_rather_than_uncapping_it(
     assert captured[1]["messages"][-1]["content"] == "[tool error] max_uses_exceeded"
 
 
-@pytest.mark.parametrize("invalid_max_uses", [-1, True, False, "2", 1.5, None])
+@pytest.mark.parametrize("invalid_max_uses", [-1, True, False, "2", 1.5])
 def test_invalid_max_uses_is_rejected_instead_of_becoming_uncapped(
     client: TestClient,
     api_key_header: dict[str, str],

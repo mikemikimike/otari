@@ -784,6 +784,7 @@ async def test_stream_max_uses_announces_only_the_search_that_ran(
         and getattr(event.item, "type", None) == "web_search_call"
     ]
     assert len(announced) == 1, "a refused search must not be announced as a completed one"
+    assert announced[0].item.id == "c1"
 
 
 @pytest.mark.asyncio
