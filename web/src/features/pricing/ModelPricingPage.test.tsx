@@ -234,7 +234,7 @@ describe("ModelPricingPage", () => {
     )
 
     expect(
-      await screen.findByRole("alertdialog", {
+      await screen.findByRole("dialog", {
         name: "Review default price updates",
       }),
     ).toBeInTheDocument()
@@ -249,7 +249,7 @@ describe("ModelPricingPage", () => {
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("alertdialog", {
+        screen.queryByRole("dialog", {
           name: "Review default price updates",
         }),
       ).not.toBeInTheDocument(),
@@ -272,15 +272,15 @@ describe("ModelPricingPage", () => {
     await user.click(
       screen.getByRole("button", { name: "Check for price updates" }),
     )
-    await screen.findByRole("alertdialog", {
+    await screen.findByRole("dialog", {
       name: "Review default price updates",
     })
 
-    await user.click(screen.getByRole("button", { name: "Reject changes" }))
+    await user.click(document.querySelector('[data-slot="modal-backdrop"]')!)
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("alertdialog", {
+        screen.queryByRole("dialog", {
           name: "Review default price updates",
         }),
       ).not.toBeInTheDocument(),
