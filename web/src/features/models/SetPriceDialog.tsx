@@ -158,9 +158,12 @@ export function SetPriceDialog({
         {title}
       </Modal.Trigger>
       {isOpen ? (
-        <Modal.Backdrop className="bg-backdrop/50">
+        <Modal.Backdrop
+          isDismissable={!isPending}
+          isKeyboardDismissDisabled={isPending}
+        >
           <Modal.Container placement="center" size="lg">
-            <Modal.Dialog aria-label={title}>
+            <Modal.Dialog>
               <Modal.Header>
                 <Modal.Heading>{title}</Modal.Heading>
               </Modal.Header>

@@ -252,17 +252,15 @@ export function ShareDialog(props: ShareDialogProps) {
   return (
     <Modal isOpen onOpenChange={(open) => (open ? undefined : onClose())}>
       <Modal.Trigger aria-hidden="true" className="hidden">
-        Share this view as an image
+        Open share dialog
       </Modal.Trigger>
-      <Modal.Backdrop className="bg-backdrop/50">
-        <Modal.Container placement="center" size="lg">
-          <Modal.Dialog aria-label="Share this view as an image" className="w-[92vw] max-w-[940px]">
+      <Modal.Backdrop>
+        <Modal.Container placement="center" size="lg" scroll="outside">
+          <Modal.Dialog className="otari-modal-wide">
             <Modal.Header>
-              <Modal.Heading>
-                Share this view as an image
-              </Modal.Heading>
+              <Modal.Heading>Share this view as an image</Modal.Heading>
             </Modal.Header>
-            <Modal.Body className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto">
+            <Modal.Body className="flex flex-col gap-4">
               <p className="text-caption">
                 The card shows the window and filters currently applied above.
                 Change them on the page to change what it says.

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { UsageGroupRow, UsageTotals } from "@/client"
 import { usageTotals } from "@/tests/fixtures"
+import { getModalBackdrop } from "@/tests/modal"
 import { ShareDialog } from "./ShareDialog"
 
 // jsdom has no canvas, so the rasterizer cannot run for real here; mocked so the
@@ -154,6 +155,7 @@ describe("ShareDialog", () => {
       name: "Share this view as an image",
     })
     expect(dialog).toBeInTheDocument()
+    expect(dialog).toHaveClass("otari-modal-wide")
     expect(
       within(dialog).getByRole("button", { name: "Download PNG" }),
     ).toBeInTheDocument()
@@ -179,7 +181,7 @@ describe("ShareDialog", () => {
     const onClose = vi.fn()
     renderDialog(onClose)
 
-    await user.click(document.querySelector('[data-slot="modal-backdrop"]')!)
+    await user.click(getModalBackdrop())
 
     expect(onClose).toHaveBeenCalled()
     await waitFor(() =>

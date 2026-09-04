@@ -72,13 +72,14 @@ function PricingRefreshDialog({
   onReject: () => void
 }) {
   return (
-    <Modal.Backdrop className="bg-backdrop/50">
+    <Modal.Backdrop
+      isDismissable={!isPending}
+      isKeyboardDismissDisabled={isPending}
+    >
       <Modal.Container placement="center" size="lg">
-        <Modal.Dialog aria-label="Review default price updates">
+        <Modal.Dialog>
           <Modal.Header>
-            <Modal.Heading>
-              Review default price updates
-            </Modal.Heading>
+            <Modal.Heading>Review default price updates</Modal.Heading>
           </Modal.Header>
           <Modal.Body className="flex flex-col gap-4">
             <p className="text-sm text-muted">
@@ -166,9 +167,7 @@ function PricingRefreshSection() {
         isOpen={preview !== undefined}
         onOpenChange={(isOpen) => (!isOpen ? reject() : undefined)}
       >
-        <Modal.Trigger className="hidden">
-          Review price updates
-        </Modal.Trigger>
+        <Modal.Trigger className="hidden">Review price updates</Modal.Trigger>
         {preview ? (
           <PricingRefreshDialog
             preview={preview}

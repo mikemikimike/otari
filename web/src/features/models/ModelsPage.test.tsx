@@ -15,8 +15,10 @@ import type {
   PricingResponse,
 } from "@/client"
 import { ModelsPage } from "@/features/models/ModelsPage"
+import { SetPriceDialog } from "@/features/models/SetPriceDialog"
 import * as apiClient from "@/shared/api/client"
 import { organizationContext, pricingResponse } from "@/tests/fixtures"
+import { getModalBackdrop } from "@/tests/modal"
 import { withRouter } from "@/tests/router"
 import { pickOption, selectTrigger } from "@/tests/select"
 
@@ -1077,15 +1079,40 @@ describe("ModelsPage", () => {
       await screen.findByRole("button", { name: "Price vllm:mistral-small" }),
     )
 
-    await user.click(document.querySelector('[data-slot="modal-backdrop"]')!)
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+    await user.click(getModalBackdrop())
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    )
 
     await user.click(
       await screen.findByRole("button", { name: "Price vllm:mistral-small" }),
     )
     await screen.findByRole("dialog")
     await user.keyboard("{Escape}")
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    )
+  })
+
+  it("keeps the pricing form open while a price save is pending", async () => {
+    const user = userEvent.setup()
+    const onOpenChange = vi.fn()
+
+    render(
+      <SetPriceDialog
+        isOpen
+        onOpenChange={onOpenChange}
+        isPending
+        error={undefined}
+        onSubmit={() => undefined}
+      />,
+    )
+
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled()
+    await user.click(getModalBackdrop())
+    await user.keyboard("{Escape}")
+
+    expect(onOpenChange).not.toHaveBeenCalled()
   })
 
   // -- pricing a model the catalog does not list --------------------------
@@ -1234,9 +1261,7 @@ describe("ModelsPage", () => {
     await user.click(screen.getByRole("button", { name: "Price a model" }))
 
     expect(
-      within(await screen.findByRole("dialog")).getByLabelText(
-        "Model key",
-      ),
+      within(await screen.findByRole("dialog")).getByLabelText("Model key"),
     ).toHaveValue("")
   })
 

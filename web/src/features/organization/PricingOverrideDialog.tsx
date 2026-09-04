@@ -196,9 +196,12 @@ export function PricingOverrideDialog({
         {editing ? "Edit rate override" : "Add rate override"}
       </Modal.Trigger>
       {isOpen ? (
-        <Modal.Backdrop className="bg-backdrop/50">
+        <Modal.Backdrop
+          isDismissable={!isPending}
+          isKeyboardDismissDisabled={isPending}
+        >
           <Modal.Container placement="center" size="lg">
-            <Modal.Dialog aria-label={editing ? "Edit rate override" : "Add rate override"}>
+            <Modal.Dialog>
               <Modal.Header>
                 <Modal.Heading>
                   {editing ? "Edit rate override" : "Add rate override"}
@@ -299,7 +302,11 @@ export function PricingOverrideDialog({
                 ) : null}
               </Modal.Body>
               <Modal.Footer>
-                <Button variant="ghost" onPress={() => onOpenChange(false)}>
+                <Button
+                  variant="ghost"
+                  isDisabled={isPending}
+                  onPress={() => onOpenChange(false)}
+                >
                   Cancel
                 </Button>
                 <Button

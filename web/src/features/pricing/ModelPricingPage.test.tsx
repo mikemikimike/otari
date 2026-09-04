@@ -11,6 +11,7 @@ import type {
 } from "@/client"
 import { ModelPricingPage } from "@/features/pricing/ModelPricingPage"
 import { organizationContext } from "@/tests/fixtures"
+import { getModalBackdrop } from "@/tests/modal"
 import { withRouter } from "@/tests/router"
 
 const SETTINGS: GatewaySettings = {
@@ -276,7 +277,7 @@ describe("ModelPricingPage", () => {
       name: "Review default price updates",
     })
 
-    await user.click(document.querySelector('[data-slot="modal-backdrop"]')!)
+    await user.click(screen.getByRole("button", { name: "Reject changes" }))
 
     await waitFor(() =>
       expect(
@@ -292,6 +293,62 @@ describe("ModelPricingPage", () => {
           init?.method === "POST",
       ),
     ).toBe(true)
+  })
+
+  it("dismisses a reviewed default price update from the backdrop and Escape", async () => {
+    const fetchMock = mockApi()
+    const user = userEvent.setup()
+
+    renderPage(<ModelPricingPage />)
+    await screen.findByText("Default pricing catalog")
+    await user.click(
+      screen.getByRole("button", { name: "Check for price updates" }),
+    )
+    await screen.findByRole("dialog", {
+      name: "Review default price updates",
+    })
+
+    await user.click(getModalBackdrop())
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Review default price updates",
+        }),
+      ).not.toBeInTheDocument(),
+    )
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/v1/pricing/refresh/reject") &&
+            init?.method === "POST",
+        ),
+      ).toBe(true),
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Check for price updates" }),
+    )
+    await screen.findByRole("dialog", {
+      name: "Review default price updates",
+    })
+    await user.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Review default price updates",
+        }),
+      ).not.toBeInTheDocument(),
+    )
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(
+          ([url, init]) =>
+            String(url).endsWith("/v1/pricing/refresh/reject") &&
+            init?.method === "POST",
+        ),
+      ).toHaveLength(2),
+    )
   })
 
   it("gives an organization admin the prices and its own overrides, not the catalog", async () => {
