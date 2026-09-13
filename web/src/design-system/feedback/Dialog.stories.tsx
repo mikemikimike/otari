@@ -1,163 +1,159 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { useState } from "react"
+import { FiCheck } from "react-icons/fi"
 
 import { Button } from "../actions/Button"
-import { Field } from "../forms/Field"
-import { Dialog } from "./Dialog"
+import { CodeBlock } from "../content/CodeBlock"
+import { Dialog, DialogSection } from "./Dialog"
+import { InfoBanner } from "./InfoBanner"
 
-/**
- * The shell every dialog in this product sits in.
- *
- * It exists because the nest does not fit in a head: `Backdrop` > `Container` >
- * `Dialog` > `Header` > `Heading`, then a `Body` and a `Footer`, six levels
- * before a call site says anything of its own. Five components had written it
- * out by hand, and the copies had begun to differ in the parts that are easy to
- * get silently wrong: placement, dismiss behavior, and which element carries
- * the gap.
- *
- * `ConfirmDialog` is the specialization for a destructive action, with the two
- * buttons and the error line built in. This one is for a dialog holding a form.
- *
- * Note the `layout: "fullscreen"` parameter: a dialog portals out of
- * `#storybook-root`, so the centered layout would measure an empty trigger.
- */
-// Required props on the meta, so a story that supplies its own `render` still
-// satisfies the component's contract without restating them. Every story here
-// renders, because a dialog needs a trigger and its own open state to be worth
-// looking at.
 const meta = {
   title: "Design system/Feedback/Dialog",
   component: Dialog,
+  parameters: { layout: "fullscreen" },
   args: {
-    isOpen: false,
+    isOpen: true,
     onOpenChange: () => {},
-    heading: "Create an API key",
+    title: "Send your first request",
     children: null,
   },
-  parameters: { layout: "fullscreen" },
 } satisfies Meta<typeof Dialog>
 
 export default meta
 
 type Story = StoryObj<typeof meta>
 
-/** Press the button to open it. Escape and a click outside both close it. */
+/** The plain frame: a header, one band to read, and one way out. */
 export const Default: Story = {
-  render: () => {
-    const [isOpen, setIsOpen] = useState(false)
-    const [name, setName] = useState("")
-    return (
-      <div className="p-6">
-        <Button variant="primary" onPress={() => setIsOpen(true)}>
-          Create key
-        </Button>
-        <Dialog
-          isOpen={isOpen}
-          onOpenChange={setIsOpen}
-          heading="Create an API key"
-          footer={
-            <>
-              <Button onPress={() => setIsOpen(false)}>Cancel</Button>
-              <Button variant="primary" onPress={() => setIsOpen(false)}>
-                Create
-              </Button>
-            </>
-          }
-        >
-          <Field
-            label="Key name"
-            value={name}
-            onChange={setName}
-            placeholder="checkout-service"
-            description="Lowercase, hyphens, no spaces."
-            reserveMessage
+  args: {
+    description: "It lands in Default workspace.",
+    children: (
+      <DialogSection>
+        <p className="text-body">
+          Whatever the frame is presenting. A guided step, a receipt, a thing to
+          read and copy.
+        </p>
+      </DialogSection>
+    ),
+    actions: <Button variant="primary">Done</Button>,
+  },
+}
+
+/** Several bands, divided edge to edge rather than stacked with gaps. */
+export const Divided: Story = {
+  args: {
+    ...Default.args,
+    children: (
+      <>
+        <DialogSection>
+          <p className="text-emphasis">The first thing</p>
+          <p className="text-caption text-subtle">
+            Each band carries its own padding and the rule above it.
+          </p>
+        </DialogSection>
+        <DialogSection>
+          <p className="text-emphasis">The second thing</p>
+          <CodeBlock label="curl" value="curl https://example.com" />
+        </DialogSection>
+      </>
+    ),
+  },
+}
+
+/** With a footer caption beside the controls. */
+export const WithFooterCaption: Story = {
+  args: {
+    ...Default.args,
+    footerStart: (
+      <p className="text-caption">Usage stays empty until a request lands.</p>
+    ),
+    actions: (
+      <>
+        <Button>Skip</Button>
+        <Button variant="primary">Done</Button>
+      </>
+    ),
+  },
+}
+
+/** The widest step, for a frame carrying a key and a runnable example. */
+export const Large: Story = {
+  args: {
+    size: "lg",
+    isAnnouncement: true,
+    description:
+      "Usage, spend and the activity log stay empty until one does, so this guide watches for it and finishes here.",
+    children: (
+      <>
+        <DialogSection>
+          <InfoBanner tone="warning">
+            Copy this key now. It is shown once.
+          </InfoBanner>
+        </DialogSection>
+        <DialogSection>
+          <CodeBlock
+            label="curl"
+            arrangement="bare"
+            value={`curl 'https://gateway.example.com/api/v1/chat/completions' \\\n  -H "Otari-Key: gw-..."`}
           />
-        </Dialog>
+        </DialogSection>
+      </>
+    ),
+    status: (
+      <div className="border-border bg-surface-alt flex items-center justify-between gap-3 border px-4 py-3">
+        <span className="text-body">Listening for your first request</span>
+        <Button variant="ghost" size="sm">
+          Check now
+        </Button>
       </div>
-    )
+    ),
+    footerStart: <p className="text-caption">Skipping keeps the key.</p>,
+    actions: <Button variant="ghost">Skip this guide</Button>,
+  },
+}
+
+/** The payoff shape: a mark beside the heading, and a receipt band under it. */
+export const WithMark: Story = {
+  args: {
+    size: "md",
+    isAnnouncement: true,
+    title: "Your first call went through",
+    description:
+      "Otari observed the request and finished setup for this workspace.",
+    mark: (
+      <span className="mt-0.5 flex shrink-0">
+        <FiCheck aria-hidden className="text-success size-6" />
+      </span>
+    ),
+    children: (
+      <div className="border-border flex border-t">
+        <div className="flex min-w-0 flex-1 flex-col gap-1 px-6 py-3">
+          <span className="text-mono-overline">Model</span>
+          <span className="text-mono-caption text-foreground truncate">
+            openai:gpt-4o-mini
+          </span>
+        </div>
+        <div className="border-border flex shrink-0 flex-col gap-1 border-l px-4 py-3 pr-6">
+          <span className="text-mono-overline">Latency</span>
+          <span className="text-mono-caption text-foreground">412 ms</span>
+        </div>
+      </div>
+    ),
+    actions: <Button variant="primary">Continue to the activity log</Button>,
   },
 }
 
 /**
- * The three container sizes. `md` is the default; `lg` is for a dialog holding
- * a table or a code block, `sm` for one asking a single question.
+ * Undismissable: no close control and no backdrop press, for a frame whose
+ * content cannot be recovered once it goes away.
  */
-export const Sizes: Story = {
-  render: () => {
-    const [size, setSize] = useState<"sm" | "md" | "lg" | undefined>(undefined)
-    return (
-      <div className="flex gap-3 p-6">
-        {(["sm", "md", "lg"] as const).map((each) => (
-          <Button key={each} onPress={() => setSize(each)}>
-            Open {each}
-          </Button>
-        ))}
-        <Dialog
-          isOpen={size !== undefined}
-          onOpenChange={() => setSize(undefined)}
-          heading={`A ${size ?? "md"} dialog`}
-          size={size ?? "md"}
-          footer={<Button onPress={() => setSize(undefined)}>Close</Button>}
-        >
-          <p className="text-body">
-            The container's width changes; the body's own 4px gap does not.
-          </p>
-        </Dialog>
-      </div>
-    )
+export const Undismissable: Story = {
+  args: {
+    ...Default.args,
+    isDismissable: false,
+    actions: <Button variant="primary">I have copied it</Button>,
   },
 }
 
-/**
- * `isDismissable={false}` takes Escape and the outside click away, so the
- * footer is the only way out. The only honest reason is unsaved work that would
- * be lost, and even then the better fix is usually to keep the dismiss and
- * confirm the discard.
- */
-export const NotDismissable: Story = {
-  render: () => {
-    const [isOpen, setIsOpen] = useState(false)
-    return (
-      <div className="p-6">
-        <Button onPress={() => setIsOpen(true)}>Open</Button>
-        <Dialog
-          isOpen={isOpen}
-          onOpenChange={setIsOpen}
-          heading="Finish setting up this provider"
-          isDismissable={false}
-          footer={
-            <Button variant="primary" onPress={() => setIsOpen(false)}>
-              Done
-            </Button>
-          }
-        >
-          <p className="text-body">
-            Escape does nothing here, and neither does a click on the backdrop.
-          </p>
-        </Dialog>
-      </div>
-    )
-  },
-}
-
-/** Without a footer, for a dialog that only shows something. */
-export const NoFooter: Story = {
-  render: () => {
-    const [isOpen, setIsOpen] = useState(false)
-    return (
-      <div className="p-6">
-        <Button onPress={() => setIsOpen(true)}>Show the request</Button>
-        <Dialog
-          isOpen={isOpen}
-          onOpenChange={setIsOpen}
-          heading="Request 4f8a2c9e"
-          size="lg"
-        >
-          <pre className="overflow-x-auto font-mono text-mono-caption">
-            {'{\n  "model": "gpt-4o-mini",\n  "stream": true\n}'}
-          </pre>
-        </Dialog>
-      </div>
-    )
-  },
-}
+/** The two narrower steps, for reference. */
+export const Small: Story = { args: { ...Default.args, size: "sm" } }
+export const Medium: Story = { args: { ...Default.args, size: "md" } }

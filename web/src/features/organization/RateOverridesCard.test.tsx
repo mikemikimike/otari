@@ -7,7 +7,6 @@ import type { OrganizationContext, OrganizationPricingOverride } from "@/client"
 import { RateOverridesCard } from "@/features/organization/RateOverridesCard"
 import { API_ROOT } from "@/shared/api/client"
 import { organizationContext } from "@/tests/fixtures"
-import { getModalBackdrop } from "@/tests/modal"
 import { renderWithRouter } from "@/tests/router"
 
 interface RecordedRequest {
@@ -196,27 +195,57 @@ describe("RateOverridesCard", () => {
     })
   })
 
-  it("dismisses the override form from the backdrop and Escape", async () => {
-    mockApi({ overrides: [] })
+  it("puts focus in the first rate when editing, not on the frame's Close", async () => {
+    // The add path's first field is the model key, which carries `autoFocus`.
+    // Editing replaces it with a read-only block, so without this the dialog
+    // opened with focus on Close.
+    mockApi({ overrides: [pricingOverride()] })
     const user = userEvent.setup()
 
     await renderPage()
+
+    await user.click(await screen.findByRole("button", { name: /^edit$/i }))
+
+    const dialog = await screen.findByRole("dialog")
+    await waitFor(() =>
+      expect(
+        within(dialog).getByLabelText(/input, per 1m tokens/i),
+      ).toHaveFocus(),
+    )
+  })
+
+  it("does not greet the next open with the last attempt's refusal", async () => {
+    // The create and replace mutations live inside the dialog, below the card's
+    // key, so the remount that clears the draft clears the refusal with it.
+    // Held in the card they outlived both: a blank form arrived under the
+    // previous attempt's banner.
+    mockApi({ overrides: [], writeStatus: 409 })
+    const user = userEvent.setup()
+
+    await renderPage()
+
     await user.click(
       await screen.findByRole("button", { name: /add override/i }),
     )
-    await screen.findByRole("dialog", { name: "Add rate override" })
-
-    await user.click(getModalBackdrop())
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    await user.type(
+      await screen.findByLabelText(/model key/i),
+      "anthropic:claude-sonnet-5",
     )
+    await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
+    await user.type(screen.getByLabelText(/output, per 1m tokens/i), "15")
+    await user.click(screen.getByRole("button", { name: /^add override$/i }))
 
-    await user.click(screen.getByRole("button", { name: /add override/i }))
-    await screen.findByRole("dialog", { name: "Add rate override" })
+    expect(await screen.findByRole("alert")).toBeInTheDocument()
+
+    // Out through the guard, then in again.
     await user.keyboard("{Escape}")
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
-    )
+    await user.click(screen.getByRole("button", { name: "Discard" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await user.click(screen.getByRole("button", { name: /add override/i }))
+
+    const reopened = await screen.findByRole("dialog")
+    expect(within(reopened).queryByRole("alert")).toBeNull()
+    expect(within(reopened).getByLabelText(/model key/i)).toHaveValue("")
   })
 
   it("refuses a model key with no provider prefix before sending it", async () => {
@@ -314,6 +343,30 @@ describe("RateOverridesCard", () => {
       screen.getByRole("button", { name: /save override/i }),
     ).toBeDisabled()
     expect(requests.some((request) => request.method === "PUT")).toBe(false)
+  })
+
+  it("seeds each opener's dialog fresh, whichever one was used last", async () => {
+    // Keying a dialog on an open counter is only right if every opener bumps
+    // it. This card has two, Add and a row's Edit, and one that skipped the
+    // bump would leave the previous open's rates in the fields. Rates are the
+    // expensive case: an inherited figure is what a model is billed at.
+    mockApi({ overrides: [pricingOverride()] })
+    const user = userEvent.setup()
+
+    await renderPage()
+
+    await user.click(await screen.findByRole("button", { name: /edit/i }))
+    const edited = await screen.findByLabelText(/input, per 1m tokens/i)
+    expect(edited).not.toHaveValue("")
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }))
+
+    await user.click(
+      await screen.findByRole("button", { name: /add override/i }),
+    )
+    expect(await screen.findByLabelText(/input, per 1m tokens/i)).toHaveValue(
+      "",
+    )
+    expect(await screen.findByLabelText(/model key/i)).toHaveValue("")
   })
 
   it("deletes an override after a confirmation", async () => {

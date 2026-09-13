@@ -5,7 +5,7 @@ what happened, what the system did about it, and the one control that fixes it.
 
 ## Which one?
 
-```
+```text
 Did a request fail?
  └── ErrorBanner            (it sanitizes the error; see below)
 Is there a standing condition the operator should know about?
@@ -31,6 +31,10 @@ Is it destructive but deletes nothing (regenerate, archive, reset)?
  └── ConfirmButton          (the two-step confirm; see actions.md)
 Is the operator creating or editing an object?
  └── FormDialog             (every one of them; see the placement rule in actions.md)
+Is it a frame that is neither a form nor a question?
+ └── Dialog                 (a guided step, a receipt, a thing to read and copy)
+Is the product waiting on something to arrive?
+ └── ScanBorder             (around the panel that is doing the waiting)
 ```
 
 ## Signatures
@@ -46,8 +50,13 @@ PageError: { error: unknown, children? }
 ConfirmDialog: { isOpen, onOpenChange, heading, body, confirmLabel, onConfirm,
   confirmVariant = "danger", isPending?, error? }
 FormDialog: { isOpen, onOpenChange, title, description?, size = "md",
-  submitLabel, onSubmit, isPending, error?, isDirty?, footerStart?, tabs?,
-  children }
+  submitLabel, onSubmit, isPending, error?, isDirty?, isDismissable = true,
+  isSubmitDisabled?, returnFocusRef?, footerStart?, tabs?, children }
+Dialog: { isOpen, onOpenChange, title, description?, size = "md",
+  mark?, isAnnouncement?, isDismissable = true, status?, footerStart?,
+  actions?, children }
+DialogSection: { className?, children }
+ScanBorder: { isActive, tone = "accent" | "danger", className?, children }
 ErrorBoundary: { children, resetKey? }
 ```
 
@@ -110,6 +119,94 @@ A disabled action in an empty state must carry its reason (Providers' "Add your
 first provider" with no server secret key). A control shown disabled instead of
 hidden is carrying that meaning on its own, at `opacity: 0.4`.
 
+## Dialog
+
+The third dialog, and the one to reach for when the other two would be a lie
+about what the frame does. `FormDialog` is a place to work and owns a submit;
+`ConfirmDialog` is an `AlertDialog` that interrupts to ask one question. This is
+neither: a header, a scrolling body, an optional footer, and a body that is
+whatever is being presented.
+
+It shares `FormDialog`'s geometry class family in `globals.css`, so both sit at
+the same height, cap at the same viewport budget and become the same full-screen
+sheet below 640px in either dimension, and it takes the same three widths.
+
+**Its body has no padding, and that is the component's one structural rule.**
+Every band is a `DialogSection`, which carries its own padding and the hairline
+above it, so the divisions run edge to edge the way a page's do. A frame
+presenting three things divides them; it does not float three cards in a padded
+column, which is the thing this system does not do anywhere.
+
+`status` is the one slot outside the scrolling body: a readout pinned above the
+footer on its own tinted band, for the thing the frame is actually about rather
+than more of what it is presenting. A frame with a long body and a live status
+would otherwise push that status below the fold at the moment it starts
+changing, which is what happened to the first-run sheet's listening panel. The
+tint is what separates it without a second border, and it is the only fill in
+the frame, so what goes in it draws no surface of its own.
+
+`mark` is a glyph at the head of the title row, beside the heading rather than
+centered above it: a frame reporting that something worked is still a frame, and
+centering one screen of a flow that is otherwise left-aligned reads as a
+different product. `isAnnouncement` takes `text-display-sub` instead of the
+section head, which the type scale reserves for one thing per page, "a
+get-started strip, a first-run panel".
+
+```tsx
+// Correct: a frame presenting something, with one way out
+<Dialog
+  isOpen={isOpen}
+  onOpenChange={setIsOpen}
+  size="lg"
+  title="Send your first request"
+  description="It lands in Default workspace."
+  status={<ListeningPanel />}
+  footerStart={<p className="text-caption">Usage stays empty until one lands.</p>}
+  actions={<Button onPress={skip}>Skip</Button>}
+>
+  <DialogSection>
+    <CopyField label="Your API key" value={key} concealed={CONCEALED_SECRET} />
+  </DialogSection>
+  <DialogSection>
+    <CodeBlock label="curl" value={snippet} arrangement="bare" isBounded />
+  </DialogSection>
+</Dialog>
+
+// Incorrect: a form belongs in FormDialog, which owns the submit and its
+// pending state rather than leaving both to the caller. A bare child is also a
+// band with no padding and no rule: every child is a DialogSection.
+<Dialog title="New key" actions={<Button onPress={create}>Create</Button>}>
+  <Field label="Key name" value={name} onChange={setName} />
+</Dialog>
+```
+
+## ScanBorder
+
+The one piece of decorative motion in this system, and it earns its place by
+being literally true: an arc travels the band's edge **only while the product is
+watching for something that has not arrived**, and stops when it has. Anywhere
+else, motion on an edge is noise.
+
+It is a masked conic gradient on an `::after`, with the angle animated through
+an `@property`, so there is no dependency behind it and at radius 0 there is no
+corner to get wrong. `tone` picks the arc's ink through a variable, which is how
+a failure turns the sweep red without the stylesheet knowing what a failure is.
+
+Under `prefers-reduced-motion` the arc holds still rather than disappearing: the
+band should still read as the thing on the page that is waiting.
+
+```tsx
+// Correct: the wait is real, and the tone reports the last attempt
+<ScanBorder isActive={!checkFailed} tone={failure ? "danger" : "accent"}>
+  <ListeningRow />
+</ScanBorder>
+
+// Incorrect: nothing is being awaited, so the motion says nothing
+<ScanBorder isActive>
+  <KpiStrip />
+</ScanBorder>
+```
+
 ## ConfirmDialog
 
 **Every delete of a record**, and any other destructive action that needs a
@@ -143,7 +240,7 @@ one question; a form is a place to work.
   onSubmit={submit}
   isPending={create.isPending}
   error={create.error}
-  isDirty={name !== ""}
+  isDirty={isDirty}
 >
   <Field
     label="Key name"
@@ -186,9 +283,100 @@ it has to read as denied, and a submit in flight is working rather than refused,
 so it keeps its fill and blocks its own press. Cancel and the close control *are*
 disabled, because they genuinely are refused until it lands.
 
+**An empty state or first-run panel whose action opens the dialog stays mounted
+while the dialog is open; it is the node focus returns to.** Hiding it while the
+form is up was right when the form was a band on the page and takes away the
+only thing focus can go back to now that it is a dialog over one.
+
+**A page whose empty state disappears after the first create passes
+`returnFocusRef` to the control that survives.** React Aria restores focus to
+whatever opened the dialog, and that node is gone when creating the first row is
+what emptied the empty state; focus falls to `<body>` and the next Tab starts at
+the top of the document. The check runs when the frame is actually gone, not when
+it was asked to close: the overlay subtree lives through its exit animation, so a
+`requestAnimationFrame` at close time finds the dialog still holding focus.
+
 **`isDirty` arms a guard in the footer, not a second dialog.** Escape and a
 click outside swap the actions for "Unsaved changes · Keep editing · Discard".
 A dialog never opens a dialog.
+
+**A draft is fresh on every open and untouched through the exit.** Reset on the
+way in, never on the way out. The frame keeps its content while it animates out,
+so clearing state when `isOpen` goes false blanks the body for the length of the
+exit, and a success step blanks to an empty form in front of the operator.
+
+**The component that renders the `FormDialog` owns everything that resets
+between opens: the draft *and* its mutation**, meaning the hook that yields
+`isPending` and `error`. Both live below the key. The page owns only `isOpen`,
+the open counter that keys the mount, and the list the mutation refreshes.
+
+```tsx
+// Correct: the mutation is inside the component the key remounts
+function CreateKeyDialog({ isOpen, onOpenChange }: …) {
+  const create = useCreateKey()
+  const [keyName, setKeyName] = useState("")
+  …
+}
+
+// and the page holds only what does not reset
+const [isOpen, setIsOpen] = useState(false)
+const [openCount, setOpenCount] = useState(0)
+…
+<Button onPress={() => { setOpenCount((n) => n + 1); setIsOpen(true) }}>
+  Create key
+</Button>
+<CreateKeyDialog key={openCount} isOpen={isOpen} onOpenChange={setIsOpen} />
+
+// Incorrect: the mutation sits above the key, so the key cannot reset it
+const createBudget = useCreateBudget()          // page level
+…
+<BudgetForm key={openCount} error={createBudget.error} … />
+```
+
+A mutation above the key is the shape to watch for, because the draft looks
+right and the error does not: the key remounts the fields, the mutation keeps
+its state, and a failed create's banner survives into a fresh form. `close()`
+only sets `isOpen` false; a `requestAnimationFrame` does not cover the exit,
+which is an animation rather than a frame.
+
+**`isDirty` comes from `useDirtySnapshot`**: hand it every field the form owns
+and it snapshots them on mount, so dirty means "differs from what was seeded".
+
+```tsx
+// Correct: the whole draft, and the hook holds the seed
+const { isDirty } = useDirtySnapshot({
+  name,
+  target,
+  chain,
+  conditions,
+  guardrails,
+})
+…
+<FormDialog isDirty={isDirty} … />
+
+// Incorrect: a predicate of empties, which reports an edit form dirty on arrival
+const isPristine = name === "" && target === "" && chain.length === 0
+```
+
+A field whose default arrives after mount (the first budget in a list, a
+workspace roster) is part of the seed, not a change: seed the state from the
+resolved value, or call the hook's `reset` when it lands. The hook cannot tell
+that default from a keystroke, and deliberately does not try.
+
+Dirty means "differs from what was seeded", and a create form is the case where
+the seed happens to be all empties. So a hand-listed predicate of empties is the
+create-only degenerate form: it is right until the same component edits
+something, and it drifts, because a field added to the form has to be remembered
+in a second place. The hook cannot omit a field, because it is handed the draft
+rather than a list of the fields to compare.
+
+A guard that lies lets Escape discard work it cannot see. That has happened here
+in both directions: a reopened dialog dirty on arrival, and a half-filled one
+discarded without a word.
+
+The remount is also what keeps one row's draft out of the next row's dialog,
+which is the promise this component's own docstring makes; a page that holds the
+draft above the dialog defeats it.
 
 **The success step is not a prop.** When a mutation has something to hand back
 (a key's secret), the caller swaps the children and the submit label to "Done"

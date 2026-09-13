@@ -24,7 +24,7 @@ not a duplicate to collapse.
 
 What background do I use?
 
-```
+```text
 Is it the page itself, the rail, or the top bar?
  ├── Yes -> bg-background   (the shell is flat; hairlines divide it, not levels)
  └── No
@@ -84,6 +84,8 @@ single most missed line in this file.
 translucent so it holds across all four rungs, and set text on it to
 `--color-primary-subtle-foreground` (`#005b63`), because the accent itself is
 under AA on its own tint.
+
+The decorative auth field has a scoped [public authentication exception](layout.md#public-authentication); it is not a content-surface tint.
 
 ## Status: four hues plus one warm accent
 

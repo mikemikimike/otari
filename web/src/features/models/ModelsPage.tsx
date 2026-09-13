@@ -1646,8 +1646,12 @@ export function ModelsPage() {
   // Non-null while the hand-pricing dialog is open, holding the key it opened
   // with: a searched selector, a provider prefix, or "" for a blank field.
   const [customPriceKey, setCustomPriceKey] = useState<string | null>(null)
-  const [customPending, setCustomPending] = useState(false)
-  const [customError, setCustomError] = useState<unknown>(undefined)
+  // Bumped on every open and used as the dialog's key, so the rates are cleared
+  // on the way in rather than on the way out. These values set money.
+  const [priceOpenCount, setPriceOpenCount] = useState(0)
+  // The label the opener carried. Trigger and submit say the same string
+  // (actions.md), and this dialog has two openers whose triggers differ.
+  const [priceLabel, setPriceLabel] = useState("Price a model")
 
   useEffect(() => {
     try {
@@ -2115,26 +2119,20 @@ export function ModelsPage() {
   // than by the raw input (a legacy provider/model form collapses onto
   // provider:model). Cache 1h rates and tiers are left out of the request so
   // re-pricing an existing key inherits them instead of clearing them.
+  // Awaited by the dialog, which owns the pending and error state: they live
+  // below its key, so a refusal cannot greet the next open. A rejection is
+  // rethrown for it to report rather than swallowed here.
   const priceCustomModel = async (rates: ManualRates, modelKey: string) => {
-    setCustomPending(true)
-    setCustomError(undefined)
-    try {
-      const created = await setPricing.mutateAsync({
-        model_key: modelKey,
-        input_price_per_million: rates.input_price_per_million,
-        output_price_per_million: rates.output_price_per_million,
-        cache_read_price_per_million:
-          rates.cache_read_price_per_million ?? null,
-        cache_write_price_per_million:
-          rates.cache_write_price_per_million ?? null,
-      })
-      setCustomPriceKey(null)
-      setSelectedKey(created.model_key)
-    } catch (error) {
-      setCustomError(error)
-    } finally {
-      setCustomPending(false)
-    }
+    const created = await setPricing.mutateAsync({
+      model_key: modelKey,
+      input_price_per_million: rates.input_price_per_million,
+      output_price_per_million: rates.output_price_per_million,
+      cache_read_price_per_million: rates.cache_read_price_per_million ?? null,
+      cache_write_price_per_million:
+        rates.cache_write_price_per_million ?? null,
+    })
+    setCustomPriceKey(null)
+    setSelectedKey(created.model_key)
   }
 
   const modelsLoading =
@@ -2171,7 +2169,15 @@ export function ModelsPage() {
         <Button
           size="sm"
           variant="ghost"
-          onPress={() => setCustomPriceKey(searchedSelector ?? "")}
+          onPress={() => {
+            setPriceOpenCount((count) => count + 1)
+            setPriceLabel(
+              searchedSelector
+                ? `Price ${searchedSelector}`
+                : "Price a model by hand",
+            )
+            setCustomPriceKey(searchedSelector ?? "")
+          }}
         >
           {searchedSelector
             ? `Price ${searchedSelector}`
@@ -2287,7 +2293,11 @@ export function ModelsPage() {
 
         <DiscoveredErrors
           providers={discoveredErrors}
-          onPriceModel={setCustomPriceKey}
+          onPriceModel={(key) => {
+            setPriceOpenCount((count) => count + 1)
+            setPriceLabel("Price a model")
+            setCustomPriceKey(key)
+          }}
         />
 
         <div
@@ -2360,14 +2370,15 @@ export function ModelsPage() {
         </div>
       </div>
 
+      {/* Keyed on the open count, so each open remounts a blank form. */}
       <SetPriceDialog
+        key={priceOpenCount}
         isOpen={customPriceKey !== null}
         onOpenChange={(open) =>
           setCustomPriceKey(open ? (customPriceKey ?? "") : null)
         }
-        isPending={customPending}
-        error={customError}
         onSubmit={priceCustomModel}
+        submitLabel={priceLabel}
         collectModelKey
         initialModelKey={customPriceKey ?? ""}
         title="Price a model"

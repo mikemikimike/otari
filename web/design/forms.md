@@ -7,7 +7,7 @@ border is what makes it an object. HeroUI defaults `--field-border-width` to 0;
 
 ## Which control?
 
-```
+```text
 Is it free text, a number, or a date?
  ├── Is the value a secret (a provider key, a password)?
  │    ├── Collecting one -> SecretField   (masked, never prefilled, autofill off)
@@ -31,7 +31,8 @@ Is it one of a set too long to scroll, or open-ended?
  └── ComboBoxField                 (search as you type; `allowsCustomValue`
                                     for a list that is a shortcut, not a whitelist)
 Is it many of a set?
- └── FilterMultiComboBox
+ ├── In a form -> MultiSelect
+ └── In a toolbar -> FilterMultiComboBox
 ```
 
 `Select` and `FilterSelect` are two components rather than one with a mode, and
@@ -61,6 +62,10 @@ ComboBoxField: { label, value, onChange, onQueryChange?, options: ComboBoxOption
   description?, placeholder?, isRequired?, isDisabled?, isInvalid?, errorMessage?,
   reserveMessage?, className?, allowsCustomValue?, autoFocus?, menuTrigger = "focus",
   shouldSelectOnFocus?, isSourceEmpty?, emptyMessage?, noMatchesMessage? }
+MultiSelect: { label, value: readonly string[], onChange: (next: string[]) => void,
+  options: readonly MultiSelectOption[] ({ id, label, hint? }), description?,
+  isInvalid?, errorMessage?, reserveMessage?, searchPlaceholder?, emptyMessage?,
+  noMatchesMessage?, countNoun?: { one, other }, maxVisible = 50, autoFocus? }
 RadioGroup: { label, value, onChange, options: RadioOption[], description?,
   orientation = "vertical", isRequired?, isDisabled?, isInvalid?, errorMessage?,
   className? }
@@ -150,6 +155,30 @@ one label apart.
 `FilterMultiComboBox` stays a separate component for the reason `FilterSelect`
 does: it is a filter, so its label is a caption beside the control and it never
 speaks a validation message.
+
+## MultiSelect
+
+**The form half of that pair.** It puts its label above the control, owns a
+description and an error announced on it, and is the one to reach for inside a
+`FormDialog`; `FilterMultiComboBox` is the toolbar one and stays.
+
+Two behaviors are its own, and both were the bug it was built for. **The search
+field never moves**: the chips render *below* it, so a growing selection pushes
+the block down rather than shoving the control out from under the pointer. And
+**a picked option stays in the list, checked**, so the list answers "who is in"
+rather than only "who is left"; pressing it again removes it, and the order
+never re-sorts on a pick.
+
+`countNoun` is a pair, `{ one, other }`, because one noun interpolated into both
+counts is how "1 people assigned" ships. `maxVisible` caps what is rendered,
+never what is searched: the filter runs over every option and the footer says
+when it is showing fewer.
+
+An option's `hint` is the same thing it is on `ComboBoxField`: a second, muted
+line inside the row, folded into the row's accessible name because it is what
+tells two rows with one label apart. The query matches it too, so an operator
+who knows an id reaches the row named for a person.
+
 
 ## Field height is a property of the place, not of the field
 
@@ -278,3 +307,29 @@ guesses a number, and the guess is wrong the moment the caption is retuned.
 // Wrong: a hand-tuned nudge that does not track the caption
 <Button variant="ghost" className="pb-2" onPress={remove}>Remove</Button>
 ```
+
+A field whose action submits it is the one row `FieldAction` cannot answer: its
+message is a sentence long enough to wrap, and a wrapped message makes that field
+taller than the reserve the action holds. Put the button inside the field instead,
+beside the input, and let the message sit under both.
+
+```tsx
+// Correct: one row for the input line, the message under the whole field
+<TextField className="flex max-w-2xl flex-col gap-1">
+  <Label className="text-body">Name</Label>
+  <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+    <Input className="w-full max-w-md" />
+    <Button type="submit" variant="primary">Add a passkey</Button>
+  </div>
+  <FieldMessages>
+    <Description className="text-muted">Optional, and only a label.</Description>
+  </FieldMessages>
+</TextField>
+```
+
+The input keeps `max-w-md`, the house field width; the wrapper is widened to hold
+the input, the gap and the button, so the field does not narrow to make room. The
+`items-start` is what keeps the button its own width once the row stacks: a column
+stretches its children by default, and a full-width button does not press (see
+[actions.md](actions.md)). The input carries `w-full` so the stretch it wanted is
+still the width it gets.

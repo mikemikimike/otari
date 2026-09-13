@@ -46,6 +46,10 @@ function mockApi(opts: {
   context?: OrganizationContext
   members?: OrganizationMember[]
   workspaces?: Workspace[]
+  // Holds the workspace roster in flight, so the dialog can be typed into
+  // before its default lands: `fetchAllPaged` walks every page, so on a cold
+  // cache that is the real order.
+  workspacesGate?: Promise<unknown>
   inviteResult?: unknown
   // The gateway's spend rows. The roster joins them on `attribution_user_id`
   // to show what a member may call and what they have spent, neither of which
@@ -106,6 +110,7 @@ function mockApi(opts: {
       return jsonResponse(roster[0] ?? {})
     }
     if (url.includes(`${API_ROOT}/workspaces`)) {
+      if (opts.workspacesGate) await opts.workspacesGate
       return jsonResponse({ data: workspaces, count: workspaces.length })
     }
     if (url.includes(`${API_ROOT}/users`)) {
@@ -287,8 +292,9 @@ describe("OrganizationMembersPage", () => {
     await pickOption(user, "Role", "Admin")
     // Ticked by default, since a member in no workspace can reach nothing.
     expect(await screen.findByLabelText("Production")).toBeChecked()
-    // The header action hides itself while the form is open, so the remaining
-    // button of this name is the form's own submit.
+    // The header action stays on screen but the open dialog hides the page
+    // behind it from the accessibility tree, so the one button of this name
+    // left to find is the dialog's own submit.
     await user.click(screen.getByRole("button", { name: "Add member" }))
 
     const post = requests.find((request) => request.method === "POST")
@@ -298,6 +304,60 @@ describe("OrganizationMembersPage", () => {
       role: "admin",
       workspace_assignments: [{ workspace_id: "ws-1", role: "member" }],
     })
+  })
+
+  it("keeps both header triggers on screen while a dialog is open", async () => {
+    // The dialog sits over the page rather than replacing the pair, so neither
+    // control vanishes from under the pointer while one of them is open.
+    mockApi({ members: [OWNER] })
+    const user = userEvent.setup()
+    renderPage(<OrganizationMembersPage />)
+
+    const add = await screen.findByRole("button", { name: "Add member" })
+    const invite = screen.getByRole("button", { name: "Invite member" })
+    await user.click(add)
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument()
+    expect(add).toBeVisible()
+    expect(invite).toBeVisible()
+  })
+
+  it("opens each dialog on a blank draft, not on the last one typed", async () => {
+    // Reset on the way in: clearing on the way out would blank the fields
+    // while the dialog is still animating away.
+    mockApi({ members: [OWNER] })
+    const user = userEvent.setup()
+    renderPage(<OrganizationMembersPage />)
+
+    await user.click(await screen.findByRole("button", { name: "Add member" }))
+    await user.type(screen.getByLabelText("Email address"), "ada@example.com")
+    // A draft this far along is dirty, so the way out is through the guard.
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Discard" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+
+    await user.click(screen.getByRole("button", { name: "Add member" }))
+    expect(await screen.findByLabelText("Email address")).toHaveValue("")
+  })
+
+  it("reads nothing on its own account for the two closed dialogs", async () => {
+    // Both forms are mounted from the first paint now, so anything they read
+    // would be read on page load. Today they read only the workspace list the
+    // page itself needs, which is why one GET serves all three.
+    const requests = mockApi({
+      members: [OWNER],
+      workspaces: [workspace({ id: "ws-1", name: "Production" })],
+    })
+    renderPage(<OrganizationMembersPage />)
+
+    await screen.findByRole("button", { name: "Add member" })
+    await waitFor(() =>
+      expect(
+        requests.filter((request) =>
+          request.url.startsWith(`${API_ROOT}/workspaces?`),
+        ),
+      ).toHaveLength(1),
+    )
   })
 
   it("leaves the default alone once the operator has cleared it", async () => {
@@ -367,6 +427,88 @@ describe("OrganizationMembersPage", () => {
     ).toBeInTheDocument()
   })
 
+  it("keeps an address typed before the roster lands inside the guard", async () => {
+    // The default workspace is part of the seed; what the operator has already
+    // typed is not. Seeding the fields as they stand when the roster answers
+    // made the guard forget an address typed in the meantime, and Escape then
+    // closed without asking.
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    mockApi({
+      members: [OWNER],
+      workspaces: [workspace({ id: "ws-1", name: "Production" })],
+      workspacesGate: gate,
+    })
+    const user = userEvent.setup()
+    renderPage(<OrganizationMembersPage />)
+
+    await user.click(await screen.findByRole("button", { name: "Add member" }))
+    await user.type(screen.getByLabelText("Email address"), "ada@example.com")
+
+    // Now the roster answers and seeds the workspace default.
+    release()
+    expect(await screen.findByLabelText("Production")).toBeChecked()
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+
+    expect(
+      await screen.findByRole("button", { name: "Discard" }),
+    ).toBeInTheDocument()
+  })
+
+  it("guards a role change on the add form, with no address typed", async () => {
+    // The guard reads one snapshot of the whole draft. It read the address
+    // alone, so changing the role, or unticking the seeded workspace the form
+    // itself warns about, was discarded with nothing asked.
+    mockApi({
+      members: [OWNER],
+      workspaces: [workspace({ id: "ws-1", name: "Production" })],
+    })
+    const user = userEvent.setup()
+    renderPage(<OrganizationMembersPage />)
+
+    await user.click(await screen.findByRole("button", { name: "Add member" }))
+    await pickOption(user, "Role", "Admin")
+
+    // Through Cancel: in jsdom focus lands on `<body>` after picking from a
+    // `Select`, so a keystroke reaches nothing.
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+
+    expect(
+      await screen.findByRole("button", { name: "Discard" }),
+    ).toBeInTheDocument()
+  })
+
+  it("guards an unticked workspace on the invite form, and reopens clean", async () => {
+    mockApi({
+      members: [OWNER],
+      workspaces: [workspace({ id: "ws-1", name: "Production" })],
+    })
+    const user = userEvent.setup()
+    renderPage(<OrganizationMembersPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Invite member" }),
+    )
+    // Seeded once the roster answers, which is after mount: unticking it is a
+    // change, and the seed it is compared against is the ticked default.
+    const production = await screen.findByLabelText("Production")
+    expect(production).toBeChecked()
+    await user.click(production)
+
+    await user.keyboard("{Escape}")
+    await user.click(await screen.findByRole("button", { name: "Discard" }))
+
+    // And the roster landing is not itself a change: the reopened form is
+    // clean, so Escape closes it rather than asking.
+    await user.click(screen.getByRole("button", { name: "Invite member" }))
+    await screen.findByLabelText("Production")
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
   it("invites a member by email and shows the accept link when mail is not configured", async () => {
     const requests = mockApi({ members: [OWNER] })
     const user = userEvent.setup()
@@ -379,7 +521,13 @@ describe("OrganizationMembersPage", () => {
       screen.getByText(/Invitation email is unavailable/),
     ).toBeInTheDocument()
     await user.type(screen.getByLabelText("Email address"), "ada@example.com")
-    await user.click(screen.getByRole("button", { name: "Send invitation" }))
+    // Scoped: the trigger and the submit say the same thing, which is the label
+    // rule, so an unscoped press is ambiguous.
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Invite member",
+      }),
+    )
 
     const post = requests.find(
       (request) =>
@@ -391,8 +539,11 @@ describe("OrganizationMembersPage", () => {
     })
 
     // mail_sent is false in the mocked response, so the link is offered to
-    // share by hand rather than the form just closing.
-    expect(await screen.findByText("Invitation sent")).toBeInTheDocument()
+    // share by hand rather than the form just closing, and the dialog says the
+    // email did not go out rather than claiming it did.
+    expect(
+      await screen.findByText(/Otari did not send the email/),
+    ).toBeInTheDocument()
     expect(
       screen.getByText("/#/accept-invitation?token=abc123"),
     ).toBeInTheDocument()
@@ -523,6 +674,23 @@ describe("OrganizationMembersPage", () => {
     expect(patch?.body).toEqual({ blocked: true })
   })
 
+  it("opens the member editor in a dialog, naming the member", async () => {
+    mockApi({ members: [OWNER, ANALYST], workspaces: [workspace()] })
+    const actor = userEvent.setup()
+    renderPage(<OrganizationMembersPage />)
+
+    await screen.findByText("Analyst")
+    await actor.click(
+      within(rowFor("Analyst")).getByRole("button", { name: "Edit" }),
+    )
+
+    // A dialog rather than a band above the roster: the row keeps its place,
+    // and the page under it does not shift by the height of a form
+    // (otari-ai#2125).
+    const dialog = await screen.findByRole("dialog", { name: "Edit member" })
+    expect(within(dialog).getByText("Workspace access")).toBeInTheDocument()
+  })
+
   it("edits model access, workspace membership and the workspace budget in one save", async () => {
     // One control over three tables underneath, so this asserts all three
     // writes land from a single save, and that the ceiling is written against
@@ -571,7 +739,7 @@ describe("OrganizationMembersPage", () => {
     // Bravo. A budget is picked, never an amount: the figure is the budget's.
     await pickOption(actor, "Budget in Default Workspace", "Large")
     await actor.click(screen.getByLabelText("Bravo"))
-    await actor.click(screen.getByRole("button", { name: "Save changes" }))
+    await actor.click(screen.getByRole("button", { name: "Save" }))
 
     // All three writes land from the one save. Model access goes to the spend
     // row the membership is joined to, and it is the third table the editor
@@ -693,7 +861,7 @@ describe("OrganizationMembersPage for a tenant who does not operate the deployme
     expect(
       screen.queryByLabelText("Budget in Default Workspace"),
     ).not.toBeInTheDocument()
-    await actor.click(screen.getByRole("button", { name: "Save changes" }))
+    await actor.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() =>
       expect(

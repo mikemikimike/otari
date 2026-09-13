@@ -1092,10 +1092,13 @@ describe("content text wears a type role", () => {
       "the centered next-step prose, page-referent",
     ],
     // The named edge: a note about what an action will do, in the row with
-    // the button, rather than about how to operate a control.
+    // the button, rather than about how to operate a control. Two entries for
+    // one ruling, because the form moved to its own module and took four of the
+    // five notes with it; the page kept the candidate cap.
+    ["features/routing/PolicyForm.tsx", "consequence notes in the button row"],
     [
       "features/routing/RoutingPage.tsx",
-      "consequence notes in the button row, and the candidate cap",
+      "the candidate cap, a consequence note in the button row",
     ],
     ["features/usage/ShareDialog.tsx", "a notice in the dialog's button row"],
   ]
@@ -1692,6 +1695,8 @@ describe("the catalog shows every prop", () => {
   const CANNOT_BE_SHOWN: Record<string, string> = {
     "actions/CopyButton.selectOnFailure":
       "the fallback for a refused clipboard write, which a story cannot provoke without breaking the clipboard",
+    "feedback/FormDialog.returnFocusRef":
+      "where focus lands after the frame is gone, which needs the trigger to unmount with it: a story could pass the prop and would demonstrate nothing",
   }
 
   // Not props: the first two are every component's, and a leading underscore is

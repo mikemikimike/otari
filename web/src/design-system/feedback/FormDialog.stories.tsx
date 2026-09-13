@@ -277,11 +277,90 @@ function ManyFields() {
  * the preview frame, so a wrapper `<div>` would not produce it. The dialog
  * portals to the frame's `<body>` and never sees a wrapper at all.
  */
-export const PhoneSheet: Story = {
-  globals: { viewport: { value: "mobile2", isRotated: false } },
+/**
+ * The same sheet, landscape. `isRotated` puts the phone at 844x390, which is
+ * wider than 640 and shorter than it: the sheet's geometry keys on either
+ * dimension, so a viewport that cannot afford the 120px gap vertically gets the
+ * sheet rather than a third layout. Without that this was a 150px dialog with
+ * 137px of header and footer in it.
+ *
+ * The footer stays a row here, unlike the portrait story below: stacking is
+ * keyed on width alone, because 844px affords a row and `(height <= 639px)`
+ * also matches an unmaximized desktop window.
+ */
+export const PhoneSheetLandscape: Story = {
+  globals: { viewport: { value: "mobile2", isRotated: true } },
+  args: {
+    footerStart: (
+      <p className="text-caption">In effect for new requests within 30s.</p>
+    ),
+  },
   render: (args) => (
     <FormDialog {...args}>
       <KeyFields />
+    </FormDialog>
+  ),
+}
+
+export const PhoneSheet: Story = {
+  globals: { viewport: { value: "mobile2", isRotated: false } },
+  // With a `footerStart` caption, which is the case that does not fit a row:
+  // beside two buttons in a 390px sheet this wrapped to three lines, so below
+  // 640px the footer stacks and each control takes the full width.
+  args: {
+    footerStart: (
+      <p className="text-caption">In effect for new requests within 30s.</p>
+    ),
+  },
+  render: (args) => (
+    <FormDialog {...args}>
+      <KeyFields />
+    </FormDialog>
+  ),
+}
+
+/**
+ * A submit the form is not ready for. Shown disabled rather than allowed to
+ * fail, with the reason beside the control that is missing: a press that does
+ * nothing teaches nothing.
+ */
+export const SubmitBlocked: Story = {
+  args: { isSubmitDisabled: true },
+  render: (args) => (
+    <FormDialog {...args}>
+      <Field
+        label="Key name"
+        value=""
+        onChange={() => {}}
+        description="Required. Lowercase, hyphens, no spaces."
+        isInvalid
+        errorMessage="Give the key a name."
+        reserveMessage
+      />
+    </FormDialog>
+  ),
+}
+
+/**
+ * Content that cannot be recovered once the frame closes, which is the one case
+ * for taking the dismiss away: a key's plaintext secret is shown once. There is
+ * no close control and no Cancel, because both are dismissals; the footer's one
+ * action is the acknowledgement and the only way out.
+ */
+export const NotDismissable: Story = {
+  args: {
+    isDismissable: false,
+    title: "Key created",
+    description: "Copy it now. Otari stores a hash and cannot show it again.",
+    submitLabel: "I\u2019ve saved this key",
+    footerStart: <Button>Create another</Button>,
+  },
+  render: (args) => (
+    <FormDialog {...args}>
+      <CopyField
+        label="Secret key"
+        value="otari-sk-9f3a1c77b0e244d1e8a972fc0a3bc5d86e10f4b2"
+      />
     </FormDialog>
   ),
 }

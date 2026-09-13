@@ -17,9 +17,9 @@ size, published-date) are ignored rather than rejected. Both are called out in
 ``docs/api-reference.md`` so a migrating caller can check for them.
 
 Both the body-selected (``POST /api/v1/search``) and path-selected
-(``POST /v1/search/{search_tool_name}``) forms log ``endpoint="/v1/search"``,
-so one Activity filter covers every search regardless of how the tool was
-named.
+(``POST /api/v1/search/{search_tool_name}``) forms log ``endpoint="/v1/search"``,
+a frozen label rather than a path, so one Activity filter covers every search
+regardless of how the tool was named.
 
 A request the gateway itself turns away (an unknown or ambiguous tool name, a
 workspace that has web search switched off, a tool the caller's key may not use)

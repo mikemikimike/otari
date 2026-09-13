@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -163,7 +163,11 @@ describe("WorkspacesPage", () => {
   // The form itself carries no band, so that the scope switcher can put it in a
   // modal (otari-ai#2107). The band belongs to this page, and it is pinned here
   // because losing it is invisible in jsdom: the fields render either way.
-  it("frames the create form as a band of the page", async () => {
+  it("opens the create form in the dialog rather than as a band of the page", async () => {
+    // The contract this asserts is the opposite of the one it used to: the form
+    // was a bleeding band between the page's header and its table, and the same
+    // form in the scope switcher was a Modal of its own. One frame now, and it
+    // is over the page rather than in it.
     mockApi({})
     const user = userEvent.setup()
     renderPage(<WorkspacesPage />)
@@ -172,11 +176,89 @@ describe("WorkspacesPage", () => {
       await screen.findByRole("button", { name: "Create workspace" }),
     )
 
-    // Reached from the field rather than from the page, because a page is
-    // several bands and only this one frames the form.
-    const band = screen.getByLabelText("Name").closest("section.otari-bleed")
-    expect(band).not.toBeNull()
-    expect(band).toHaveClass("border-y")
+    const dialog = await screen.findByRole("dialog", { name: "New workspace" })
+    expect(within(dialog).getByLabelText("Name")).toBeInTheDocument()
+    expect(
+      screen.getByLabelText("Name").closest("section.otari-bleed"),
+    ).toBeNull()
+  })
+
+  it("offers a fresh draft on each open of the create dialog", async () => {
+    // Reset on the way in, not on the way out: the dialog keeps its content
+    // while it animates out, so clearing on close blanks the body in front of
+    // the operator. The page keys the form on an open counter instead.
+    mockApi({})
+    const user = userEvent.setup()
+    renderPage(<WorkspacesPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create workspace" }),
+    )
+    await user.type(screen.getByLabelText("Name"), "half-typed")
+
+    // Out through the guard, which is the only way out of a dirty form.
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Discard" }))
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create workspace" }),
+    )
+    expect(screen.getByLabelText("Name")).toHaveValue("")
+  })
+
+  it("keeps the empty state under the dialog, so focus has somewhere to return", async () => {
+    // The empty state used to unmount while the form was open, which was right
+    // for a band on the page and wrong for a dialog over it: it takes away the
+    // node react-aria stored, and closing drops focus to `<body>` where the
+    // next Tab starts at the top of the document.
+    mockApi({ workspaces: [] })
+    const user = userEvent.setup()
+    renderPage(<WorkspacesPage />)
+
+    const trigger = await screen.findByRole("button", {
+      name: "Create a workspace",
+    })
+    await user.click(trigger)
+    await screen.findByRole("dialog", { name: "New workspace" })
+
+    expect(screen.getByText("No workspaces yet")).toBeInTheDocument()
+    // Nothing typed, so Escape closes rather than arming the guard.
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it("guards a chosen default budget on the way out, with nothing typed", async () => {
+    // The guard reads one snapshot of the whole draft, so it sees the fields
+    // nobody remembered to list. It used to read the name and the description
+    // only: pick a budget, press Escape, and the choice went with no warning.
+    mockApi({
+      budgets: [budget({ budget_id: "bud-team", name: "Team standard" })],
+    })
+    const user = userEvent.setup()
+    renderPage(<WorkspacesPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Create workspace" }),
+    )
+    await user.click(
+      screen.getByRole("button", { name: /Default member budget/ }),
+    )
+    await user.click(
+      await screen.findByRole("option", { name: /Team standard/ }),
+    )
+
+    // Through Cancel rather than Escape: in jsdom focus lands on `<body>` after
+    // picking from a `Select`, so a keystroke reaches nothing.
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+
+    expect(
+      await screen.findByRole("button", { name: "Discard" }),
+    ).toBeInTheDocument()
+    // Behind the guard rather than gone, so Keep editing returns to the choice.
+    await user.click(screen.getByRole("button", { name: "Keep editing" }))
+    expect(
+      screen.getByRole("button", { name: /Default member budget/ }),
+    ).toHaveTextContent("Team standard")
   })
 
   it("puts a refused create on the name that caused it, not in a banner", async () => {
@@ -285,6 +367,19 @@ describe("WorkspacesPage", () => {
     expect(screen.getAllByRole("button", { name: "Delete" })[0]).toBeDisabled()
   })
 
+  it("opens the edit form in a dialog, naming the workspace", async () => {
+    mockApi({})
+    const user = userEvent.setup()
+    renderPage(<WorkspacesPage />)
+
+    await user.click(await screen.findByRole("button", { name: "Edit" }))
+
+    // A dialog rather than a band above the table: the row keeps its place, and
+    // the page under it does not shift by the height of a form (otari-ai#2125).
+    const dialog = await screen.findByRole("dialog", { name: "Edit workspace" })
+    expect(within(dialog).getByText("Default Workspace")).toBeInTheDocument()
+  })
+
   it("renames a workspace through the update endpoint", async () => {
     const requests = mockApi({})
     const user = userEvent.setup()
@@ -294,7 +389,7 @@ describe("WorkspacesPage", () => {
     const name = screen.getByLabelText("Name")
     await user.clear(name)
     await user.type(name, "Renamed")
-    await user.click(screen.getByRole("button", { name: "Save changes" }))
+    await user.click(screen.getByRole("button", { name: "Save" }))
 
     const patch = requests.find((request) => request.method === "PATCH")
     expect(patch?.url).toContain(
@@ -468,7 +563,7 @@ describe("WorkspacesPage", () => {
     // default: no delete for a "none" the caller never picked.
     await user.clear(name)
     await user.type(name, "Renamed")
-    await user.click(screen.getByRole("button", { name: "Save changes" }))
+    await user.click(screen.getByRole("button", { name: "Save" }))
 
     const patch = requests.find((request) => request.method === "PATCH")
     expect(patch?.body).toEqual({ name: "Renamed", description: null })

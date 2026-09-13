@@ -1,6 +1,6 @@
 import { Button } from "@heroui/react"
 import type { ReactElement, ReactNode } from "react"
-import { useEffect, useId, useRef, useState } from "react"
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react"
 import { FiEye, FiEyeOff } from "react-icons/fi"
 import { CopyButton } from "@/design-system/actions/CopyButton"
 import { copyToClipboard } from "@/design-system/helpers/clipboard"
@@ -95,11 +95,39 @@ type CopyFieldProps = {
        * has been asked for, while Copy copies the real value either way, so a
        * key can be handed over without being read off the screen (otari-ai#2111).
        *
+       * The one-time secret step is the exception and opens revealed, by product
+       * ruling: that screen exists to hand the key over, and there is no second
+       * chance to read it. The toggle and copying without reading survive there,
+       * which is what otari-ai#2111 asked for.
+       *
        * A whole-value field passes `CONCEALED_SECRET`. A snippet passes the same
        * snippet built around that stand-in, so what is hidden is the key rather
        * than the request that explains it.
        */
       concealed?: string
+      /**
+       * Whether the value is revealed, for a caller that owns the state.
+       *
+       * Passing it makes the field controlled: the toggle reports through
+       * `onRevealChange` and shows what the caller says. Several fields sharing
+       * one credential share one of these, so they reveal and conceal together
+       * rather than one at a time.
+       *
+       * **A controlled field does not re-conceal on a new value.** Uncontrolled,
+       * the reveal is keyed to the value it was asked for (see the comment on
+       * `revealedValue` below), so a rotation arriving into a revealed field
+       * conceals itself. A controlled caller owns that instead: conceal on a
+       * value change, or the replacement is on screen without anyone having
+       * asked to see it.
+       */
+      isRevealed?: boolean
+      /** The toggle's press, for a controlled field. */
+      onRevealChange?: (next: boolean) => void
+      /**
+       * Whether an uncontrolled field starts revealed. Concealed by default,
+       * and a later value arrives concealed whatever this said.
+       */
+      defaultRevealed?: boolean
       /**
        * Excluded here rather than guarded at runtime, so a call site that passes
        * both fails to compile. The multiline field is a `<textarea>`, where the
@@ -112,6 +140,9 @@ type CopyFieldProps = {
       multiline?: false
       /** Nothing hands out a credential beside a domain-verification action. */
       concealed?: never
+      isRevealed?: never
+      onRevealChange?: never
+      defaultRevealed?: never
       /**
        * A control to sit beside the field, which moves the copy affordance
        * inside the field and drops the button from the label row. Absent, the
@@ -132,6 +163,9 @@ export function CopyField({
   fieldRef,
   action,
   concealed,
+  isRevealed,
+  onRevealChange,
+  defaultRevealed = false,
 }: CopyFieldProps) {
   const internalRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(
     null,
@@ -146,12 +180,16 @@ export function CopyField({
   // copying: a rotation with the previous key still on screen would otherwise
   // publish the replacement without anyone asking to see it.
   const [revealedValue, setRevealedValue] = useState<string | undefined>(
-    undefined,
+    defaultRevealed ? value : undefined,
   )
   const [selectHintFor, setSelectHintFor] = useState<string | undefined>(
     undefined,
   )
-  const revealed = revealedValue === value
+  const revealed = isRevealed ?? revealedValue === value
+  const setRevealed = (next: boolean) => {
+    onRevealChange?.(next)
+    if (isRevealed === undefined) setRevealedValue(next ? value : undefined)
+  }
   const selectHint = selectHintFor === value
   // Same shape as CopyButton's below: the acknowledgement clears itself on a
   // timer, so the timer has to die with the component (and be replaced rather
@@ -159,6 +197,21 @@ export function CopyField({
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   )
+  // The value on screen right now, which is not what `copy` below closes over:
+  // that is the value of the render the press happened in, and a credential can
+  // arrive while the attempt is in flight. Controlled mode needs it because
+  // `onRevealChange` carries a bare boolean and cannot say which value a reveal
+  // was asked for; uncontrolled mode keys on the value itself through
+  // `revealedValue`.
+  const latestValue = useRef(value)
+  // `useLayoutEffect`, not `useEffect`: the reader is a rejected-promise
+  // handler, so it runs as a microtask, and a passive effect is scheduled
+  // rather than run at commit. A rejection landing after the render that
+  // carries the new credential but before that effect would read the old one
+  // here and pass the gate below, which is the case this exists to refuse.
+  useLayoutEffect(() => {
+    latestValue.current = value
+  }, [value])
   // The value a failed copy asked to have selected, once revealing it has put
   // it on the field: `select()` in the failure's own tick would span the
   // stand-in, and the value React writes on the revealing render discards a
@@ -174,10 +227,10 @@ export function CopyField({
     // Only once the reveal has landed on the value the copy was for. Another
     // credential arriving in the meantime is concealed, and selecting its
     // stand-in is exactly what this is here to avoid.
-    if (revealedValue !== wanted || value !== wanted) return
+    if (!revealed || value !== wanted) return
     ref.current?.focus()
     ref.current?.select()
-  }, [revealedValue, value, ref])
+  }, [revealed, value, ref])
 
   const isConcealed = concealed !== undefined && !revealed
   const shown = isConcealed ? concealed : value
@@ -208,9 +261,9 @@ export function CopyField({
       if (ref.current?.value === copying) {
         ref.current.focus()
         ref.current.select()
-      } else {
+      } else if (latestValue.current === copying) {
         selectOnReveal.current = copying
-        setRevealedValue(copying)
+        setRevealed(true)
       }
       setSelectHintFor(copying)
       return
@@ -303,7 +356,7 @@ export function CopyField({
       variant="ghost"
       isIconOnly
       aria-label={`${revealed ? "Hide" : "Show"} ${label}`}
-      onPress={() => setRevealedValue(revealed ? undefined : value)}
+      onPress={() => setRevealed(!revealed)}
     >
       {revealed ? (
         <FiEyeOff aria-hidden="true" className="h-3.5 w-3.5" />

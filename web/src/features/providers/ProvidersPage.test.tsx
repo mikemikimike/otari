@@ -132,6 +132,9 @@ interface MockOpts {
   // flight and let a later one answer first. Falls back to testGate/testResult
   // once the script runs out.
   testCalls?: { gate?: Promise<unknown>; result: TestProviderResult }[]
+  // When set, the create POST blocks on this promise, so a test can hold a
+  // create in flight and read the submit's state while it runs.
+  createGate?: Promise<unknown>
 }
 
 function mockApi(opts: MockOpts = {}) {
@@ -176,6 +179,7 @@ function mockApi(opts: MockOpts = {}) {
           return jsonResponse(testResult)
         }
         if (method === "POST") {
+          if (opts.createGate) await opts.createGate
           const body = JSON.parse(String(init?.body)) as {
             instance: string
             api_key?: string | null
@@ -422,10 +426,15 @@ describe("ProvidersPage", () => {
 
     await screen.findByText("••••0000")
     await user.click(screen.getByRole("button", { name: "Add provider" }))
-    await user.click(screen.getByPlaceholderText("Search providers…"))
+    // Typed rather than clicked: the picker is this dialog's autofocused first
+    // field, so it opens its list on input (`menuTrigger`), and the chevron
+    // beside it is the other way to the full catalog.
+    await user.type(screen.getByPlaceholderText("Search providers…"), "Bed")
     await user.click(await screen.findByRole("option", { name: "Bedrock" }))
 
-    const add = screen.getByRole("button", { name: "Add provider" })
+    const add = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Add provider",
+    })
     await user.type(screen.getByLabelText(/Bedrock API key/), "bearer-token")
     // The region is required and outside Advanced, so nothing that blocks the
     // submit is hidden behind a collapsed section.
@@ -520,7 +529,7 @@ describe("ProvidersPage", () => {
       screen.queryByRole("textbox", { name: /AWS region/ }),
     ).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "Save changes" }))
+    await user.click(screen.getByRole("button", { name: "Save" }))
 
     const patch = await waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -574,6 +583,241 @@ describe("ProvidersPage", () => {
     expect(detailCalls().length).toBeGreaterThan(0)
   })
 
+  it("opens with the provider picker focused and its list closed", async () => {
+    // feedback.md: the first field takes `autoFocus`. The picker opens its list
+    // on focus everywhere else, which for an autofocused instance means the
+    // catalog is down over the form before anything has been asked (measured:
+    // `aria-expanded="true"` and a rendered listbox on mount), so this instance
+    // opens on input instead.
+    mockApi({ meta: [], stored: [] })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add provider" }),
+    )
+
+    const picker = screen.getByPlaceholderText("Search providers…")
+    expect(picker).toHaveFocus()
+    expect(picker).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+  })
+
+  it("offers a fresh draft from each of the two openers", async () => {
+    // Nothing unmounts the form, so the remount on the way in is the only thing
+    // that clears it, and what it clears here includes a pasted provider key: a
+    // still-enabled submit over a surviving secret re-POSTs the credential.
+    // Both openers have to bump the counter, and this page is the only one in
+    // the stack with two.
+    mockApi({
+      meta: [],
+      stored: [],
+      catalog: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          env_key: "OPENAI_API_KEY",
+          default_api_base: "https://api.openai.com/v1",
+          requires_api_key: true,
+          env_key_present: false,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    // Opener one: the first-run panel.
+    await user.click(
+      await screen.findByRole("button", { name: "Add your first provider" }),
+    )
+    await user.type(screen.getByPlaceholderText("Search providers…"), "OpenAI")
+    await user.click(await screen.findByRole("option", { name: /OpenAI/ }))
+    await user.type(screen.getByLabelText("API key"), "sk-live-aaaa")
+
+    // Out through the guard, which is the only way out of a dirty form.
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Discard" }))
+
+    // Opener two: the heading's action.
+    await user.click(screen.getByRole("button", { name: "Add provider" }))
+    expect(screen.getByPlaceholderText("Search providers…")).toHaveValue("")
+    expect(screen.getByLabelText("API key")).toHaveValue("")
+
+    // And back through the first opener, so neither is green on the other's
+    // counter bump.
+    await user.type(screen.getByLabelText("API key"), "sk-live-bbbb")
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Discard" }))
+    await user.click(
+      screen.getByRole("button", { name: "Add your first provider" }),
+    )
+    expect(screen.getByLabelText("API key")).toHaveValue("")
+  })
+
+  it("keeps the primary pressable while a create is in flight", async () => {
+    // feedback.md: a submit in flight is working rather than refused, so it
+    // keeps its fill and blocks its own press. `isSubmitDisabled` is the
+    // product's one disabled treatment, and drawing it under the spinner says
+    // the form rejected the input.
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const fetchMock = mockApi({ meta: [], stored: [], createGate: gate })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add provider" }),
+    )
+    await user.click(screen.getByRole("button", { name: "Custom endpoint" }))
+    await user.type(screen.getByLabelText(/^Name/), "my-local-llm")
+    await user.type(
+      screen.getByLabelText("API base"),
+      "http://localhost:8000/v1",
+    )
+
+    const dialog = screen.getByRole("dialog")
+    const submit = within(dialog).getByRole("button", { name: "Add provider" })
+    await user.click(submit)
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(
+          ([url, init]) =>
+            String(url).endsWith(`${API_ROOT}/provider-credentials`) &&
+            (init as RequestInit | undefined)?.method === "POST",
+        ).length,
+      ).toBe(1),
+    )
+    expect(submit).toBeEnabled()
+    // Pressing again while it runs sends nothing: the guard inside `submit` is
+    // where `isPending` belongs.
+    await user.click(submit)
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url).endsWith(`${API_ROOT}/provider-credentials`) &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ).length,
+    ).toBe(1)
+
+    release()
+  })
+
+  it("scrolls a connection-test verdict into view, since the body scrolls", async () => {
+    // The verdict is the body's last child, under fields that already fill an
+    // `lg` dialog on a laptop, so without this the footer button goes back to
+    // "Test connection" and nothing else visibly happens.
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView")
+    mockApi({
+      meta: [],
+      stored: [],
+      testResult: {
+        ok: true,
+        model_count: 3,
+        error: null,
+        discovery_unsupported: false,
+      },
+    })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add provider" }),
+    )
+    await user.click(screen.getByRole("button", { name: "Custom endpoint" }))
+    await user.type(screen.getByLabelText(/^Name/), "my-local-llm")
+    await user.type(
+      screen.getByLabelText("API base"),
+      "http://localhost:8000/v1",
+    )
+    scrollIntoView.mockClear()
+    await user.click(screen.getByRole("button", { name: "Test connection" }))
+
+    const verdict = await screen.findByText(/Connected\. 3 models available\./)
+    // The live region, which is the element that carries the ref.
+    const region = verdict.closest('[role="status"]')
+    expect(scrollIntoView.mock.instances).toContain(region)
+  })
+
+  it("guards an Advanced rename on the known tab, with no provider chosen", async () => {
+    // The guard reads one snapshot of the whole draft. It used to read the
+    // provider and the key only, so a rename, an API base, a client_args blob
+    // and every typed credential went on Escape with nothing asked.
+    mockApi({ meta: [], stored: [] })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add provider" }),
+    )
+    await user.click(screen.getByRole("button", { name: /^Advanced/ }))
+    await user.type(screen.getByLabelText(/^Name/), "openai-eu")
+
+    await user.keyboard("{Escape}")
+
+    expect(
+      await screen.findByRole("button", { name: "Discard" }),
+    ).toBeInTheDocument()
+  })
+
+  it("guards client options typed on the custom tab, with nothing else filled", async () => {
+    mockApi({ meta: [], stored: [] })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add provider" }),
+    )
+    await user.click(screen.getByRole("button", { name: "Custom endpoint" }))
+    await user.type(screen.getByLabelText(/Client options/), '{{"timeout": 30}')
+
+    await user.keyboard("{Escape}")
+
+    expect(
+      await screen.findByRole("button", { name: "Discard" }),
+    ).toBeInTheDocument()
+  })
+
+  it("renders a connection-test outcome in the body, not in the footer", async () => {
+    // The unverified case is four lines plus the provider's reply. In the footer
+    // it grows the one row feedback.md says never changes height and shoves the
+    // form up mid-typing; in the body it scrolls with the fields.
+    mockApi({
+      meta: [],
+      stored: [],
+      testResult: {
+        ok: false,
+        model_count: 0,
+        error: "Error code: 404",
+        discovery_unsupported: true,
+      },
+    })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add provider" }),
+    )
+    await user.click(screen.getByRole("button", { name: "Custom endpoint" }))
+    await user.type(screen.getByLabelText(/^Name/), "my-local-llm")
+    await user.type(
+      screen.getByLabelText("API base"),
+      "http://localhost:8000/v1",
+    )
+    await user.click(screen.getByRole("button", { name: "Test connection" }))
+
+    const outcome = await screen.findByText(/does not list models/)
+    const footer = document.querySelector(".otari-form-dialog__footer")
+    expect(footer).not.toBeNull()
+    expect(footer?.contains(outcome)).toBe(false)
+    // The button that ran it stays in the footer.
+    expect(
+      footer?.contains(screen.getByRole("button", { name: "Test connection" })),
+    ).toBe(true)
+  })
+
   it("keeps Add disabled for a key-requiring provider until a key is entered", async () => {
     mockApi({
       stored: [storedProvider("anthropic", "0000")],
@@ -596,10 +840,13 @@ describe("ProvidersPage", () => {
 
     await user.type(screen.getByPlaceholderText("Search providers…"), "OpenAI")
     await user.click(await screen.findByRole("option", { name: /OpenAI/ }))
-    // Close the combobox popover, which otherwise aria-hides the submit button.
-    await user.keyboard("{Escape}")
+    // No Escape here any more. Picking an option closes the combo box's own
+    // popover, so the keystroke would reach the dialog instead and arm its
+    // unsaved-changes guard, which swaps the submit out of the footer.
 
-    const submit = screen.getByRole("button", { name: "Add provider" })
+    const submit = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Add provider",
+    })
     expect(submit).toBeDisabled()
 
     await user.type(screen.getByLabelText("API key"), "sk-live-xxxx")
@@ -628,8 +875,9 @@ describe("ProvidersPage", () => {
 
     await user.type(screen.getByPlaceholderText("Search providers…"), "OpenAI")
     await user.click(await screen.findByRole("option", { name: /OpenAI/ }))
-    // Close the combobox popover, which otherwise aria-hides the submit button.
-    await user.keyboard("{Escape}")
+    // No Escape here any more. Picking an option closes the combo box's own
+    // popover, so the keystroke would reach the dialog instead and arm its
+    // unsaved-changes guard, which swaps the submit out of the footer.
 
     // The field is optional and the copy explains the env fallback. The hint
     // arrives once the selected provider's detail loads, so wait for it.
@@ -637,7 +885,9 @@ describe("ProvidersPage", () => {
     expect(screen.getByLabelText("API key (optional)")).toBeInTheDocument()
 
     // Submit with no key: the server stores none and any-llm reads OPENAI_API_KEY.
-    const submit = screen.getByRole("button", { name: "Add provider" })
+    const submit = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Add provider",
+    })
     expect(submit).toBeEnabled()
     await user.click(submit)
 
@@ -659,9 +909,12 @@ describe("ProvidersPage", () => {
     renderPage(<ProvidersPage />)
 
     expect(await screen.findByText("Welcome to Otari")).toBeInTheDocument()
+    // The heading keeps its action beside the first-run panel's own copy of it.
+    // It used to hide while that panel showed, on the reasoning that two
+    // competed; the panel is a band and the form it opens is over the page.
     expect(
-      screen.queryByRole("button", { name: "Add provider" }),
-    ).not.toBeInTheDocument()
+      screen.getByRole("button", { name: "Add provider" }),
+    ).toBeInTheDocument()
     // Only the onboarding panel ("Welcome to Otari") shows: the table (and its own
     // "no rows" fallback, whose "No providers yet" text is unique to it) is
     // suppressed so the two empty states are not stacked.
@@ -669,12 +922,18 @@ describe("ProvidersPage", () => {
     expect(
       screen.queryByRole("grid", { name: "Providers" }),
     ).not.toBeInTheDocument()
-    await user.click(
-      screen.getByRole("button", { name: "Add your first provider" }),
-    )
+    const firstProvider = screen.getByRole("button", {
+      name: "Add your first provider",
+    })
+    await user.click(firstProvider)
 
-    expect(screen.queryByText("Welcome to Otari")).not.toBeInTheDocument()
     expect(screen.getByPlaceholderText("Search providers…")).toBeInTheDocument()
+    // The panel stays mounted under the dialog. It used to unmount, which took
+    // away the node react-aria restores focus to on close, so closing dropped
+    // focus to `<body>`.
+    expect(screen.getByText("Welcome to Otari")).toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(firstProvider).toHaveFocus())
   })
 
   it("points the onboarding quickstart at the gateway-served tutorial in a new tab", async () => {
@@ -1110,6 +1369,20 @@ describe("ProvidersPage", () => {
     )
   })
 
+  it("opens the edit form in a dialog, naming the instance", async () => {
+    mockApi({ stored: [storedProvider("homelab", "1234", true)] })
+    const user = userEvent.setup()
+    renderPage(<ProvidersPage />)
+
+    await screen.findByText("••••1234")
+    await user.click(screen.getByRole("button", { name: "Edit" }))
+
+    // A dialog rather than a band above the table: the row keeps its place, and
+    // the page under it does not shift by the height of a form (otari-ai#2125).
+    const dialog = await screen.findByRole("dialog", { name: "Edit provider" })
+    expect(within(dialog).getByText("homelab")).toBeInTheDocument()
+  })
+
   it("prefills stored client options on edit and clears them when emptied", async () => {
     const fetchMock = mockApi({
       stored: [storedProvider("homelab", "1234", true, { timeout: 1800 })],
@@ -1125,7 +1398,7 @@ describe("ProvidersPage", () => {
     // Emptying the field clears the stored options: an explicit null, not an
     // omission, which the API would read as "leave them alone".
     await user.clear(clientArgs)
-    await user.click(screen.getByRole("button", { name: "Save changes" }))
+    await user.click(screen.getByRole("button", { name: "Save" }))
 
     const patch = await waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -1149,7 +1422,7 @@ describe("ProvidersPage", () => {
     await user.type(screen.getByLabelText("Client options (JSON)"), "oops")
 
     expect(await screen.findByText("Not valid JSON.")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
     expect(
       fetchMock.mock.calls.some(([, init]) => (init?.method ?? "") === "PATCH"),
     ).toBe(false)
@@ -1183,7 +1456,7 @@ describe("ProvidersPage", () => {
       screen.getByLabelText("API base"),
       "https://api.otari.ai/v1",
     )
-    await user.click(screen.getByRole("button", { name: "Save changes" }))
+    await user.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() =>
       expect(
@@ -1223,7 +1496,7 @@ describe("ProvidersPage", () => {
       screen.getByLabelText("API base"),
       "https://api.otari.ai/v1",
     )
-    await user.click(screen.getByRole("button", { name: "Save changes" }))
+    await user.click(screen.getByRole("button", { name: "Save" }))
     await waitFor(() =>
       expect(screen.queryByText("Testing…")).not.toBeInTheDocument(),
     )
@@ -1383,7 +1656,7 @@ describe("ProvidersPage", () => {
       screen.getByLabelText("API base"),
       "https://api.otari.ai/v1",
     )
-    await user.click(screen.getByRole("button", { name: "Save changes" }))
+    await user.click(screen.getByRole("button", { name: "Save" }))
     await waitFor(() =>
       expect(screen.queryByText("Testing…")).not.toBeInTheDocument(),
     )

@@ -1,6 +1,7 @@
 import { Button, Spinner } from "@heroui/react"
 import { Link } from "@tanstack/react-router"
 import { type ReactNode, useEffect, useRef, useState } from "react"
+import { FiActivity, FiEdit2, FiTrash2 } from "react-icons/fi"
 import type {
   CreateStoredProviderRequest,
   ProviderHealth,
@@ -14,8 +15,10 @@ import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { errorMessage } from "@/design-system/feedback/errorMessage"
+import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { Field } from "@/design-system/forms/Field"
 import { SecretField } from "@/design-system/forms/SecretField"
+import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
 import { Dot } from "@/design-system/indicators/Dot"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { Section } from "@/design-system/layout/Section"
@@ -56,71 +59,101 @@ import {
   parseClientArgs,
 } from "./providerFields"
 
-// A "Test connection" button + inline result, testing the form's credentials
-// before they are saved. `getPayload` returns null when the minimum fields for a
-// test are not filled in yet, which disables the button.
-function ConnectionTest({
+// Testing the form's credentials before they are saved, in two nodes because
+// they belong in two places: the button sits in the footer beside the submit,
+// its outcome at the end of the body. The unverified case below is four lines
+// plus the provider's own reply, and a footer that grows shoves the form up
+// under the operator's hands; in the body it scrolls with everything else.
+type ConnectionTestState = ReturnType<typeof useTestProviderCredentials>
+
+// `getPayload` returns null when the minimum fields for a test are not filled
+// in yet, which disables the button.
+function ConnectionTestButton({
+  test,
   getPayload,
 }: {
+  test: ConnectionTestState
   getPayload: () => CreateStoredProviderRequest | null
 }) {
-  const test = useTestProviderCredentials()
   const payload = getPayload()
-
   return (
-    <div className="flex flex-col gap-1.5">
-      <Button
-        variant="ghost"
-        isDisabled={payload === null || test.isPending}
-        onPress={() => {
-          if (payload) test.mutate(payload)
-        }}
-      >
-        {test.isPending ? "Testing…" : "Test connection"}
-      </Button>
-      {/* aria-live so the connection outcome is announced to assistive tech. */}
-      <span role="status" aria-live="polite">
-        {test.isPending ? null : test.error ? (
-          <span className="text-xs text-danger">
-            {errorMessage(test.error)}
+    <Button
+      variant="ghost"
+      isDisabled={payload === null || test.isPending}
+      onPress={() => {
+        if (payload) test.mutate(payload)
+      }}
+    >
+      {test.isPending ? "Testing…" : "Test connection"}
+    </Button>
+  )
+}
+
+function ConnectionTestResult({ test }: { test: ConnectionTestState }) {
+  const answered = test.data ?? test.error
+  const ref = useRef<HTMLSpanElement | null>(null)
+  // The body scrolls, and this is its last child: on an `lg` dialog in an 800px
+  // window the custom tab's own fields already fill it, so a verdict rendered
+  // here can land below the fold with the footer button back to "Test
+  // connection" and nothing else, to a sighted operator, having happened.
+  useEffect(() => {
+    if (answered) ref.current?.scrollIntoView({ block: "nearest" })
+  }, [answered])
+  return (
+    // No wrapper, and `empty:hidden` rather than a conditional render: the
+    // parent's `gap-4` would otherwise reserve a row before a test is ever run,
+    // and the live region has to exist before it has something to say.
+    <span
+      ref={ref}
+      role="status"
+      aria-live="polite"
+      className="flex flex-col gap-1.5 empty:hidden"
+    >
+      {test.isPending ? null : test.error ? (
+        <span className="text-xs text-danger">{errorMessage(test.error)}</span>
+      ) : test.data ? (
+        test.data.ok ? (
+          <span className="text-xs font-medium text-success">
+            Connected. {test.data.model_count} model
+            {test.data.model_count === 1 ? "" : "s"} available.
           </span>
-        ) : test.data ? (
-          test.data.ok ? (
-            <span className="text-xs font-medium text-success">
-              Connected. {test.data.model_count} model
-              {test.data.model_count === 1 ? "" : "s"} available.
-            </span>
-          ) : test.data.discovery_unsupported ? (
-            // No /v1/models on this backend: the test cannot confirm the key, but
-            // it is not evidence the key is wrong either (issue #447). The error is
-            // kept because this is the form where the operator just typed api_base,
-            // and a wrong one 404s exactly like an absent listing endpoint.
-            <span className="block max-w-md break-words text-xs text-warning">
-              This provider does not list models, so the key could not be
-              verified here. Save it and use the provider; declare its model ids
-              under <code>models:</code> to have them show up in the catalog. If
-              you did not expect this, check the provider's reply below.
-              {test.data.error ? (
-                <span className="mt-0.5 block text-muted">
-                  {test.data.error}
-                </span>
-              ) : null}
-            </span>
-          ) : (
-            <span className="block max-w-md break-words text-caption text-danger">
-              {test.data.error ?? "Connection failed."}
-            </span>
-          )
-        ) : null}
-      </span>
-    </div>
+        ) : test.data.discovery_unsupported ? (
+          // No /v1/models on this backend: the test cannot confirm the key, but
+          // it is not evidence the key is wrong either (issue #447). The error is
+          // kept because this is the form where the operator just typed api_base,
+          // and a wrong one 404s exactly like an absent listing endpoint.
+          <span className="block max-w-md break-words text-xs text-warning">
+            This provider does not list models, so the key could not be verified
+            here. Save it and use the provider; declare its model ids under{" "}
+            <code>models:</code> to have them show up in the catalog. If you did
+            not expect this, check the provider's reply below.
+            {test.data.error ? (
+              <span className="mt-0.5 block text-muted">{test.data.error}</span>
+            ) : null}
+          </span>
+        ) : (
+          <span className="block max-w-md break-words text-caption text-danger">
+            {test.data.error ?? "Connection failed."}
+          </span>
+        )
+      ) : null}
+    </span>
   )
 }
 
 // Add a hosted provider whose endpoint is built into the SDK: pick it, paste a
 // key. Name and api_base are only exposed under Advanced.
-function KnownProviderForm({ onClose }: { onClose: () => void }) {
+function KnownProviderForm({
+  isOpen,
+  onClose,
+  tabs,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  tabs: ReactNode
+}) {
   const create = useCreateStoredProvider()
+  const test = useTestProviderCredentials()
   const [providerId, setProviderId] = useState("")
   const [apiKey, setApiKey] = useState("")
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -154,13 +187,25 @@ function KnownProviderForm({ onClose }: { onClose: () => void }) {
   const nameHasDelimiter = /[:/]/.test(name)
   // Require the key when the chosen provider says it needs one; keyless local
   // backends (Ollama, llama.cpp) can submit without it.
+  // One snapshot of everything the form owns, seeded on mount, rather than a
+  // list of fields: the list was two of six, so Advanced's rename, API base,
+  // client options and every typed credential (a Bedrock region) were invisible
+  // to the guard and went on Escape with nothing asked. `key={addOpenCount}`
+  // reseeds it per open. See feedback.md.
+  const { isDirty } = useDirtySnapshot({
+    providerId,
+    apiKey,
+    name,
+    apiBase,
+    clientArgsText,
+    credentials,
+  })
   const canSubmit =
     providerId !== "" &&
     !nameHasDelimiter &&
     (!needsKey || apiKey.trim() !== "") &&
     clientArgs.ok &&
-    Object.keys(credentialErrors).length === 0 &&
-    !create.isPending
+    Object.keys(credentialErrors).length === 0
   // Hold the section open while something inside it is what's blocking submit,
   // so collapsing it can't leave a disabled button with its reason off screen.
   // A hide requested meanwhile is remembered and applies once the field is fixed.
@@ -186,14 +231,34 @@ function KnownProviderForm({ onClose }: { onClose: () => void }) {
 
   const submit = () => {
     const payload = buildPayload()
-    if (!canSubmit || payload === null) return
+    // `create.isPending` is a reason not to send twice, not a reason to draw
+    // the primary as refused, so it guards the call rather than `canSubmit`.
+    if (!canSubmit || create.isPending || payload === null) return
     create.mutate(payload, { onSuccess: onClose })
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <ErrorBanner error={create.error} />
+    <FormDialog
+      isOpen={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      size="lg"
+      title="New provider"
+      tabs={tabs}
+      submitLabel="Add provider"
+      onSubmit={submit}
+      isPending={create.isPending}
+      isSubmitDisabled={!canSubmit}
+      isDirty={isDirty}
+      error={create.error}
+      footerStart={
+        <ConnectionTestButton test={test} getPayload={buildPayload} />
+      }
+    >
       <ProviderComboBox
+        // The known tab is the dialog's default, so this is its first field.
+        autoFocus
         label="Provider"
         value={providerId}
         onChange={(id) => {
@@ -282,23 +347,24 @@ function KnownProviderForm({ onClose }: { onClose: () => void }) {
           />
         </div>
       ) : null}
-      <div className="flex flex-wrap items-start gap-2">
-        <Button variant="primary" isDisabled={!canSubmit} onPress={submit}>
-          {create.isPending ? "Adding…" : "Add provider"}
-        </Button>
-        <Button variant="ghost" onPress={onClose}>
-          Cancel
-        </Button>
-        <ConnectionTest getPayload={buildPayload} />
-      </div>
-    </div>
+      <ConnectionTestResult test={test} />
+    </FormDialog>
   )
 }
 
 // Add a self-hosted or OpenAI-compatible endpoint: name it anything, say what
 // API it speaks, and give the base URL (and a key if it needs one).
-function CustomProviderForm({ onClose }: { onClose: () => void }) {
+function CustomProviderForm({
+  isOpen,
+  onClose,
+  tabs,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  tabs: ReactNode
+}) {
   const create = useCreateStoredProvider()
+  const test = useTestProviderCredentials()
   const [name, setName] = useState("")
   const [providerType, setProviderType] = useState("openai-compatible")
   const [apiBase, setApiBase] = useState("")
@@ -307,15 +373,23 @@ function CustomProviderForm({ onClose }: { onClose: () => void }) {
   const clientArgs = parseClientArgs(clientArgsText)
 
   const nameHasDelimiter = /[:/]/.test(name)
+  // Same snapshot as the known tab, for the same reason: this list had missed
+  // `providerType` and the client options.
+  const { isDirty } = useDirtySnapshot({
+    name,
+    providerType,
+    apiBase,
+    apiKey,
+    clientArgsText,
+  })
   const canSubmit =
     name.trim() !== "" &&
     !nameHasDelimiter &&
     apiBase.trim() !== "" &&
-    clientArgs.ok &&
-    !create.isPending
+    clientArgs.ok
 
   const submit = () => {
-    if (!canSubmit || !clientArgs.ok) return
+    if (!canSubmit || create.isPending || !clientArgs.ok) return
     create.mutate(
       {
         instance: name.trim(),
@@ -329,8 +403,37 @@ function CustomProviderForm({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <ErrorBanner error={create.error} />
+    <FormDialog
+      isOpen={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      size="lg"
+      title="New provider"
+      tabs={tabs}
+      submitLabel="Add provider"
+      onSubmit={submit}
+      isPending={create.isPending}
+      isSubmitDisabled={!canSubmit}
+      isDirty={isDirty}
+      error={create.error}
+      footerStart={
+        <ConnectionTestButton
+          test={test}
+          getPayload={() =>
+            name.trim() === "" || apiBase.trim() === "" || !clientArgs.ok
+              ? null
+              : {
+                  instance: name.trim(),
+                  provider_type: providerType || "openai-compatible",
+                  api_base: apiBase.trim(),
+                  api_key: apiKey.trim() || null,
+                  client_args: clientArgs.value,
+                }
+          }
+        />
+      }
+    >
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
           label="Name"
@@ -380,61 +483,55 @@ function CustomProviderForm({ onClose }: { onClose: () => void }) {
         onChange={setClientArgsText}
         error={clientArgs.ok ? null : clientArgs.error}
       />
-      <div className="flex flex-wrap items-start gap-2">
-        <Button variant="primary" isDisabled={!canSubmit} onPress={submit}>
-          {create.isPending ? "Adding…" : "Add provider"}
-        </Button>
-        <Button variant="ghost" onPress={onClose}>
-          Cancel
-        </Button>
-        <ConnectionTest
-          getPayload={() =>
-            name.trim() === "" || apiBase.trim() === "" || !clientArgs.ok
-              ? null
-              : {
-                  instance: name.trim(),
-                  provider_type: providerType || "openai-compatible",
-                  api_base: apiBase.trim(),
-                  api_key: apiKey.trim() || null,
-                  client_args: clientArgs.value,
-                }
-          }
-        />
-      </div>
-    </div>
+      <ConnectionTestResult test={test} />
+    </FormDialog>
   )
 }
 
 type ProviderTab = "known" | "custom"
 
-function AddProviderForm({ onClose }: { onClose: () => void }) {
+/**
+ * The two ways to attach a provider, in one dialog.
+ *
+ * Each tab keeps its own mutation, its own validity and its own submit, which
+ * is what it had as a panel. The two write the same five fields but derive them
+ * from different questions: one asks which provider and fills the rest from its
+ * built-in detail, the other asks for a name, an API flavor and a base URL. A
+ * shared submit would be a switch on the tab, which is the same code with one
+ * more place to look.
+ *
+ * What is shared is the frame. Each half renders the same `FormDialog` with the
+ * same title, size and tab row, so switching tabs changes the fields and
+ * nothing else, and a half-filled tab still does not survive a switch away from
+ * it, which is what it did as a panel.
+ */
+function AddProviderForm({
+  isOpen,
+  onClose,
+}: {
+  isOpen: boolean
+  onClose: () => void
+}) {
   const [tab, setTab] = useState<ProviderTab>("known")
+  const tabs = (
+    <TabRow>
+      {(
+        [
+          ["known", "Known provider"],
+          ["custom", "Custom endpoint"],
+        ] as const
+      ).map(([id, label]) => (
+        <Tab key={id} isActive={tab === id} onPress={() => setTab(id)}>
+          {label}
+        </Tab>
+      ))}
+    </TabRow>
+  )
 
-  return (
-    <Section
-      className="border-y border-border py-5"
-      contentClassName="flex flex-col gap-4"
-    >
-      <div className="flex items-center justify-between">
-        <TabRow>
-          {(
-            [
-              ["known", "Known provider"],
-              ["custom", "Custom endpoint"],
-            ] as const
-          ).map(([id, label]) => (
-            <Tab key={id} isActive={tab === id} onPress={() => setTab(id)}>
-              {label}
-            </Tab>
-          ))}
-        </TabRow>
-      </div>
-      {tab === "known" ? (
-        <KnownProviderForm onClose={onClose} />
-      ) : (
-        <CustomProviderForm onClose={onClose} />
-      )}
-    </Section>
+  return tab === "known" ? (
+    <KnownProviderForm isOpen={isOpen} onClose={onClose} tabs={tabs} />
+  ) : (
+    <CustomProviderForm isOpen={isOpen} onClose={onClose} tabs={tabs} />
   )
 }
 
@@ -480,14 +577,21 @@ function EditProviderForm({
     credentials,
     stored.redacted,
   )
+  // `replacingKey` is in the snapshot with the secret it reveals: arming the
+  // replacement and then closing without typing one loses nothing, but a typed
+  // key is work, and the flag is what says the field was ever on screen.
+  const { isDirty } = useDirtySnapshot({
+    providerType,
+    apiBase,
+    replacingKey,
+    apiKey,
+    clientArgsText,
+    credentials,
+  })
+  const blocked = !clientArgs.ok || Object.keys(credentialErrors).length > 0
 
   const submit = () => {
-    if (
-      update.isPending ||
-      !clientArgs.ok ||
-      Object.keys(credentialErrors).length > 0
-    )
-      return
+    if (update.isPending || blocked) return
     const body: UpdateStoredProviderRequest = {
       provider_type: providerType.trim() || null,
       api_base: apiBase.trim() || null,
@@ -515,26 +619,38 @@ function EditProviderForm({
   }
 
   return (
-    <Section
-      className="border-y border-border py-5"
-      contentClassName="flex flex-col gap-4"
+    <FormDialog
+      isOpen
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      // `lg` as on the add form: the same five fields, plus whatever typed
+      // credentials this provider declares.
+      size="lg"
+      title="Edit provider"
+      description={<code>{provider.instance}</code>}
+      submitLabel="Save"
+      onSubmit={submit}
+      isPending={update.isPending}
+      isSubmitDisabled={blocked}
+      isDirty={isDirty}
+      error={update.error}
     >
-      <div className="text-title">
-        Edit <code>{provider.instance}</code>
-      </div>
-      <ErrorBanner error={update.error} />
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
           label="Provider type"
           value={providerType}
           onChange={setProviderType}
           placeholder="openai"
+          autoFocus
+          reserveMessage={false}
         />
         <Field
           label="API base"
           value={apiBase}
           onChange={setApiBase}
           placeholder="https://api.openai.com/v1"
+          reserveMessage={false}
         />
       </div>
       <div className="flex flex-col gap-2">
@@ -587,23 +703,7 @@ function EditProviderForm({
         onChange={setClientArgsText}
         error={clientArgs.ok ? null : clientArgs.error}
       />
-      <div className="flex gap-2">
-        <Button
-          variant="primary"
-          isDisabled={
-            update.isPending ||
-            !clientArgs.ok ||
-            Object.keys(credentialErrors).length > 0
-          }
-          onPress={submit}
-        >
-          {update.isPending ? "Saving…" : "Save changes"}
-        </Button>
-        <Button variant="ghost" onPress={onClose}>
-          Cancel
-        </Button>
-      </div>
-    </Section>
+    </FormDialog>
   )
 }
 
@@ -910,9 +1010,21 @@ export function ProvidersPage() {
   const updateSettings = useUpdateSettings()
 
   const [addOpen, setAddOpen] = useState(false)
+  const [addOpenCount, setAddOpenCount] = useState(0)
   const [editing, setEditing] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<string>()
   const [tests, setTests] = useState<Record<string, TestState>>({})
+  // `addOpenCount` above is bumped on each open, and the add form is keyed on
+  // it, so the draft (a pasted provider key included) is fresh every time and
+  // untouched through the exit: the dialog keeps its content while it animates
+  // out, so clearing on the way out would blank the body in front of the
+  // operator. See feedback.md, "A draft is fresh on every open and untouched
+  // through the exit". Both openers on this page go through here.
+  const openAdd = () => {
+    setEditing(null)
+    setAddOpenCount((n) => n + 1)
+    setAddOpen(true)
+  }
 
   const rows = buildRows(meta.data?.providers, stored.data)
   const healthByInstance = new Map(
@@ -928,7 +1040,10 @@ export function ProvidersPage() {
   // membership context reports and `/settings` no longer answers for every
   // caller who reaches this page (#839).
   const secretKeyConfigured = useProviderKeyEncryption()
-  const showOnboarding = !loading && rows.length === 0 && !addOpen
+  // Not gated on `addOpen`: unmounting the first-run panel when the dialog
+  // opens takes away the node react-aria restores focus to, so closing drops
+  // focus to `<body>`. The heading's action is ungated for the same reason.
+  const showOnboarding = !loading && rows.length === 0
 
   // Which test run each row is currently showing. A row's result is only worth
   // recording while it is still the answer to the newest thing the operator asked
@@ -1074,26 +1189,28 @@ export function ProvidersPage() {
           <div className="flex flex-col items-end gap-1.5">
             <RowActionRow>
               <RowAction
+                icon={FiActivity}
+                label="Test"
                 // A row whose key can't be decrypted can't be tested; Edit/Delete still recover it.
                 isDisabled={
                   tests[row.instance]?.status === "pending" ||
                   row.stored?.decryptable === false
                 }
                 onPress={() => void runTest(row.instance)}
-              >
-                Test
-              </RowAction>
+              />
               <RowAction
+                icon={FiEdit2}
+                label="Edit"
                 onPress={() => {
                   setAddOpen(false)
                   setEditing(row.instance)
                 }}
-              >
-                Edit
-              </RowAction>
-              <RowAction onPress={() => setPendingDelete(row.instance)}>
-                Delete
-              </RowAction>
+              />
+              <RowAction
+                icon={FiTrash2}
+                label="Delete"
+                onPress={() => setPendingDelete(row.instance)}
+              />
             </RowActionRow>
             <TestOutcome state={tests[row.instance]} />
           </div>
@@ -1110,23 +1227,17 @@ export function ProvidersPage() {
       <PageIntro
         title="Providers"
         action={
-          /* The first-run strip supplies its own focused call to action, and the
-             form has its own Close, so the header action is redundant while
-             either is open. Disabled rather than hidden when the server has no
-             secret key: an operator who cannot add a provider still needs to see
-             that adding one is the thing they are being denied. */
-          addOpen || showOnboarding ? undefined : (
-            <Button
-              variant="primary"
-              isDisabled={!secretKeyConfigured}
-              onPress={() => {
-                setEditing(null)
-                setAddOpen(true)
-              }}
-            >
-              Add provider
-            </Button>
-          )
+          <Button
+            // Visible while the dialog is open and beside the first-run
+            // panel's own copy of it: the dialog is over the page. Disabled
+            // rather than hidden without a server secret key, which is the
+            // rule for a control that carries its own reason nearby.
+            variant="primary"
+            isDisabled={!secretKeyConfigured}
+            onPress={openAdd}
+          >
+            Add provider
+          </Button>
         }
       >
         Add provider API keys here to serve models without editing config.yml.
@@ -1186,10 +1297,7 @@ export function ProvidersPage() {
 
       {showOnboarding ? (
         <OnboardingPanel
-          onAddProvider={() => {
-            setEditing(null)
-            setAddOpen(true)
-          }}
+          onAddProvider={openAdd}
           needsPricing={needsPricing}
           onEnablePricing={() =>
             updateSettings.mutate({ default_pricing: true })
@@ -1206,14 +1314,16 @@ export function ProvidersPage() {
           if it was opened while settings were still loading and the key then turns
           out to be unavailable, retract it so its submit can never reach the create
           mutation. The banner above explains why. */}
-      {addOpen && secretKeyConfigured ? (
-        <AddProviderForm onClose={() => setAddOpen(false)} />
-      ) : null}
+      <AddProviderForm
+        key={addOpenCount}
+        isOpen={addOpen && secretKeyConfigured}
+        onClose={() => setAddOpen(false)}
+      />
       {editingProvider ? (
         <EditProviderForm
-          // Remount when the operator switches rows: the fields are seeded from
-          // the provider once, so without this, editing a second provider would
-          // open with the first one's values (and save them onto it).
+          // The fields are seeded from the provider once, so the next Edit has
+          // to arrive at a fresh form rather than the last provider's values,
+          // which a save would then write onto this one.
           key={editingProvider.instance}
           provider={editingProvider}
           onClose={() => setEditing(null)}
