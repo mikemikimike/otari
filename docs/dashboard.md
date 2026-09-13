@@ -13,7 +13,7 @@ server rather than duplicated in the frontend.
 - **Hybrid** shows gateway health and a link to the otari.ai control plane. It has
   no local management UI.
 
-The dashboard reads `GET /v1/bootstrap` before rendering. That response controls
+The dashboard reads `GET /api/v1/bootstrap` before rendering. That response controls
 the available sign-in methods and navigation surfaces, so a page that is not
 available in the current mode is not offered.
 
@@ -44,6 +44,11 @@ The operator can claim a new deployment by setting an email address and password
 from Account settings. After that, the sign-in page uses the password rather than
 the master key. The master key remains valid for management API calls and can
 reset the operator password.
+
+The sign-in page offers the email and password form as soon as any identity holds
+a password, which can be before the operator claims the deployment: a member
+added to the roster and signed up signs in there. While both credentials still
+work, the page offers the master-key box beside the form.
 
 ## First-run walkthrough
 
@@ -104,6 +109,12 @@ manages every key in the organization and chooses each key's owner, while a
 member sees the same page scoped to their own keys, always billed to themselves
 and never budget-exempt.
 
+Overview splits the same way. Everyone lands on their own spend, traffic and
+recent requests. An organization owner or admin also gets a budget-health
+figure, read from the spend ceilings holding their organization, while a
+deployment operator gets provider health and the deployment's own budgets
+instead.
+
 ## Observability
 
 Activity is the per-request log. Usage provides aggregates and time series.
@@ -126,9 +137,11 @@ workspace roles. Deployment-wide operations require an operator. See
 
 ## Authentication options
 
-Password sign-in is always tied to an existing identity. Optional passkeys,
-Google OAuth, and GitHub OAuth add ways for that identity to sign in; they do not
-make an unknown account a member. OAuth requires `public_base_url` plus the
+Password sign-in is tied to an existing identity, unless the deployment sets
+`open_signup: true`, which lets an unknown address register itself with an
+organization of its own. Optional passkeys, Google OAuth, and GitHub OAuth add
+ways for an existing identity to sign in; they do not make an unknown account a
+member. OAuth requires `public_base_url` plus the
 provider's client ID and secret. Passkeys can instead use `public_base_url`, or
 an explicit `webauthn_rp_id` and `webauthn_allowed_origins` pair.
 

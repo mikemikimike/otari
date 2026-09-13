@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page, test } from "@playwright/test"
 
 import {
-  dismissComboBox,
+  dismissComboBoxInDialog,
   gotoRoute,
   login,
   nav,
@@ -48,6 +48,18 @@ function row(page: Page, ariaLabel: string, name: string | RegExp): Locator {
 // A routing form's model pickers take any selector, so the value is typed rather
 // than chosen. Their popover has to be put away afterwards or it aria-hides the
 // controls below it, including the form's own submit.
+//
+// The in-dialog dismissal, because the Escape is the half that bites. The blur
+// really is safe here, as the note this replaces said: the model box does not
+// open on focus, so focus returning to it inside the modal leaves the popover
+// shut. But `dismissComboBox` presses Escape unconditionally, and when the fill
+// has already closed the popover that key travels on to the dialog, which
+// answers a dirty form by arming its unsaved-changes guard. The guard takes the
+// submit out of the footer, so the next press finds no "Create policy" and
+// times out thirty seconds later, several lines below the line that caused it.
+// Both recorded failures show "Unsaved changes · Keep editing · Discard" in the
+// footer at the timeout. `dismissComboBoxInDialog` sends the key only while
+// `aria-expanded` is true, which is the whole fix.
 async function fillModelBox(
   page: Page,
   name: RegExp,
@@ -55,7 +67,7 @@ async function fillModelBox(
 ): Promise<void> {
   const box = page.getByRole("combobox", { name })
   await box.fill(value)
-  await dismissComboBox(box)
+  await dismissComboBoxInDialog(box)
 }
 
 test.describe("standalone provider setup", () => {
@@ -66,16 +78,21 @@ test.describe("standalone provider setup", () => {
     await openPage(page, "Providers", "Providers")
 
     await page.getByRole("button", { name: "Add provider" }).click()
-    await page.getByRole("button", { name: "Custom endpoint" }).click()
-    await page.getByLabel("Name").fill(PROVIDER)
-    await page.getByLabel("API base").fill(UNREACHABLE)
-    await page.getByRole("button", { name: "Add provider" }).click()
+    // Scoped: the heading's trigger and the dialog's submit both say "Add
+    // provider", so an unscoped press is ambiguous.
+    const dialog = page.getByRole("dialog", { name: "New provider" })
+    await dialog.getByRole("button", { name: "Custom endpoint" }).click()
+    await dialog.getByLabel("Name").fill(PROVIDER)
+    await dialog.getByLabel("API base").fill(UNREACHABLE)
+    await dialog.getByRole("button", { name: "Add provider" }).click()
 
     const provider = row(page, "Providers", PROVIDER)
     await expect(provider).toBeVisible()
     // A stored provider is one the dashboard owns, as against one read out of
     // config.yml, which is what decides whether it can be edited here at all.
-    await expect(provider).toContainText("stored")
+    // Uppercase in the source rather than through a `text-transform`, so this is
+    // the text content and the match is case-sensitive.
+    await expect(provider).toContainText("STORED")
 
     // Testing has to come back with a reported outcome, not just stop spinning:
     // an assertion that it merely does not say "Connected." would also pass if the
@@ -91,14 +108,14 @@ test.describe("standalone provider setup", () => {
     await expect(provider).not.toContainText("Connected.")
 
     await provider.getByRole("button", { name: "Edit" }).click()
-    await page.getByLabel("API base").fill("http://127.0.0.1:9/v2")
-    await page.getByRole("button", { name: "Save changes" }).click()
-    // Wait on Cancel, not on the button that was just pressed: that one reads
-    // "Saving…" while the request is in flight, so asserting "Save changes" is
-    // hidden passes the instant it is pressed, and the reload below then aborts
-    // the PATCH and loses the edit. Cancel is present for as long as the form is,
-    // and the form closes only in the mutation's onSuccess.
-    await expect(page.getByRole("button", { name: "Cancel" })).toBeHidden()
+    const editProvider = page.getByRole("dialog", { name: "Edit provider" })
+    await editProvider.getByLabel("API base").fill("http://127.0.0.1:9/v2")
+    await editProvider.getByRole("button", { name: "Save" }).click()
+    // Wait on the frame, not on the button that was just pressed: the submit
+    // keeps its label through the request, so asserting it is hidden passes the
+    // instant it is pressed and the reload below then aborts the PATCH and loses
+    // the edit. The dialog closes only in the mutation's onSuccess.
+    await expect(editProvider).toBeHidden()
 
     // Reopening is what proves the edit was persisted rather than only echoed
     // back into a form that never closed. Reload first: the form seeds its fields
@@ -109,19 +126,22 @@ test.describe("standalone provider setup", () => {
     await row(page, "Providers", PROVIDER)
       .getByRole("button", { name: "Edit" })
       .click()
-    await expect(page.getByLabel("API base")).toHaveValue(
+    await expect(editProvider.getByLabel("API base")).toHaveValue(
       "http://127.0.0.1:9/v2",
     )
-    await page.getByRole("button", { name: "Cancel" }).click()
+    await editProvider.getByRole("button", { name: "Cancel" }).click()
+    await expect(editProvider).toBeHidden()
 
-    // Two presses on the same control: the first arms it, the second confirms
-    // (ConfirmButton, whose confirm label here is also "Delete").
-    const deleteProvider = row(page, "Providers", PROVIDER).getByRole(
-      "button",
-      { name: "Delete" },
-    )
-    await deleteProvider.click()
-    await deleteProvider.click()
+    // The confirmation is a modal, so it names the provider rather than relying
+    // on the row behind the backdrop to say which one this is about.
+    await row(page, "Providers", PROVIDER)
+      .getByRole("button", { name: "Delete" })
+      .click()
+    const confirmProvider = page.getByRole("alertdialog")
+    await expect(confirmProvider).toContainText(PROVIDER)
+    await confirmProvider
+      .getByRole("button", { name: "Delete provider" })
+      .click()
     await expect(row(page, "Providers", PROVIDER)).toHaveCount(0)
   })
 })
@@ -134,20 +154,29 @@ test.describe("api keys", () => {
     await openPage(page, "API keys", "API keys")
 
     await page.getByRole("button", { name: "Create key" }).click()
-    await page.getByLabel("Name").fill(KEY_NAME)
+    // Scoped from here on, because "Create key" is now on screen twice: the
+    // heading's trigger stays visible while the dialog is open, and the labels
+    // rule makes the dialog's submit say the same words.
+    const dialog = page.getByRole("dialog")
+    await dialog.getByLabel("Name").fill(KEY_NAME)
     // Owner is required: this is what keeps the dashboard from minting the
     // anonymous virtual users an omitted id would.
-    const ownerBox = page.getByPlaceholder("Pick a user, or type a new id…")
+    const ownerBox = dialog.getByPlaceholder("Pick a user, or type a new id…")
     await ownerBox.fill(PARITY.users.heavy)
-    await dismissComboBox(ownerBox)
-    await page.getByRole("button", { name: "Create key" }).click()
+    await dismissComboBoxInDialog(ownerBox)
+    await dialog.getByRole("button", { name: "Create key" }).click()
 
-    // The secret is shown exactly once, behind an explicit acknowledgement that
-    // Esc deliberately does not dismiss.
-    const reveal = page.getByRole("dialog", { name: "API key created" })
+    // The secret is shown exactly once, behind an acknowledgement that is the
+    // only way out: the dialog is `isDismissable={false}`, so Escape and the
+    // close control are gone. The reveal keeps its own `role="alert"` inside
+    // the dialog body, which is what the first two assertions read.
+    const reveal = page.getByRole("alert", { name: /API key created/ })
     await expect(reveal).toBeVisible()
     await expect(reveal).toContainText("shown only once")
-    await reveal.getByRole("button", { name: /saved this key/i }).click()
+    // Scoped to the dialog rather than to the reveal: the acknowledgement is
+    // the dialog's own submit, in the footer, so it sits outside the alert
+    // region the announcement covers.
+    await dialog.getByRole("button", { name: /saved this key/i }).click()
 
     const key = row(page, "API keys", KEY_NAME)
     await expect(key).toContainText("Active")
@@ -161,7 +190,11 @@ test.describe("api keys", () => {
     await expect(key.getByRole("button", { name: "Enable" })).toBeVisible()
 
     await key.getByRole("button", { name: "Delete" }).click()
-    await key.getByRole("button", { name: "Delete permanently" }).click()
+    // Scoped to the dialog rather than to `key`: the confirmation is a modal
+    // now, outside the table entirely.
+    const confirmKey = page.getByRole("alertdialog")
+    await expect(confirmKey).toContainText(KEY_NAME)
+    await confirmKey.getByRole("button", { name: "Delete permanently" }).click()
     await expect(row(page, "API keys", KEY_NAME)).toHaveCount(0)
   })
 })
@@ -175,24 +208,29 @@ test.describe("budgets", () => {
     await openPage(page, "Spend & budgets", "Budgets")
 
     await page.getByRole("button", { name: "Create budget" }).click()
-    await page.getByLabel("Name (optional)").fill(BUDGET)
-    await page.getByLabel("Spending limit (USD)").fill("25")
+    // Scoped: the heading's trigger and the dialog's submit both say "Create
+    // budget", so an unscoped press is ambiguous.
+    const dialog = page.getByRole("dialog")
+    await dialog.getByLabel("Name (optional)").fill(BUDGET)
+    await dialog.getByLabel("Spending limit (USD)").fill("25")
     // Assigning at creation is the path that makes a budget enforceable; a budget
     // with no users caps nothing.
-    const owner = page.getByRole("combobox", { name: "Add a person" })
+    const owner = dialog.getByRole("combobox", {
+      name: "Assign to people (optional)",
+    })
     await owner.fill(PARITY.users.heavy)
     // Plain string, not a RegExp built from the id: an address is full of regex
     // metacharacters, so `.` would match any character and the pattern could pick
     // a neighbouring option. Playwright matches an accessible name by substring
     // here, which is what an aliased user's "id (alias)" label needs anyway.
     await page.getByRole("option", { name: PARITY.users.heavy }).click()
-    await dismissComboBox(owner)
+    await dismissComboBoxInDialog(owner)
     // The picked user becomes a removable chip, which is the form's own record of
     // who this budget will cap before it is submitted.
     await expect(
-      page.getByRole("button", { name: `Remove ${PARITY.users.heavy}` }),
+      dialog.getByRole("button", { name: `Remove ${PARITY.users.heavy}` }),
     ).toBeVisible()
-    await page.getByRole("button", { name: "Create budget" }).click()
+    await dialog.getByRole("button", { name: "Create budget" }).click()
 
     const budget = row(page, "Budgets", BUDGET)
     await expect(budget).toContainText("$25.00")
@@ -201,8 +239,9 @@ test.describe("budgets", () => {
     await expect(budget).not.toContainText("No users assigned")
 
     await budget.getByRole("button", { name: "Edit" }).click()
-    await page.getByLabel("Spending limit (USD)").fill("50")
-    await page.getByRole("button", { name: "Save changes" }).click()
+    const editDialog = page.getByRole("dialog")
+    await editDialog.getByLabel("Spending limit (USD)").fill("50")
+    await editDialog.getByRole("button", { name: "Save" }).click()
     await expect(row(page, "Budgets", BUDGET)).toContainText("$50.00")
 
     // Reset history is a per-budget panel, not a page: it opens under the table
@@ -213,12 +252,17 @@ test.describe("budgets", () => {
     await expect(page.getByText(`Reset history — ${BUDGET}`)).toBeVisible()
     await page.getByRole("button", { name: "Close" }).click()
 
-    // Deleting is armed first, and the confirmation names the budget it is about
-    // to drop rather than asking in the abstract.
-    const budgetRow = row(page, "Budgets", BUDGET)
-    await budgetRow.getByRole("button", { name: "Delete", exact: true }).click()
-    await expect(budgetRow).toContainText(`Delete ${BUDGET}?`)
-    await budgetRow.getByRole("button", { name: "Delete permanently" }).click()
+    // The confirmation names the budget it is about to drop rather than asking
+    // in the abstract, which is half of why it is a modal: the row it names is
+    // behind the backdrop.
+    await row(page, "Budgets", BUDGET)
+      .getByRole("button", { name: "Delete", exact: true })
+      .click()
+    const confirmBudget = page.getByRole("alertdialog")
+    await expect(confirmBudget).toContainText(BUDGET)
+    await confirmBudget
+      .getByRole("button", { name: "Delete permanently" })
+      .click()
     await expect(row(page, "Budgets", BUDGET)).toHaveCount(0)
   })
 })
@@ -229,17 +273,21 @@ test.describe("fallback routing", () => {
     await openNested(page, "Routing", "Policies")
     await expect(pageHeading(page, "Routing")).toBeVisible()
 
-    await page.getByRole("button", { name: "New policy" }).click()
-    await page.getByRole("textbox", { name: /Policy name/ }).fill(POLICY)
+    // `.first()` is the heading's action. An empty routing list also offers
+    // the same words from its empty state, and a press has to name which.
+    await page.getByRole("button", { name: "Create policy" }).first().click()
+    // Scoped from here: the dialog's submit says "Create policy" too.
+    const dialog = page.getByRole("dialog")
+    await dialog.getByRole("textbox", { name: /Policy name/ }).fill(POLICY)
     await fillModelBox(page, /Serves/, "openai:gpt-4o")
 
     // The chain is summoned rather than presented, so naming one model stays a
     // short task; a second candidate is then added to the chain that exists.
-    await page.getByRole("button", { name: /Add a fallback chain/ }).click()
+    await dialog.getByRole("button", { name: /Add a fallback chain/ }).click()
     await fillModelBox(page, /Fallback 1/, "anthropic:claude-3-5-haiku-latest")
     await page.getByRole("button", { name: "+ Another fallback" }).click()
     await fillModelBox(page, /Fallback 2/, "groq:llama-3.3-70b-versatile")
-    await page.getByRole("button", { name: "Create policy" }).click()
+    await dialog.getByRole("button", { name: "Create policy" }).click()
 
     // The table summarises the chain by its length, so the count is the assertion
     // that both fallbacks were saved and not just the first.
@@ -276,7 +324,9 @@ test.describe("fallback routing", () => {
     await row(page, "Routing policies", POLICY)
       .getByRole("button", { name: "Delete" })
       .click()
-    await page.getByRole("button", { name: "Confirm" }).click()
+    const confirmPolicy = page.getByRole("alertdialog")
+    await expect(confirmPolicy).toContainText(POLICY)
+    await confirmPolicy.getByRole("button", { name: "Delete policy" }).click()
     await expect(row(page, "Routing policies", POLICY)).toHaveCount(0)
   })
 })

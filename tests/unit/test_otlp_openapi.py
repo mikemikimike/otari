@@ -11,9 +11,9 @@ def test_otlp_export_responses_describe_json_and_protobuf_shapes() -> None:
     spec: dict[str, Any] = json.loads(_SPEC_PATH.read_text())
     schemas = spec["components"]["schemas"]
     expected = {
-        "/v1/traces": ("OTLPTraceServiceResponse", "OTLPTracePartialSuccess", "rejectedSpans"),
-        "/v1/logs": ("OTLPLogsServiceResponse", "OTLPLogsPartialSuccess", "rejectedLogRecords"),
-        "/v1/metrics": ("OTLPMetricsServiceResponse", "OTLPMetricsPartialSuccess", "rejectedDataPoints"),
+        "/otlp/v1/traces": ("OTLPTraceServiceResponse", "OTLPTracePartialSuccess", "rejectedSpans"),
+        "/otlp/v1/logs": ("OTLPLogsServiceResponse", "OTLPLogsPartialSuccess", "rejectedLogRecords"),
+        "/otlp/v1/metrics": ("OTLPMetricsServiceResponse", "OTLPMetricsPartialSuccess", "rejectedDataPoints"),
     }
 
     for path, (response_name, partial_name, rejected_name) in expected.items():

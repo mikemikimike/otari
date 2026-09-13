@@ -2,11 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
-
 import { AuthProvider } from "@/features/auth/AuthContext"
 import { AcceptInvitationPage } from "@/features/invitations/AcceptInvitationPage"
 import { ApiError, apiFetch } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
+import { ThemeProvider } from "@/shared/hooks/useTheme"
 import { bootstrap } from "@/tests/fixtures"
 
 // Mocks the network boundary (apiFetch), not the hooks, per
@@ -29,7 +29,7 @@ function mockApi(opts: {
 }) {
   vi.mocked(apiFetch).mockImplementation(async (path) => {
     const url = String(path)
-    if (url === "/v1/invitations/validate") {
+    if (url === "/invitations/validate") {
       if (opts.previewError) {
         throw new ApiError(400, opts.previewError)
       }
@@ -40,7 +40,7 @@ function mockApi(opts: {
         expires_at: "2026-01-08T00:00:00+00:00",
       }) as never
     }
-    if (url === "/v1/invitations/accept") {
+    if (url === "/invitations/accept") {
       if (opts.acceptError) {
         throw new ApiError(400, opts.acceptError)
       }
@@ -64,18 +64,20 @@ function renderPage(
   return {
     client,
     ...render(
-      <QueryClientProvider client={client}>
-        <AuthProvider>
-          <DeploymentProvider
-            value={bootstrap({
-              mail_ready: mailReady,
-              oauth_providers: oauthProviders,
-            })}
-          >
-            <AcceptInvitationPage />
-          </DeploymentProvider>
-        </AuthProvider>
-      </QueryClientProvider>,
+      <ThemeProvider>
+        <QueryClientProvider client={client}>
+          <AuthProvider>
+            <DeploymentProvider
+              value={bootstrap({
+                mail_ready: mailReady,
+                oauth_providers: oauthProviders,
+              })}
+            >
+              <AcceptInvitationPage />
+            </DeploymentProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+      </ThemeProvider>,
     ),
   }
 }
@@ -186,7 +188,7 @@ describe("AcceptInvitationPage", () => {
 
     expect(await screen.findByText(/sends no mail/i)).toBeInTheDocument()
     expect(screen.getByText(/An operator can turn that on/)).toBeInTheDocument()
-    // Never this: `PUT /v1/auth/password` only acts on the caller's own
+    // Never this: `PUT /api/v1/auth/password` only acts on the caller's own
     // identity, so no endpoint here lets an admin set someone else's password.
     expect(screen.queryByText(/ask whoever administers/i)).toBeNull()
     expect(
@@ -226,7 +228,7 @@ describe("AcceptInvitationPage", () => {
     let accepted = false
     vi.mocked(apiFetch).mockImplementation(async (path) => {
       const url = String(path)
-      if (url === "/v1/invitations/validate") {
+      if (url === "/invitations/validate") {
         if (accepted) {
           throw new ApiError(
             400,

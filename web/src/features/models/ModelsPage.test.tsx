@@ -226,30 +226,30 @@ function mockApi(
       if (method === "DELETE") {
         return null as never
       }
-      if (url.endsWith("/v1/organizations/me")) {
+      if (url.endsWith("/organizations/me")) {
         return (opts.context ?? organizationContext()) as never
       }
-      if (url.includes("/v1/settings")) {
+      if (url.includes("/settings")) {
         return (opts.settings ?? SETTINGS) as never
       }
       // Specific /v1/models/* routes before the /v1/models/ catch-all (which 404s,
       // matching the server's route order).
-      if (url.includes("/v1/models/discoverable")) {
+      if (url.includes("/models/discoverable")) {
         return (opts.discoverable ?? DISCOVERABLE) as never
       }
-      if (url.includes("/v1/models/metadata")) {
+      if (url.includes("/models/metadata")) {
         return (opts.metadata ?? METADATA) as never
       }
-      if (url.includes("/v1/aliases")) {
+      if (url.includes("/aliases")) {
         return (opts.aliases ?? ALIASES) as never
       }
-      if (url.includes("/v1/models/")) {
+      if (url.includes("/models/")) {
         throw new Error("Model not found")
       }
-      if (url.includes("/v1/models")) {
+      if (url.includes("/models")) {
         return (opts.catalog ?? CATALOG) as never
       }
-      if (url.includes("/v1/pricing")) {
+      if (url.includes("/pricing")) {
         return (opts.pricing ?? [PRICED]) as never
       }
       return [] as never
@@ -270,6 +270,19 @@ function modelOrder(): string[] {
     .getAllByRole("row")
     .map((row) => row.textContent ?? "")
     .filter((text) => text.includes(":"))
+}
+
+/**
+ * Open the filter panel.
+ *
+ * Seven of the nine filters moved behind "Add filter" when the row stopped
+ * fitting, so a test that reaches for one has to open the panel the way a
+ * person does. Idempotent: the toggle reads "Done" once it is open, so calling
+ * this twice in a test does not close it again.
+ */
+async function openFilters(user: ReturnType<typeof userEvent.setup>) {
+  const toggle = screen.queryByRole("button", { name: "Add filter" })
+  if (toggle) await user.click(toggle)
 }
 
 describe("ModelsPage", () => {
@@ -398,7 +411,9 @@ describe("ModelsPage", () => {
 
     const detail = await selectModel(user, "openai:gpt-4o")
 
-    expect(within(detail).getByText("configured")).toBeInTheDocument()
+    // The price's source is a dot and an uppercase word now. `configured` reads
+    // as CUSTOM, which is what it means: somebody set this deliberately.
+    expect(within(detail).getByText("CUSTOM")).toBeInTheDocument()
     expect(within(detail).getByText("128K")).toBeInTheDocument()
     expect(within(detail).getByText("2023-09")).toBeInTheDocument()
     expect(within(detail).getByText("Tool calling")).toBeInTheDocument()
@@ -474,7 +489,8 @@ describe("ModelsPage", () => {
     renderWithClient(<ModelsPage />)
     await screen.findByText("openai:gpt-4o")
 
-    await pickOption(user, "Filter by pricing", "Custom price")
+    await openFilters(user)
+    await pickOption(user, "Pricing", "Custom price")
 
     expect(within(table()).getByText("openai:gpt-4o")).toBeInTheDocument()
     expect(
@@ -502,7 +518,8 @@ describe("ModelsPage", () => {
     renderWithClient(<ModelsPage />)
     await screen.findByText("mistral:large")
 
-    await pickOption(user, "Filter by source", "Custom (not discovered)")
+    await openFilters(user)
+    await pickOption(user, "Source", "Custom (not discovered)")
 
     expect(within(table()).getByText("mistral:large")).toBeInTheDocument()
     expect(within(table()).queryByText("openai:gpt-4o")).not.toBeInTheDocument()
@@ -517,7 +534,8 @@ describe("ModelsPage", () => {
 
     // Reasoning is a model-level flag (models.dev), not a provider capability:
     // only claude-sonnet-4 reports it, so the two gpt-4o models drop out.
-    await pickOption(user, "Filter by capability", "Reasoning")
+    await openFilters(user)
+    await pickOption(user, "Capability", "Reasoning")
 
     expect(
       within(table()).getByText("anthropic:claude-sonnet-4"),
@@ -544,7 +562,8 @@ describe("ModelsPage", () => {
 
     renderWithClient(<ModelsPage />)
     await screen.findByText("openai:gpt-4o")
-    await pickOption(user, "Filter by capability", "Vision")
+    await openFilters(user)
+    await pickOption(user, "Capability", "Vision")
 
     expect(within(table()).queryByText("openai:gpt-4o")).not.toBeInTheDocument()
   })
@@ -557,7 +576,8 @@ describe("ModelsPage", () => {
     await screen.findByText("openai:gpt-4o")
 
     // No mock model reports PDF input, so the list empties for a filter reason.
-    await pickOption(user, "Filter by capability", "PDF")
+    await openFilters(user)
+    await pickOption(user, "Capability", "PDF")
 
     expect(
       within(table()).getByText("No models match your filters."),
@@ -571,7 +591,8 @@ describe("ModelsPage", () => {
     renderWithClient(<ModelsPage />)
     await screen.findByText("openai:gpt-4o")
 
-    await pickOption(user, "Minimum context window", "≥ 200K")
+    await openFilters(user)
+    await pickOption(user, "Min context", "≥ 200K")
 
     expect(
       within(table()).getByText("anthropic:claude-sonnet-4"),
@@ -789,7 +810,7 @@ describe("ModelsPage", () => {
       ([, init]) => (init?.method ?? "") === "POST",
     )
     expect(call).toBeDefined()
-    expect(String(call?.[0])).toContain("/v1/pricing")
+    expect(String(call?.[0])).toContain("/pricing")
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
       model_key: "openai:gpt-4o",
       input_price_per_million: 4,
@@ -831,7 +852,7 @@ describe("ModelsPage", () => {
     const call = fetchMock.mock.calls.find(
       ([, init]) => (init?.method ?? "") === "POST",
     )
-    expect(String(call?.[0])).toContain("/v1/pricing")
+    expect(String(call?.[0])).toContain("/pricing")
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
       model_key: "openai:gpt-4o",
       cache_read_price_per_million: 0.3,
@@ -870,11 +891,17 @@ describe("ModelsPage", () => {
     // The compact cache-policy cell keeps the table readable while opening the
     // full structured editor on click.
     const row = tableRow("anthropic:claude-sonnet-4")
-    expect(
-      within(row).getByRole("button", {
-        name: "Edit caching price for anthropic:claude-sonnet-4",
-      }),
-    ).toHaveTextContent("R $0.30 · W $3.75")
+    // The read and write prices each sit in a fixed-width box so the column can
+    // be scanned downward, which means the spacing between them is layout and
+    // not text. Asserting the concatenation back would pin a single-string cell
+    // rather than what a reader sees.
+    const cachingCell = within(row).getByRole("button", {
+      name: "Edit caching price for anthropic:claude-sonnet-4",
+    })
+    expect(cachingCell).toHaveTextContent("R")
+    expect(cachingCell).toHaveTextContent("$0.30")
+    expect(cachingCell).toHaveTextContent("W")
+    expect(cachingCell).toHaveTextContent("$3.75")
 
     const detail = await selectModel(user, "anthropic:claude-sonnet-4")
     expect(within(detail).getByText("Cache read")).toBeInTheDocument()
@@ -903,7 +930,8 @@ describe("ModelsPage", () => {
     renderWithClient(<ModelsPage />)
     await screen.findByText("openai:gpt-4o")
 
-    await pickOption(user, "Compare prices at context", "Compare at 200K")
+    await openFilters(user)
+    await pickOption(user, "Compare at", "Compare at 200K")
 
     expect(
       screen.getByRole("columnheader", { name: /at 200K in \/ out \/ 1M/ }),
@@ -1007,7 +1035,7 @@ describe("ModelsPage", () => {
     const call = fetchMock.mock.calls.find(
       ([, init]) => (init?.method ?? "") === "POST",
     )
-    expect(String(call?.[0])).toContain("/v1/pricing")
+    expect(String(call?.[0])).toContain("/pricing")
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
       model_key: "openai:gpt-4o",
       cache_read_price_per_million: 0.3,
@@ -1031,39 +1059,6 @@ describe("ModelsPage", () => {
     expect(
       screen.queryByRole("button", { name: /backfill/i }),
     ).not.toBeInTheDocument()
-  })
-
-  it("bulk-sets pricing on the selected models", async () => {
-    const fetchMock = mockApi()
-    const user = userEvent.setup()
-
-    renderWithClient(<ModelsPage />)
-    await screen.findByText("openai:gpt-4o")
-
-    const row = tableRow("openai:gpt-4o")
-    await user.click(within(row).getByRole("checkbox"))
-
-    const bar = (await screen.findByText("1 selected")).closest("div")!
-    await user.click(within(bar).getByRole("button", { name: "Set pricing" }))
-
-    const dialog = await screen.findByRole("alertdialog")
-    await user.type(within(dialog).getByLabelText("Input $ / 1M"), "5")
-    await user.type(within(dialog).getByLabelText("Output $ / 1M"), "12")
-    await user.click(within(dialog).getByRole("button", { name: "Set price" }))
-
-    await vi.waitFor(() => {
-      const call = fetchMock.mock.calls.find(
-        ([u, init]) =>
-          String(u).includes("/v1/pricing") &&
-          (init?.method ?? "").toUpperCase() === "POST",
-      )
-      expect(call).toBeTruthy()
-      expect(JSON.parse(String(call![1]!.body))).toMatchObject({
-        model_key: "openai:gpt-4o",
-        input_price_per_million: 5,
-        output_price_per_million: 12,
-      })
-    })
   })
 
   // -- pricing a model the catalog does not list --------------------------
@@ -1097,18 +1092,22 @@ describe("ModelsPage", () => {
       await screen.findByRole("button", { name: "Price vllm:mistral-small" }),
     )
 
-    const dialog = await screen.findByRole("alertdialog")
+    const dialog = await screen.findByRole("dialog")
     expect(within(dialog).getByLabelText("Model key")).toHaveValue(
       "vllm:mistral-small",
     )
     await user.type(within(dialog).getByLabelText("Input $ / 1M"), "0.2")
     await user.type(within(dialog).getByLabelText("Output $ / 1M"), "0.6")
-    await user.click(within(dialog).getByRole("button", { name: "Set price" }))
+    // The submit says what its trigger said, word for word (actions.md), so it
+    // carries the selector here too.
+    await user.click(
+      within(dialog).getByRole("button", { name: "Price vllm:mistral-small" }),
+    )
 
     await vi.waitFor(() => {
       const call = fetchMock.mock.calls.find(
         ([u, init]) =>
-          String(u).includes("/v1/pricing") &&
+          String(u).includes("/pricing") &&
           (init?.method ?? "").toUpperCase() === "POST",
       )
       expect(call).toBeTruthy()
@@ -1128,6 +1127,46 @@ describe("ModelsPage", () => {
     expect(tableRow("vllm:mistral-small")).toBeInTheDocument()
   })
 
+  it("does not greet the next hand-price with the last attempt's refusal", async () => {
+    // The dialog awaits the save and owns the pending and error state itself,
+    // below the page's key, so both go with the draft on the next open. Held as
+    // page state they outlived it: a blank form arrived under the old error.
+    mockApi({
+      post: () => {
+        throw new apiClient.ApiError(409, "A price for that model exists.")
+      },
+    })
+    const user = userEvent.setup()
+    renderWithClient(<ModelsPage />)
+    await screen.findByText("openai:gpt-4o")
+
+    await user.type(screen.getByRole("searchbox"), "vllm:mistral-small")
+    await user.click(
+      await screen.findByRole("button", { name: "Price vllm:mistral-small" }),
+    )
+    const dialog = await screen.findByRole("dialog")
+    await user.type(within(dialog).getByLabelText("Input $ / 1M"), "0.2")
+    await user.type(within(dialog).getByLabelText("Output $ / 1M"), "0.6")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Price vllm:mistral-small" }),
+    )
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A price for that model exists.",
+    )
+
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Discard" }))
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await user.click(
+      screen.getByRole("button", { name: "Price vllm:mistral-small" }),
+    )
+
+    const reopened = await screen.findByRole("dialog")
+    expect(within(reopened).queryByRole("alert")).toBeNull()
+    expect(within(reopened).getByLabelText("Input $ / 1M")).toHaveValue("")
+  })
+
   it("rejects a model key with no provider prefix", async () => {
     mockApi()
     const user = userEvent.setup()
@@ -1141,13 +1180,13 @@ describe("ModelsPage", () => {
       await screen.findByRole("button", { name: "Price a model by hand" }),
     )
 
-    const dialog = await screen.findByRole("alertdialog")
+    const dialog = await screen.findByRole("dialog")
     await user.type(within(dialog).getByLabelText("Model key"), "mistral-small")
     await user.type(within(dialog).getByLabelText("Input $ / 1M"), "0.2")
     await user.type(within(dialog).getByLabelText("Output $ / 1M"), "0.6")
 
     expect(
-      within(dialog).getByRole("button", { name: "Set price" }),
+      within(dialog).getByRole("button", { name: "Price a model by hand" }),
     ).toBeDisabled()
     expect(
       within(dialog).getByText(/Include the provider or instance prefix/),
@@ -1175,11 +1214,12 @@ describe("ModelsPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Price a model" }))
 
-    const dialog = await screen.findByRole("alertdialog")
+    const dialog = await screen.findByRole("dialog")
     expect(within(dialog).getByLabelText("Model key")).toHaveValue("vllm:")
-    // A bare prefix is not yet a key, so the price cannot be submitted.
+    // A bare prefix is not yet a key, so the price cannot be submitted. The
+    // submit carries the banner trigger's own label.
     expect(
-      within(dialog).getByRole("button", { name: "Set price" }),
+      within(dialog).getByRole("button", { name: "Price a model" }),
     ).toBeDisabled()
   })
 
@@ -1212,9 +1252,7 @@ describe("ModelsPage", () => {
     await user.click(screen.getByRole("button", { name: "Price a model" }))
 
     expect(
-      within(await screen.findByRole("alertdialog")).getByLabelText(
-        "Model key",
-      ),
+      within(await screen.findByRole("dialog")).getByLabelText("Model key"),
     ).toHaveValue("")
   })
 
@@ -1251,7 +1289,7 @@ describe("ModelsPage", () => {
 
     expect(
       within(await selectModel(user, "anthropic:claude-opus-4")).getByText(
-        "rate unknown",
+        "RATE UNKNOWN",
       ),
     ).toBeInTheDocument()
   })
@@ -1265,7 +1303,7 @@ describe("ModelsPage", () => {
 
     expect(
       within(await selectModel(user, "anthropic:claude-opus-4")).getByText(
-        "not priced",
+        "NOT PRICED",
       ),
     ).toBeInTheDocument()
   })
@@ -1357,18 +1395,37 @@ describe("ModelsPage", () => {
       screen.queryByRole("button", {
         name: (name) => name === label || name.endsWith(` ${label}`),
       })
-    expect(filterTrigger("Filter by source")).toBeNull()
-    expect(filterTrigger("Filter by capability")).toBeNull()
-    expect(filterTrigger("Filter by release date")).toBeNull()
+    // The controls carry a visible `label` rather than an `ariaLabel` of
+    // "Filter by X", so these are the names in the accessible tree. Asserting
+    // "Filter by X" would pass on the naming alone and stop testing the
+    // withholding.
+    expect(filterTrigger("Source")).toBeNull()
+    expect(filterTrigger("Capability")).toBeNull()
+    expect(filterTrigger("Released")).toBeNull()
     // The ones that read only the catalog stay.
     expect(filterTrigger("Filter by provider")).not.toBeNull()
-    expect(filterTrigger("Filter by pricing")).not.toBeNull()
+    expect(filterTrigger("Pricing")).not.toBeNull()
 
     const urls = fetchMock.mock.calls.map(([input]) => String(input))
-    expect(urls.some((url) => url.includes("/v1/settings"))).toBe(false)
-    expect(urls.some((url) => url.includes("/v1/models/discoverable"))).toBe(
-      false,
-    )
-    expect(urls.some((url) => url.includes("/v1/models/metadata"))).toBe(false)
+    expect(urls.some((url) => url.includes("/settings"))).toBe(false)
+    expect(urls.some((url) => url.includes("/models/discoverable"))).toBe(false)
+    expect(urls.some((url) => url.includes("/models/metadata"))).toBe(false)
+  })
+
+  // The models page offers no row selection, because there is no bulk price
+  // write for it to feed (otari-ai#2096). The checkbox assertions are the real
+  // check; the last two only bite on a bulk bar reintroduced without selection.
+  it("offers no row selection and no bulk pricing, even to an operator", async () => {
+    mockApi()
+    renderWithClient(<ModelsPage />)
+    await screen.findByText("openai:gpt-4o")
+
+    const row = tableRow("openai:gpt-4o")
+    expect(within(row).queryByRole("checkbox")).toBeNull()
+    expect(screen.queryByRole("checkbox")).toBeNull()
+    expect(screen.queryByText(/\d+ selected/)).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Set pricing" }),
+    ).not.toBeInTheDocument()
   })
 })

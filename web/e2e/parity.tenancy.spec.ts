@@ -27,6 +27,26 @@ async function openPage(
   ).toBeVisible()
 }
 
+// The value beside a term in the organization's detail list, the way
+// `tileValue` reads the value beside a tile's label.
+function organizationDetail(page: Page, term: string): Locator {
+  return page
+    .getByText(term, { exact: true })
+    .locator("xpath=following-sibling::dd[1]")
+}
+
+// Renaming is a dialog away, and the dialog shows the name being replaced
+// before it takes the one replacing it.
+async function rename(page: Page, to: string): Promise<void> {
+  await page.getByRole("button", { name: "Change organization name" }).click()
+  // The title names the object, and the trigger and submit share the action.
+  const dialog = page.getByRole("dialog", { name: "Organization name" })
+  await expect(dialog.getByText("Current name")).toBeVisible()
+  await dialog.getByLabel("New name").fill(to)
+  await dialog.getByRole("button", { name: "Change organization name" }).click()
+  await expect(dialog).toBeHidden()
+}
+
 function memberRow(page: Page, name: string | RegExp): Locator {
   return tableRows(page, "Organization members").filter({
     has: page.getByRole("rowheader", { name }),
@@ -49,19 +69,21 @@ test.describe("standalone tenancy", () => {
 
     // The master key names no user, so the first authenticated request
     // provisions this: one organization, one owner identity, one workspace.
-    const name = page.getByLabel("Organization name")
-    const original = await name.inputValue()
+    const name = organizationDetail(page, "Organization name")
+    const original = ((await name.textContent()) ?? "").trim()
     expect(original).not.toBe("")
 
-    await name.fill("Parity Organization")
-    await page.getByRole("button", { name: "Save name" }).click()
-    await expect(name).toHaveValue("Parity Organization")
+    // The page reads the name rather than offering it in an open box, so
+    // nothing here can be renamed by a stray keystroke on arrival.
+    await expect(page.getByRole("main").getByRole("textbox")).toHaveCount(0)
+
+    await rename(page, "Parity Organization")
+    await expect(name).toHaveText("Parity Organization")
 
     // The slug is set at creation and deliberately does not follow a rename,
     // which is what makes it safe to key anything off.
-    await name.fill(original)
-    await page.getByRole("button", { name: "Save name" }).click()
-    await expect(name).toHaveValue(original)
+    await rename(page, original)
+    await expect(name).toHaveText(original)
   })
 
   test("lists the operator as an undemotable owner", async ({ page }) => {
@@ -97,9 +119,12 @@ test.describe("standalone tenancy", () => {
     await openPage(page, "Members & roles", "Members")
 
     await page.getByRole("button", { name: "Add member" }).click()
-    await page.getByLabel("Email address").fill(MEMBER_EMAIL)
-    await pickOption(page, "Role", "Member")
-    await page.getByRole("button", { name: "Add member" }).click()
+    // Scoped: the heading's trigger and the dialog's submit both say "Add
+    // member", so an unscoped press is ambiguous.
+    const addDialog = page.getByRole("dialog", { name: "New member" })
+    await addDialog.getByLabel("Email address").fill(MEMBER_EMAIL)
+    await pickOption(page, "Role", "Member", addDialog)
+    await addDialog.getByRole("button", { name: "Add member" }).click()
 
     // Nothing is emailed and nothing has to be accepted: this edition answers
     // on the "active" arm of the platform's result union, so the row is live
@@ -128,8 +153,9 @@ test.describe("standalone tenancy", () => {
     // second one, which is also what lets this spec run twice against one
     // gateway.
     await page.getByRole("button", { name: "Add member" }).click()
-    await page.getByLabel("Email address").fill(MEMBER_EMAIL)
-    await page.getByRole("button", { name: "Add member" }).click()
+    const readdDialog = page.getByRole("dialog", { name: "New member" })
+    await readdDialog.getByLabel("Email address").fill(MEMBER_EMAIL)
+    await readdDialog.getByRole("button", { name: "Add member" }).click()
     await expect(memberRow(page, MEMBER_EMAIL)).toHaveCount(1)
 
     // Leave the roster as this spec found it.
@@ -146,19 +172,24 @@ test.describe("standalone tenancy", () => {
     await openPage(page, "Workspaces", "Workspaces")
 
     await page.getByRole("button", { name: "Create workspace" }).click()
-    await page.getByLabel("Name").fill(WORKSPACE)
-    await page
+    // Scoped: the heading's trigger and the dialog's submit both say "Create
+    // workspace", so an unscoped press is ambiguous.
+    const dialog = page.getByRole("dialog", { name: "New workspace" })
+    await dialog.getByLabel("Name").fill(WORKSPACE)
+    await dialog
       .getByLabel("Description (optional)")
       .fill("Created by the parity suite")
-    await page.getByRole("button", { name: "Create workspace" }).click()
+    await dialog.getByRole("button", { name: "Create workspace" }).click()
 
     const created = workspaceRow(page, WORKSPACE)
     await expect(created).toBeVisible()
     await expect(created).toContainText("Created by the parity suite")
 
     await created.getByRole("button", { name: "Edit" }).click()
-    await page.getByLabel("Name").fill(RENAMED_WORKSPACE)
-    await page.getByRole("button", { name: "Save changes" }).click()
+    const editDialog = page.getByRole("dialog", { name: "Edit workspace" })
+    await editDialog.getByLabel("Name").fill(RENAMED_WORKSPACE)
+    await editDialog.getByRole("button", { name: "Save" }).click()
+    await expect(editDialog).toBeHidden()
 
     const renamed = workspaceRow(page, RENAMED_WORKSPACE)
     await expect(renamed).toBeVisible()
@@ -180,7 +211,12 @@ test.describe("standalone tenancy", () => {
     // A workspace's members are a subset of the organization's, and a standalone
     // deployment has exactly one identity, which owns every workspace it made.
     await expect(page.getByText(/Members of /)).toBeVisible()
-    await expect(page.getByText(/already in this workspace/)).toBeVisible()
+    // Said inside the dialog now rather than by a form under the roster. The
+    // trigger stays either way, so this is the only place that sentence can be.
+    await page.getByRole("button", { name: "Add member" }).click()
+    const dialog = page.getByRole("dialog", { name: "New workspace member" })
+    await expect(dialog.getByText(/already in this workspace/)).toBeVisible()
+    await dialog.getByRole("button", { name: "Cancel" }).click()
   })
 
   test("leaves creating and switching to the scope switcher, and offers no delete", async ({

@@ -1,10 +1,10 @@
-import { Card } from "@heroui/react"
-import type { ComponentPropsWithoutRef } from "react"
+import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from "react"
+import { Children, isValidElement } from "react"
 import type { Components, ExtraProps } from "react-markdown"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
+import { CodeBlock } from "@/design-system/content/CodeBlock"
+import { Markdown } from "@/design-system/content/Markdown"
 
-import { PageHeader } from "@/shared/components/ui"
+import { PageIntro } from "@/design-system/layout/PageIntro"
 // The operator user guide is bundled straight from the repo's docs so the
 // running dashboard ships the guide that matches it, instead of pointing at a
 // docs site that may describe a different version. Rebuilding the dashboard
@@ -83,7 +83,7 @@ const guideBody = dropSection(
 type MdProps<E extends "a" | "table" | "pre"> = ComponentPropsWithoutRef<E> &
   ExtraProps
 
-const markdownComponents: Components = {
+export const markdownComponents: Components = {
   a: ({ node: _node, href, children, ...props }: MdProps<"a">) => {
     const resolved = resolveDocHref(href)
     // Every rewritten link is now an absolute GitHub URL (external), so it opens
@@ -106,7 +106,7 @@ const markdownComponents: Components = {
   table: ({ node: _node, ...props }: MdProps<"table">) => (
     // biome-ignore lint/a11y/useSemanticElements: <section> would not make the overflow keyboard-reachable, which is the point
     <div
-      className="otari-markdown-scroll"
+      className="my-4 max-w-full overflow-x-auto"
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be focusable (axe scrollable-region-focusable)
       tabIndex={0}
       role="region"
@@ -117,32 +117,61 @@ const markdownComponents: Components = {
   ),
   // Code blocks scroll horizontally on overflow; make them focusable too so the
   // clipped content is keyboard-reachable (axe scrollable-region-focusable).
-  pre: ({ node: _node, ...props }: MdProps<"pre">) => (
-    // biome-ignore lint/a11y/noNoninteractiveTabindex: same as the table above; the block scrolls, so it has to be reachable
-    // biome-ignore lint/a11y/useSemanticElements: the region role is what names the scrollable block for AT
-    <pre tabIndex={0} role="region" aria-label="Code" {...props} />
-  ),
+  pre: (props: MdProps<"pre">) => <MarkdownCodeBlock {...props} />,
+}
+
+/**
+ * The bundled guide's fenced blocks, rendered through the shared `CodeBlock`.
+ *
+ * The language comes from the `language-*` class remark puts on the inner
+ * `<code>`, and the text a copy yields is that child's own string rather than
+ * the rendered nodes, which is why the block takes both: `children` is what
+ * react-markdown produced, `value` is what goes on the clipboard.
+ */
+function MarkdownCodeBlock({ node: _node, children }: MdProps<"pre">) {
+  const child = Children.toArray(children).find(isValidElement) as
+    | ReactElement<{ className?: string; children?: ReactNode }>
+    | undefined
+  const language =
+    /language-([\w+-]+)/.exec(child?.props.className ?? "")?.[1] ?? ""
+  const text =
+    typeof child?.props.children === "string" ? child.props.children : ""
+
+  return (
+    <CodeBlock
+      label={language || undefined}
+      value={text || undefined}
+      className="my-5"
+    >
+      {children}
+    </CodeBlock>
+  )
 }
 
 export function DocsPage() {
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="User guide"
-        description="A reference for operating this dashboard, bundled with and version-matched to the running gateway. New here? The get-started walkthrough lives at /welcome."
-      />
-      <Card>
-        <Card.Content className="p-5 sm:p-6">
-          <div className="otari-markdown">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
-            >
-              {guideBody}
-            </ReactMarkdown>
-          </div>
-        </Card.Content>
-      </Card>
+    <div className="flex flex-col">
+      {/* The prose measure, not the app's 620px default: on the one page whose
+          subject is the measure, the widest line should not be the scanning-size
+          paragraph at the top of it. */}
+      <PageIntro title="User guide" descriptionClassName="max-w-[560px]">
+        A reference for operating this dashboard, bundled with and
+        version-matched to the running gateway. New here? The get-started
+        walkthrough lives at /welcome.
+      </PageIntro>
+      {/* The prose pattern: a 560px measure at 16px, bounded above by the
+          section rule and on its right by a rule that runs the height of the
+          page, with the ground beyond it left free. The interim 620px cap this
+          replaces was a number chosen on this page; 560 at 16/26 is the measure
+          the pattern sets, and the type steps *up* from the 14px the rest of
+          the product uses, because this is read rather than scanned. */}
+      <div className="flex flex-1 border-t border-border">
+        <div className="min-w-0 border-r border-border px-4 py-8 md:px-6">
+          <Markdown className="max-w-[560px]" components={markdownComponents}>
+            {guideBody}
+          </Markdown>
+        </div>
+      </div>
     </div>
   )
 }

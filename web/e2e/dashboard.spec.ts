@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
-
+import { API_ROOT } from "@/shared/api/client"
 import {
-  dismissComboBox,
+  dismissComboBoxInDialog,
   login,
   MASTER_KEY,
   nav,
@@ -30,10 +30,13 @@ test.describe("dashboard core flows", () => {
     await expect(page.getByText("Welcome to Otari")).toBeVisible()
 
     await page.getByRole("button", { name: "Add your first provider" }).click()
-    await page.getByRole("button", { name: "Custom endpoint" }).click()
-    await page.getByLabel("Name").fill("e2e-llm")
-    await page.getByLabel("API base").fill("http://e2e-box:8000/v1")
-    await page.getByRole("button", { name: "Add provider" }).click()
+    // Scoped: the heading's trigger and the dialog's submit both say "Add
+    // provider", so an unscoped press is ambiguous.
+    const dialog = page.getByRole("dialog", { name: "New provider" })
+    await dialog.getByRole("button", { name: "Custom endpoint" }).click()
+    await dialog.getByLabel("Name").fill("e2e-llm")
+    await dialog.getByLabel("API base").fill("http://e2e-box:8000/v1")
+    await dialog.getByRole("button", { name: "Add provider" }).click()
 
     await expect(page.getByText("e2e-llm")).toBeVisible()
     // Onboarding clears once a provider exists.
@@ -45,27 +48,51 @@ test.describe("dashboard core flows", () => {
   // per-workspace and permanent, so every project after this one sees the
   // Overview without it (parity.setup.ts asks for the same thing again, rather
   // than depending on this spec having run).
-  test("the setup guide hands out a key, then skips for good", async ({
+  test("the first-run sheet hands out a key, then skips for good", async ({
     page,
   }) => {
     await login(page)
 
-    const guide = page.getByRole("heading", {
-      name: "Send your first request",
-    })
-    await expect(guide).toBeVisible()
+    // A sheet over the Overview, not a panel on it: a workspace with no traffic
+    // has nothing on that page worth reading yet.
+    const sheet = page.getByRole("dialog", { name: "Send your first request" })
+    await expect(sheet).toBeVisible()
 
-    await page.getByRole("button", { name: "Create a setup key" }).click()
-    // Shown once, in a labeled field an operator can select and copy.
-    await expect(page.getByLabel("API key")).toHaveValue(/^gw-/)
+    // The key is minted as the sheet opens; nothing else is asked of the
+    // operator first. Shown once, in a labeled field they can select and copy,
+    // and concealed there until they ask for it (otari-ai#2111).
+    // By role, not by label: `getByLabel` matches a substring, so it also
+    // picks up the field's own "Show API key" toggle.
+    const key = sheet.getByRole("textbox", { name: "Your API key" })
+    await expect(key).toBeVisible()
+    await expect(key).not.toHaveValue(/^gw-/)
 
-    await page.getByRole("button", { name: "Skip this guide" }).click()
-    await expect(guide).toBeHidden()
+    // The examples are tabs, and the agent prompt is the one offered first.
+    await expect(
+      sheet.getByRole("region", { name: "agent code" }),
+    ).toBeVisible()
+    await sheet.getByRole("button", { name: "cURL" }).click()
+    const curl = sheet.getByRole("region", { name: "curl code" })
+    await expect(curl).toBeVisible()
+    // Concealed in the example too, because it is the same secret.
+    await expect(curl).not.toContainText(/gw-/)
+
+    await sheet.getByRole("button", { name: "Show Your API key" }).click()
+    await expect(key).toHaveValue(/^gw-/)
+    await expect(curl).toContainText(/Otari-Key: gw-/)
+
+    // It is watching for the request while all of that is on screen.
+    await expect(
+      sheet.getByText("Listening for your first request"),
+    ).toBeVisible()
+
+    await sheet.getByRole("button", { name: "Skip" }).click()
+    await expect(sheet).toBeHidden()
 
     // Permanent: the offer does not come back on the next page load.
     await page.reload()
     await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible()
-    await expect(guide).toBeHidden()
+    await expect(sheet).toBeHidden()
   })
 
   test("navigate the management pages", async ({ page }) => {
@@ -110,9 +137,12 @@ test.describe("dashboard core flows", () => {
     await openOrganization(page)
     await nav(page).getByRole("link", { name: "Spend & budgets" }).click()
     await page.getByRole("button", { name: "Create your first budget" }).click()
-    await page.getByLabel("Name (optional)").fill("e2e-budget")
-    await page.getByLabel("Spending limit (USD)").fill("100")
-    await page.getByRole("button", { name: "Create budget" }).click()
+    // Scoped: the heading's trigger and the dialog's submit both say "Create
+    // budget", so an unscoped press is ambiguous.
+    const dialog = page.getByRole("dialog")
+    await dialog.getByLabel("Name (optional)").fill("e2e-budget")
+    await dialog.getByLabel("Spending limit (USD)").fill("100")
+    await dialog.getByRole("button", { name: "Create budget" }).click()
 
     // The shared table renders on react-aria, so non-row-header cells are gridcells.
     await expect(page.getByRole("gridcell", { name: "$100.00" })).toBeVisible()
@@ -132,7 +162,7 @@ test.describe("dashboard core flows", () => {
     // fresh through `BudgetsPage` mounting: no refetch, no alice in the combobox,
     // and the option click below waits out the 30s test timeout. Seeding first
     // makes the order deterministic instead of a race with the app's own request.
-    const created = await page.request.post("/v1/users", {
+    const created = await page.request.post(`${API_ROOT}/users`, {
       headers: { "Otari-Key": MASTER_KEY },
       data: { user_id: "alice@example.com" },
     })
@@ -143,15 +173,17 @@ test.describe("dashboard core flows", () => {
     await nav(page).getByRole("link", { name: "Spend & budgets" }).click()
     const budgetRow = page.getByRole("row", { name: /e2e-budget/ })
     await budgetRow.getByRole("button", { name: "Edit" }).click()
-    // "Add a person" is the input's own accessible name; "Assign to people" is
-    // the section heading beside it and labels nothing. Same shape as
-    // `addFilterValue` otherwise: the popover aria-hides the rest of the page, so
-    // it has to be put away before the submit button is reachable.
-    const owners = page.getByRole("combobox", { name: "Add a person" })
+    // The field's visible label is its accessible name now: the picker used to
+    // carry a hidden "Add a person" beside a heading that labeled nothing, so
+    // one control had two names.
+    const editDialog = page.getByRole("dialog")
+    const owners = editDialog.getByRole("combobox", {
+      name: "Assign to people (optional)",
+    })
     await owners.fill("alice@example.com")
     await page.getByRole("option", { name: /alice@example\.com/ }).click()
-    await dismissComboBox(owners)
-    await page.getByRole("button", { name: "Save changes" }).click()
+    await dismissComboBoxInDialog(owners)
+    await editDialog.getByRole("button", { name: "Save" }).click()
 
     // The budget now reports one holder in its People column, which is the
     // assignment landing.
@@ -169,14 +201,17 @@ test.describe("dashboard core flows", () => {
     await nav(page).getByRole("link", { name: "API keys" }).click()
     // A bootstrap key already exists, so use the header action, not onboarding.
     await page.getByRole("button", { name: "Create key" }).click()
-    await page.getByLabel("Name").fill("ci-bot")
+    // Scoped from here on, because "Create key" is now on screen twice: the
+    // heading's trigger stays visible while the dialog is open, and the labels
+    // rule makes the dialog's submit say the same words.
+    const dialog = page.getByRole("dialog")
+    await dialog.getByLabel("Name").fill("ci-bot")
     // Owner is required (user-first). Reuse the user created earlier; type it and
     // close the combobox popover so it does not aria-hide the submit button.
-    await page
-      .getByPlaceholder("Pick a user, or type a new id…")
-      .fill("alice@example.com")
-    await page.keyboard.press("Escape")
-    await page.getByRole("button", { name: "Create key" }).click()
+    const ownerBox = dialog.getByPlaceholder("Pick a user, or type a new id…")
+    await ownerBox.fill("alice@example.com")
+    await dismissComboBoxInDialog(ownerBox)
+    await dialog.getByRole("button", { name: "Create key" }).click()
 
     // The one-time reveal appears; acknowledge it.
     await page.getByRole("button", { name: /saved this key/i }).click()
@@ -190,15 +225,19 @@ test.describe("dashboard core flows", () => {
   test("create a routing policy", async ({ page }) => {
     await login(page)
     await openNested(page, "Routing", "Policies")
-    await page.getByRole("button", { name: "New policy" }).click()
+    // `.first()` is the heading's action. An empty routing list also offers
+    // the same words from its empty state, and a press has to name which.
+    await page.getByRole("button", { name: "Create policy" }).first().click()
+    // Scoped from here: the dialog's submit says "Create policy" too.
+    const dialog = page.getByRole("dialog")
     // Role-scoped for the same reason as the user form: policy rows carry a
     // "Copy policy name" control.
-    await page.getByRole("textbox", { name: /Policy name/ }).fill("fast")
+    await dialog.getByRole("textbox", { name: /Policy name/ }).fill("fast")
     // "Serves" is a model combobox (allows custom values); type the selector, then
     // close the popover so it does not aria-hide the submit button.
-    await page.getByRole("combobox", { name: /Serves/ }).fill("openai:gpt-4o")
+    await dialog.getByRole("combobox", { name: /Serves/ }).fill("openai:gpt-4o")
     await page.keyboard.press("Escape")
-    await page.getByRole("button", { name: "Create policy" }).click()
+    await dialog.getByRole("button", { name: "Create policy" }).click()
 
     // The policy name is the table's row-header cell (react-aria rowheader).
     await expect(page.getByRole("rowheader", { name: "fast" })).toBeVisible()
@@ -207,20 +246,24 @@ test.describe("dashboard core flows", () => {
   test("grows a policy a fallback chain", async ({ page }) => {
     await login(page)
     await openNested(page, "Routing", "Policies")
-    await page.getByRole("button", { name: "New policy" }).click()
-    await page.getByRole("textbox", { name: /Policy name/ }).fill("chained")
-    await page.getByRole("combobox", { name: /Serves/ }).fill("openai:gpt-4o")
+    // `.first()` is the heading's action. An empty routing list also offers
+    // the same words from its empty state, and a press has to name which.
+    await page.getByRole("button", { name: "Create policy" }).first().click()
+    // Scoped from here: the dialog's submit says "Create policy" too.
+    const dialog = page.getByRole("dialog")
+    await dialog.getByRole("textbox", { name: /Policy name/ }).fill("chained")
+    await dialog.getByRole("combobox", { name: /Serves/ }).fill("openai:gpt-4o")
     await page.keyboard.press("Escape")
 
     // The failure chain is summoned, not presented, so naming one model stays a
     // short task.
     await expect(page.getByText("If that fails, try")).toBeHidden()
-    await page.getByRole("button", { name: /Add a fallback chain/ }).click()
+    await dialog.getByRole("button", { name: /Add a fallback chain/ }).click()
     await page
       .getByRole("combobox", { name: /Fallback 1/ })
       .fill("anthropic:claude-3-5-haiku-latest")
     await page.keyboard.press("Escape")
-    await page.getByRole("button", { name: "Create policy" }).click()
+    await dialog.getByRole("button", { name: "Create policy" }).click()
 
     // Scoped to the row this test created: "+1 on failure" anywhere on the page
     // would also be satisfied by another policy's chain, so a `chained` saved
@@ -236,9 +279,12 @@ test.describe("dashboard core flows", () => {
     // The rename target has to be free for the 409 not to fire. serve.sh wipes the
     // database, so it is on a first run; a re-run against a warm one still carries
     // the `renamed` this test left behind, and would fail on its own leftovers.
-    const dropped = await page.request.delete("/v1/routing/policies/renamed", {
-      headers: { Authorization: `Bearer ${MASTER_KEY}` },
-    })
+    const dropped = await page.request.delete(
+      `${API_ROOT}/routing/policies/renamed`,
+      {
+        headers: { Authorization: `Bearer ${MASTER_KEY}` },
+      },
+    )
     expect([204, 404]).toContain(dropped.status())
 
     await login(page)
@@ -248,8 +294,10 @@ test.describe("dashboard core flows", () => {
       .getByRole("row")
       .filter({ has: page.getByRole("rowheader", { name: "chained" }) })
     await chained.getByRole("button", { name: "Edit" }).click()
-    await page.getByRole("textbox", { name: /Policy name/ }).fill("renamed")
-    await page.getByRole("button", { name: "Save" }).click()
+    // The edit opens the same dialog, so its fields are scoped the same way.
+    const dialog = page.getByRole("dialog")
+    await dialog.getByRole("textbox", { name: /Policy name/ }).fill("renamed")
+    await dialog.getByRole("button", { name: "Save" }).click()
 
     // A rename moves the row rather than copying it, so the old name has to be
     // gone: two rows would mean callers could still reach the policy either way.
@@ -280,31 +328,34 @@ test.describe("dashboard core flows", () => {
     // Ingestion rejects usage for a user that does not exist, and this test owns
     // its own rather than depending on an earlier one in the serial order.
     const owner = "share-e2e@example.com"
-    const created = await page.request.post("/v1/users", {
+    const created = await page.request.post(`${API_ROOT}/users`, {
       headers: auth,
       data: { user_id: owner },
     })
     // A re-run against a warm DB is fine; only a genuine failure should fail here.
     expect([200, 201, 400, 409]).toContain(created.status())
 
-    const seeded = await page.request.post("/v1/usage/external-events", {
-      headers: auth,
-      data: {
-        source: "e2e-seed",
-        user_id: owner,
-        events: Array.from({ length: 12 }, (_, i) => ({
-          source_event_id: `share-seed-${i}`,
-          timestamp: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
-          provider: i % 2 === 0 ? "openai" : "groq",
-          // A fully-qualified selector, so the card's name collapsing is exercised
-          // on the shape that motivated it.
-          model: i % 2 === 0 ? "gpt-4o" : "fireworks/accounts/llama-3.3-70b",
-          input_tokens: 1000 + i * 50,
-          output_tokens: 200 + i * 10,
-          duration_ms: 400 + i,
-        })),
+    const seeded = await page.request.post(
+      `${API_ROOT}/usage/external-events`,
+      {
+        headers: auth,
+        data: {
+          source: "e2e-seed",
+          user_id: owner,
+          events: Array.from({ length: 12 }, (_, i) => ({
+            source_event_id: `share-seed-${i}`,
+            timestamp: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
+            provider: i % 2 === 0 ? "openai" : "groq",
+            // A fully-qualified selector, so the card's name collapsing is exercised
+            // on the shape that motivated it.
+            model: i % 2 === 0 ? "gpt-4o" : "fireworks/accounts/llama-3.3-70b",
+            input_tokens: 1000 + i * 50,
+            output_tokens: 200 + i * 10,
+            duration_ms: 400 + i,
+          })),
+        },
       },
-    })
+    )
     expect(seeded.ok(), await seeded.text()).toBe(true)
 
     await login(page)

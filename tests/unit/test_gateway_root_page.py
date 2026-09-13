@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 import gateway.main as gateway_main
 from gateway.api.deps import reset_config
-from gateway.core.config import GatewayConfig
+from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import reset_db
 from gateway.dashboard import get_dashboard_dir
 from gateway.log_config import logger as gateway_logger
@@ -68,7 +68,7 @@ def test_dashboard_is_served_at_root(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert '<div id="root">' in response.text
-    assert "Otari Dashboard" in response.text
+    assert "<title>Otari</title>" in response.text
 
 
 @requires_dashboard_bundle
@@ -105,7 +105,7 @@ def test_pwa_manifest_and_icons_are_served(tmp_path: Path) -> None:
     assert '<link rel="manifest" href="/pwa/manifest.webmanifest" />' in index
     assert '<link rel="apple-touch-icon" href="/pwa/apple-touch-icon.png" />' in index
 
-    assert payload["name"] == "Otari Dashboard"
+    assert payload["name"] == "Otari"
     assert payload["short_name"] == "Otari"
     assert payload["display"] == "standalone"
     # Android offers an install only with both a 192 and a 512 icon; the maskable
@@ -231,7 +231,7 @@ def _fake_bundle(tmp_path: Path) -> Path:
     bundle = tmp_path / "dashboard"
     (bundle / "assets").mkdir(parents=True)
     (bundle / "pwa").mkdir()
-    (bundle / "pwa" / "manifest.webmanifest").write_text('{"name": "Otari Dashboard"}')
+    (bundle / "pwa" / "manifest.webmanifest").write_text('{"name": "Otari"}')
     (bundle / "index.html").write_text('<html><body><div id="root"></div></body></html>')
     return bundle
 
@@ -240,7 +240,7 @@ def test_hybrid_mode_serves_the_dashboard_at_root(tmp_path: Path, monkeypatch: p
     """Hybrid boots to the landing page, which is the same bundle standalone serves.
 
     Which surfaces exist is the browser's question to ask once, of
-    ``/v1/bootstrap``, rather than something this process answers by withholding
+    ``/api/v1/bootstrap``, rather than something this process answers by withholding
     files: the page renders the data-plane landing page from that answer. Serving
     the tutorial here instead would leave a hybrid operator with no status page at
     all.
@@ -251,7 +251,7 @@ def test_hybrid_mode_serves_the_dashboard_at_root(tmp_path: Path, monkeypatch: p
 
     with TestClient(app) as client:
         root = client.get("/")
-        bootstrap = client.get("/v1/bootstrap")
+        bootstrap = client.get(f"{API_ROOT}/bootstrap")
 
     assert root.status_code == 200
     assert '<div id="root">' in root.text
@@ -267,8 +267,8 @@ def test_hybrid_mode_serves_no_install_manifest(tmp_path: Path, monkeypatch: pyt
     """Only the standalone dashboard is an app worth installing.
 
     A hybrid gateway's root is a status page for a control plane that lives
-    elsewhere, so an installed icon named "Otari Dashboard" would promise
-    management this deployment does not have. The index still links the manifest,
+    elsewhere, so an installed icon named "Otari" would promise management this
+    deployment does not have. The index still links the manifest,
     so what stops the install offer is this 404, which must not be cached: /pwa/
     carries a day of caching for the icons it usually serves, and a day-long 404
     would outlive a switch to standalone and keep the prompt away from a
@@ -291,7 +291,7 @@ def test_hybrid_mode_serves_no_install_manifest(tmp_path: Path, monkeypatch: pyt
 def test_hybrid_root_carries_no_platform_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The two things a hybrid gateway hands an unauthenticated browser.
 
-    The landing page reads its deployment from ``/v1/bootstrap`` and its status
+    The landing page reads its deployment from ``/api/v1/bootstrap`` and its status
     from ``/health``, and neither may carry the credential this gateway calls the
     platform with. The page itself is checked alongside them because it is served
     to the same anonymous browser and is now served in this mode at all.
@@ -302,7 +302,7 @@ def test_hybrid_root_carries_no_platform_token(tmp_path: Path, monkeypatch: pyte
     app = create_app(_hybrid_config(tmp_path, "gateway-hybrid-secret-test.db"))
 
     with TestClient(app) as client:
-        served = [client.get("/").text, client.get("/v1/bootstrap").text, client.get("/health").text]
+        served = [client.get("/").text, client.get(f"{API_ROOT}/bootstrap").text, client.get(f"{API_ROOT}/health").text]
 
     for body in served:
         assert token not in body
@@ -323,7 +323,7 @@ def test_create_app_accepts_valid_secret_key(tmp_path: Path, monkeypatch: pytest
     app = create_app(_config(tmp_path, "gateway-good-secret-test.db"))
 
     with TestClient(app) as client:
-        response = client.get("/health")
+        response = client.get(f"{API_ROOT}/health")
 
     assert response.status_code == 200
 

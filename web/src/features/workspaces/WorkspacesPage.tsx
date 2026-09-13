@@ -1,34 +1,39 @@
-import { Button, Card, Chip, Spinner } from "@heroui/react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { Button } from "@heroui/react"
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react"
+import { FiEdit2, FiTrash2 } from "react-icons/fi"
 
 import type { Budget, Workspace, WorkspaceBudgetDefault } from "@/client"
+import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
+import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
+import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
+import { EmptyState } from "@/design-system/feedback/EmptyState"
+import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
+import { errorMessage } from "@/design-system/feedback/errorMessage"
+import { FormDialog } from "@/design-system/feedback/FormDialog"
+import { InfoBanner } from "@/design-system/feedback/InfoBanner"
+import { Field } from "@/design-system/forms/Field"
+import { Select } from "@/design-system/forms/Select"
+import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
+import { PageIntro } from "@/design-system/layout/PageIntro"
+import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
+import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import { canManage, isDeploymentOperator } from "@/features/organization/roles"
+import { WorkspaceProviderKeys } from "@/features/workspaces/WorkspaceProviderKeys"
+import { useBudgets } from "@/shared/api/budgets"
 import { ApiError } from "@/shared/api/client"
+import { useOrganizationContext } from "@/shared/api/organizations"
+import { useProviders } from "@/shared/api/providers"
 import {
   useAllWorkspaceBudgetDefaults,
-  useBudgets,
   useCreateWorkspace,
   useCreateWorkspaceBudgetDefault,
   useDeleteWorkspace,
   useDeleteWorkspaceBudgetDefault,
-  useOrganizationContext,
-  useProviders,
   useUpdateWorkspace,
   useUpdateWorkspaceBudgetDefault,
   useWorkspaceBudgetDefaults,
   useWorkspaces,
-} from "@/shared/api/hooks"
-import { ConfirmDialog } from "@/shared/components/ConfirmDialog"
-import { DataTable, type DataTableColumn } from "@/shared/components/DataTable"
-import { Field } from "@/shared/components/Field"
-import {
-  EmptyState,
-  ErrorBanner,
-  errorMessage,
-  FilterSelect,
-  InfoBanner,
-  PageHeader,
-} from "@/shared/components/ui"
+} from "@/shared/api/workspaces"
 import { formatDate } from "@/shared/helpers/format"
 
 // Workspaces are the unit inside an organization that work is scoped to. This
@@ -77,10 +82,15 @@ function DefaultBudgetPicker({
   onChange: (budgetId: string) => void
 }) {
   return (
-    <FilterSelect
+    <Select
       label="Default member budget"
       value={value}
       onChange={onChange}
+      // No description and nothing that can be invalid, so there is no message
+      // this could ever hold. `FieldMessages` reserves the line by default, and
+      // `FilterSelect` reserved nothing, so the swap to `Select` brought ~23px
+      // of empty back with it.
+      reserveMessage={false}
       options={[
         { value: NO_DEFAULT, label: "No default" },
         ...budgetChoices(budgets),
@@ -115,6 +125,7 @@ function NarrowedDefaults({
   const deleteDefault = useDeleteWorkspaceBudgetDefault()
   const [provider, setProvider] = useState("")
   const [budgetId, setBudgetId] = useState("")
+  const [pendingDelete, setPendingDelete] = useState<WorkspaceBudgetDefault>()
 
   const taken = new Set(narrowed.map((row) => row.provider_key_id))
   const available = providers.filter((instance) => !taken.has(instance))
@@ -126,11 +137,7 @@ function NarrowedDefaults({
   return (
     <div className="flex flex-col gap-2">
       <span className="text-body">Per-provider defaults</span>
-      <ErrorBanner
-        error={
-          createDefault.error ?? updateDefault.error ?? deleteDefault.error
-        }
-      />
+      <ErrorBanner error={createDefault.error ?? updateDefault.error} />
       {narrowed.length === 0 ? (
         <span className="text-caption">
           None. The budget above applies on every provider.
@@ -139,7 +146,9 @@ function NarrowedDefaults({
         <ul className="flex flex-col gap-1.5">
           {narrowed.map((row) => (
             <li key={row.id} className="flex items-center gap-2">
-              <Chip size="sm">{row.provider_key_id}</Chip>
+              <span className="text-mono-caption text-foreground">
+                {row.provider_key_id}
+              </span>
               <FilterSelect
                 ariaLabel={`Budget for ${row.provider_key_id}`}
                 value={row.budget_id}
@@ -155,11 +164,12 @@ function NarrowedDefaults({
               />
               <Button
                 size="sm"
-                variant="danger-soft"
+                variant="ghost"
+                // Named per row, as the picker beside it is: this is a list of
+                // providers, not a table with a row header to lean on.
+                aria-label={`Remove default for ${row.provider_key_id}`}
                 isDisabled={pending}
-                onPress={() =>
-                  deleteDefault.mutate({ workspaceId, defaultId: row.id })
-                }
+                onPress={() => setPendingDelete(row)}
               >
                 Remove
               </Button>
@@ -213,6 +223,33 @@ function NarrowedDefaults({
           </Button>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        isOpen={pendingDelete !== undefined}
+        // Cleared on the way out: a refusal otherwise sits on the mutation and
+        // greets the next row's confirm as if that row had failed.
+        onOpenChange={(open) => {
+          if (open) return
+          setPendingDelete(undefined)
+          deleteDefault.reset()
+        }}
+        heading="Remove per-provider default"
+        body={
+          pendingDelete
+            ? `Requests to ${pendingDelete.provider_key_id} fall back to the workspace default above. Nothing caps them separately on that provider any more.`
+            : null
+        }
+        confirmLabel="Remove default"
+        isPending={deleteDefault.isPending}
+        error={deleteDefault.error}
+        onConfirm={() => {
+          if (!pendingDelete) return
+          deleteDefault.mutate(
+            { workspaceId, defaultId: pendingDelete.id },
+            { onSuccess: () => setPendingDelete(undefined) },
+          )
+        }}
+      />
     </div>
   )
 }
@@ -241,13 +278,23 @@ const defaultHold = () =>
  * design puts "Create workspace" at the foot of that menu), and two forms over
  * one endpoint drift: one of them grows the description field, or the ownership
  * note, and the other does not.
+ *
+ * Fields only: the caller frames it. A band is not portable between the two
+ * callers, because `.otari-bleed` escapes to `100cqw`, which is `<main>`, and
+ * the switcher's modal is portalled out of it: the band came out a viewport
+ * wide there and the dialog clipped it away to an empty modal.
  */
 export function CreateWorkspaceForm({
+  isOpen,
   onClose,
   onCreated,
   hold = defaultHold,
+  returnFocusRef,
 }: {
+  isOpen: boolean
   onClose: () => void
+  /** Where focus goes when the opener has gone; see `FormDialog`. */
+  returnFocusRef?: RefObject<HTMLElement | null>
   /**
    * The acknowledged-press beat, as a gate rather than a duration. Defaults to
    * `ENTER_HOLD_MS` of wall clock; a test supplies one it opens itself, so the
@@ -300,6 +347,12 @@ export function CreateWorkspaceForm({
     }
   }, [])
   const trimmed = name.trim()
+  // One snapshot of everything the form owns, seeded on mount: dirty means
+  // "differs from what was seeded", and a field added to the form is added here
+  // or the guard cannot see it. A predicate of empties had already forgotten
+  // `budgetId`, so picking a default member budget and pressing Escape
+  // discarded it with no guard.
+  const { isDirty } = useDirtySnapshot({ name, description, budgetId })
   // The submit promises the navigation only where it performs one, so the label
   // and the hold below are read off the same prop that does it. A form whose
   // button said "and open" while nothing opened would be the worse bug of the
@@ -320,147 +373,124 @@ export function CreateWorkspaceForm({
   // a create that failed for another reason, and the default-budget call, which
   // fails after the workspace already exists.
   const bannerError = createDefault.error ?? (nameRefusal ? null : create.error)
-  return (
-    <Card>
-      <Card.Content className="flex flex-col gap-4 p-5">
-        <h2 className="text-title">Create workspace</h2>
-        {/* A refusal about the name is carried by the name, not by a block above
-            the form that resizes whatever frames it. What is left here is what
-            no field state can honestly say: a failure the operator cannot
-            retype their way out of, and the default-budget call, which is a
-            separate call about a different control and fails after the
-            workspace already exists. */}
-        <ErrorBanner error={bannerError} />
-        <Field
-          label="Name"
-          value={name}
-          onChange={(next) => {
-            setName(next)
-            // The refusal was about the name that produced it, so editing the
-            // name retires it. Without this the field stays red while the
-            // operator types the correction, and the button they press next
-            // looks like it is retrying a rejected name. Reset on any create
-            // error, not just a name one: the banner's copy is about the
-            // attempt, and the attempt is what editing the name replaces.
-            if (create.error) create.reset()
-          }}
-          placeholder="Production"
-          isRequired
-          autoFocus
-          isInvalid={nameRefusal !== null}
-          errorMessage={nameRefusal ? errorMessage(nameRefusal) : undefined}
-          // Dropped while the refusal is up, rather than shown above it: `Field`
-          // renders the two as separate rows, and a modal that grows a line when
-          // it reports a problem moves the fields under the pointer that caused
-          // it. The refusal is the more useful of the two at that moment.
-          description={
-            nameRefusal
-              ? undefined
-              : "Unique within this organization. You become its owner."
+  const submit = () => {
+    // Started before the request, not after it answers, so the two run
+    // together: the operator waits a beat, not a beat plus a round
+    // trip. A create slower than the hold keeps the spinner until it
+    // answers, which is the honest reading of the same indicator.
+    const held = entersWorkspace ? hold() : Promise.resolve()
+    setHolding(entersWorkspace)
+    create.mutate(
+      { name: trimmed, description: description.trim() || null },
+      {
+        // The default is a second call: the workspace has to exist
+        // before anything can be defaulted onto its members. A failure
+        // here leaves the workspace created and undefaulted, which the
+        // banner reports and the edit form can finish.
+        onSuccess: (workspace) => {
+          const finish = async () => {
+            await held
+            // Dismissed while it was held: the workspace exists, and
+            // the list and the switcher will both show it, but the
+            // operator said not to go there.
+            if (!active.current) return
+            // No setHolding here: nothing unmounts this form, so what
+            // releases the button is the remount on the next open, which both
+            // callers get by keying it on an open counter. The failure paths
+            // below release it in place.
+            onClose()
+            onCreated?.(workspace)
           }
-        />
-        <Field
-          label="Description (optional)"
-          value={description}
-          onChange={setDescription}
-        />
-        {operates ? (
-          <DefaultBudgetPicker
-            budgets={budgets.data ?? []}
-            value={budgetId}
-            onChange={setBudgetId}
-          />
-        ) : null}
-        <div className="flex gap-2">
-          <Button
-            variant="primary"
-            isDisabled={trimmed === ""}
-            isPending={pending}
-            onPress={() => {
-              // Started before the request, not after it answers, so the two run
-              // together: the operator waits a beat, not a beat plus a round
-              // trip. A create slower than the hold keeps the spinner until it
-              // answers, which is the honest reading of the same indicator.
-              const held = entersWorkspace ? hold() : Promise.resolve()
-              setHolding(entersWorkspace)
-              create.mutate(
-                { name: trimmed, description: description.trim() || null },
-                {
-                  // The default is a second call: the workspace has to exist
-                  // before anything can be defaulted onto its members. A failure
-                  // here leaves the workspace created and undefaulted, which the
-                  // banner reports and the edit form can finish.
-                  onSuccess: (workspace) => {
-                    const finish = async () => {
-                      await held
-                      // Dismissed while it was held: the workspace exists, and
-                      // the list and the switcher will both show it, but the
-                      // operator said not to go there.
-                      if (!active.current) return
-                      // No setHolding here: the form unmounts on close, and the
-                      // failure paths below are what release the button.
-                      onClose()
-                      onCreated?.(workspace)
-                    }
-                    if (budgetId === NO_DEFAULT) {
-                      void finish()
-                      return
-                    }
-                    createDefault.mutate(
-                      {
-                        workspaceId: workspace.id,
-                        body: { budget_id: budgetId },
-                      },
-                      {
-                        onSuccess: () => {
-                          void finish()
-                        },
-                        onError: () => setHolding(false),
-                      },
-                    )
-                  },
-                  onError: () => setHolding(false),
-                },
-              )
-            }}
-          >
-            {/* The spinner takes the label's place rather than sitting beside
-                it, so pressing moves nothing: the label holds the button's width
-                while faded, and the spinner is centered over it by the `relative`
-                that `.button` already sets.
+          if (budgetId === NO_DEFAULT) {
+            void finish()
+            return
+          }
+          createDefault.mutate(
+            {
+              workspaceId: workspace.id,
+              body: { budget_id: budgetId },
+            },
+            {
+              onSuccess: () => {
+                void finish()
+              },
+              onError: () => setHolding(false),
+            },
+          )
+        },
+        onError: () => setHolding(false),
+      },
+    )
+  }
 
-                `opacity-0`, not `invisible`: visibility removes the label from
-                the accessibility tree, which would leave the button unnamed for
-                the whole wait. Faded, it still names the control while the
-                spinner reports the state. That is also why the spinner is
-                `aria-hidden` (and it is its own live region as of HeroUI 3.2.4,
-                which would announce a bare "Loading" over the name).
-
-                `color="current"` because the default is `accent`, which on this
-                accent-filled variant paints the spinner in the fill's own
-                color; `current` inherits the label's. */}
-            <span className={pending ? "opacity-0" : undefined}>
-              {entersWorkspace ? "Create and open" : "Create workspace"}
-            </span>
-            {pending ? (
-              <Spinner
-                size="sm"
-                color="current"
-                aria-hidden="true"
-                className="absolute inset-0 m-auto"
-              />
-            ) : null}
-          </Button>
-          {/* Disabled while the create is in flight, as `ConfirmDialog` does
-              with its own: the workspace is already being made, so offering to
-              abandon it mid-flight only invites the operator to expect that it
-              was not. */}
-          <Button variant="ghost" onPress={onClose} isDisabled={pending}>
-            Cancel
-          </Button>
-        </div>
-      </Card.Content>
-    </Card>
+  return (
+    <FormDialog
+      isOpen={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      title="New workspace"
+      submitLabel={entersWorkspace ? "Create and open" : "Create workspace"}
+      onSubmit={submit}
+      isPending={pending}
+      isSubmitDisabled={trimmed === ""}
+      isDirty={isDirty}
+      returnFocusRef={returnFocusRef}
+      // A refusal about the name is carried by the name, not by a block above
+      // the form. What reaches the banner is what no field state can honestly
+      // say: a failure the operator cannot retype their way out of, and the
+      // default-budget call, which is a separate call about a different control
+      // and fails after the workspace already exists.
+      error={bannerError}
+    >
+      <Field
+        label="Name"
+        value={name}
+        onChange={(next) => {
+          setName(next)
+          // The refusal was about the name that produced it, so editing the
+          // name retires it. Without this the field stays red while the
+          // operator types the correction, and the button they press next
+          // looks like it is retrying a rejected name. Reset on any create
+          // error, not just a name one: the banner's copy is about the
+          // attempt, and the attempt is what editing the name replaces.
+          if (create.error) create.reset()
+        }}
+        placeholder="Production"
+        isRequired
+        autoFocus
+        isInvalid={nameRefusal !== null}
+        errorMessage={nameRefusal ? errorMessage(nameRefusal) : undefined}
+        // Dropped while the refusal is up, rather than shown above it: `Field`
+        // renders the two as separate rows, and a modal that grows a line when
+        // it reports a problem moves the fields under the pointer that caused
+        // it. The refusal is the more useful of the two at that moment.
+        description={
+          nameRefusal
+            ? undefined
+            : "Unique within this organization. You become its owner."
+        }
+      />
+      <Field
+        label="Description (optional)"
+        value={description}
+        onChange={setDescription}
+        // No description under it, so no line held open for one. See forms.md:
+        // the reserve exists for an error to replace a description in.
+        reserveMessage={false}
+      />
+      {/* Withheld from a caller who does not operate the deployment: the
+          picker's options come from the operator-gated `/budgets` read, so
+          offering it would be offering a control whose list is empty and whose
+          save cannot succeed. */}
+      {operates ? (
+        <DefaultBudgetPicker
+          budgets={budgets.data ?? []}
+          value={budgetId}
+          onChange={setBudgetId}
+        />
+      ) : null}
+    </FormDialog>
   )
 }
 
@@ -506,6 +536,12 @@ function EditWorkspaceForm({
     createDefault.isPending ||
     updateDefault.isPending ||
     deleteDefault.isPending
+  // `budgetId` rather than `selectedBudget`: null is "the picker was never
+  // touched", so a default that resolves after mount is part of the seed rather
+  // than a change the guard should arm on. The per-provider defaults and the
+  // provider keys below write as they are changed rather than on save, so
+  // nothing they hold is unsaved work.
+  const { isDirty } = useDirtySnapshot({ name, description, budgetId })
 
   // Three outcomes rather than one call: the default is its own row, so moving
   // between "none" and a budget is a create or a delete, not a field write.
@@ -540,80 +576,96 @@ function EditWorkspaceForm({
   }
 
   const trimmed = name.trim()
+  const save = () => {
+    if (update.isPending || savingDefault || trimmed === "") return
+    update.mutate(
+      {
+        id: workspace.id,
+        body: { name: trimmed, description: description.trim() || null },
+      },
+      {
+        onSuccess: async () => {
+          await saveDefault()
+          onClose()
+        },
+      },
+    )
+  }
+
   return (
-    <Card>
-      <Card.Content className="flex flex-col gap-4 p-5">
-        <h2 className="text-title">
-          Edit <code>{workspace.name}</code>
-        </h2>
-        <ErrorBanner
-          error={
-            update.error ??
-            createDefault.error ??
-            updateDefault.error ??
-            deleteDefault.error
-          }
-        />
-        <Field label="Name" value={name} onChange={setName} isRequired />
-        <Field
-          label="Description"
-          value={description}
-          onChange={setDescription}
-        />
-        {operates ? (
-          <>
-            <DefaultBudgetPicker
-              budgets={budgets.data ?? []}
-              value={selectedBudget}
-              onChange={setBudgetId}
-            />
-            <span className="max-w-md text-caption">
-              Every member of this workspace is held to this budget, each with
-              their own allowance. Changing it applies to members who join
-              afterwards; members already here keep the budget they were given,
-              though editing that budget still moves them.
-            </span>
-            <NarrowedDefaults
-              workspaceId={workspace.id}
-              budgets={budgets.data ?? []}
-              narrowed={narrowed}
-              providers={(providers.data?.providers ?? []).map(
-                (provider) => provider.instance,
-              )}
-            />
-          </>
-        ) : null}
-        <div className="flex gap-2">
-          <Button
-            variant="primary"
-            isDisabled={trimmed === ""}
-            isPending={update.isPending || savingDefault}
-            onPress={() =>
-              update.mutate(
-                {
-                  id: workspace.id,
-                  body: {
-                    name: trimmed,
-                    description: description.trim() || null,
-                  },
-                },
-                {
-                  onSuccess: async () => {
-                    await saveDefault()
-                    onClose()
-                  },
-                },
-              )
-            }
-          >
-            Save changes
-          </Button>
-          <Button variant="ghost" onPress={onClose}>
-            Cancel
-          </Button>
-        </div>
-      </Card.Content>
-    </Card>
+    <FormDialog
+      isOpen
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      // `lg`: the two fields are joined by the default-budget controls and the
+      // workspace's provider keys, which is well past what `md` holds.
+      size="lg"
+      title="Edit workspace"
+      description={<code>{workspace.name}</code>}
+      submitLabel="Save"
+      onSubmit={save}
+      isPending={update.isPending || savingDefault}
+      isSubmitDisabled={trimmed === ""}
+      isDirty={isDirty}
+      error={
+        update.error ??
+        createDefault.error ??
+        updateDefault.error ??
+        deleteDefault.error
+      }
+    >
+      <Field
+        label="Name"
+        value={name}
+        onChange={setName}
+        isRequired
+        autoFocus
+        reserveMessage={false}
+      />
+      <Field
+        label="Description"
+        value={description}
+        onChange={setDescription}
+        reserveMessage={false}
+      />
+      {/* Withheld from a caller who does not operate the deployment: the
+          picker's options come from the operator-gated `/budgets` read, so
+          offering it would be offering a control whose list is empty and whose
+          save cannot succeed. */}
+      {operates ? (
+        <>
+          <DefaultBudgetPicker
+            budgets={budgets.data ?? []}
+            value={selectedBudget}
+            onChange={setBudgetId}
+          />
+          <span className="max-w-md text-xs text-muted">
+            Every member of this workspace is held to this budget, each with
+            their own allowance. Changing it applies to members who join
+            afterwards; members already here keep the budget they were given,
+            though editing that budget still moves them.
+          </span>
+          <NarrowedDefaults
+            workspaceId={workspace.id}
+            budgets={budgets.data ?? []}
+            narrowed={narrowed}
+            providers={(providers.data?.providers ?? []).map(
+              (provider) => provider.instance,
+            )}
+          />
+        </>
+      ) : null}
+      {/* Not withheld from a non-operator, unlike everything above it: these are
+          the tenant's own credentials rather than the deployment's, and the two
+          reads behind them (the organization's keys, and this workspace's
+          departures from them) answer an organization owner or admin. The page
+          already only opens this form to one, which is the same rule the gateway
+          applies to the writes (`require_workspace_management_access`), narrowed
+          to its organization arm because the key names come from the
+          organization-gated list. */}
+      <WorkspaceProviderKeys workspaceId={workspace.id} />
+    </FormDialog>
   )
 }
 
@@ -630,6 +682,19 @@ export function WorkspacesPage() {
   const remove = useDeleteWorkspace()
 
   const [creating, setCreating] = useState(false)
+  // Bumped on each open, and the create form is keyed on it, so the draft is
+  // fresh every time and untouched through the exit: the dialog keeps its
+  // content while it animates out, so clearing on the way out would blank the
+  // body in front of the operator. See feedback.md, "A draft is fresh on every
+  // open and untouched through the exit".
+  const [creatingCount, setCreatingCount] = useState(0)
+  // Where focus lands when the empty state's CTA has gone, which is what the
+  // first workspace created does to it.
+  const createButtonRef = useRef<HTMLButtonElement>(null)
+  const openCreate = () => {
+    setCreatingCount((n) => n + 1)
+    setCreating(true)
+  }
   const [editing, setEditing] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<Workspace | null>(null)
 
@@ -668,7 +733,10 @@ export function WorkspacesPage() {
   const isOnlyWorkspace = workspaces.isSuccess && rows.length === 1
   const manages = canManage(context.data)
   const editingWorkspace = rows.find((row) => row.id === editing) ?? null
-  const showOnboarding = !workspaces.isLoading && rows.length === 0 && !creating
+  // Not gated on `creating`: unmounting the empty state when the dialog opens
+  // takes away the node react-aria restores focus to, so closing drops focus to
+  // `<body>`. `PageIntro`'s action is ungated for the same reason.
+  const showOnboarding = !workspaces.isLoading && rows.length === 0
 
   // The default-budget column is dropped, not emptied, for a caller who cannot
   // read the budget names it shows; see the note on `operates` above.
@@ -681,8 +749,18 @@ export function WorkspacesPage() {
         cell: (workspace) => (
           <div className="flex flex-col gap-0.5">
             <span className="text-body">{workspace.name}</span>
+            {/* One line, truncated. Capping this lane so the columns after it
+                stay adjacent is what made the description wrap and took two
+                rows off the 58px pitch, which is the same trade the members
+                table already resolved this way: the row keeps its rhythm and
+                the full text stays in the title. */}
             {workspace.description ? (
-              <span className="text-caption">{workspace.description}</span>
+              <span
+                className="truncate text-xs text-muted"
+                title={workspace.description}
+              >
+                {workspace.description}
+              </span>
             ) : null}
           </div>
         ),
@@ -699,10 +777,13 @@ export function WorkspacesPage() {
         header: "Default member budget",
         cell: (workspace) => {
           const name = defaultBudgetName.get(workspace.id)
+          // A name, not a chip. It is the budget's own name and nothing
+          // else in the row is boxed, so the box was the only thing making it
+          // look like a different kind of value from its neighbors.
           return name ? (
-            <Chip size="sm">{name}</Chip>
+            <span className="text-sm text-foreground">{name}</span>
           ) : (
-            <span className="text-caption">None</span>
+            <span className="text-xs text-subtle">None</span>
           )
         },
       },
@@ -711,41 +792,35 @@ export function WorkspacesPage() {
         header: "Actions",
         align: "end",
         cell: (workspace) => (
-          <div className="flex items-center justify-end gap-1.5">
-            <Button
-              size="sm"
-              variant="ghost"
+          <RowActionRow>
+            <RowAction
+              icon={FiEdit2}
+              label="Edit"
               isDisabled={!manages}
               onPress={() => {
                 setCreating(false)
                 setEditing(workspace.id)
               }}
-            >
-              Edit
-            </Button>
+            />
             {/* The server keeps every organization on at least one workspace
                 (`LastWorkspaceError`), and first boot is the one-workspace
                 state, so the ordinary case would be a button that always
                 refuses. Say why instead of offering the refusal. The reason
                 goes in the name, following the membership controls: a disabled
-                control takes no focus, so a tooltip would reach a pointer and
-                nothing else. */}
-            <span title={isOnlyWorkspace ? LAST_WORKSPACE_REASON : undefined}>
-              <Button
-                size="sm"
-                variant="danger-soft"
-                aria-label={
-                  isOnlyWorkspace
-                    ? `Delete ${workspace.name} (${LAST_WORKSPACE_REASON})`
-                    : undefined
-                }
-                isDisabled={!manages || isOnlyWorkspace}
-                onPress={() => setDeleting(workspace)}
-              >
-                Delete
-              </Button>
-            </span>
-          </div>
+                control takes no focus, so the name is what reaches assistive
+                tech, and `RowAction` repeats it on a `title` for the pointer. */}
+            <RowAction
+              icon={FiTrash2}
+              label="Delete"
+              ariaLabel={
+                isOnlyWorkspace
+                  ? `Delete ${workspace.name} (${LAST_WORKSPACE_REASON})`
+                  : undefined
+              }
+              isDisabled={!manages || isOnlyWorkspace}
+              onPress={() => setDeleting(workspace)}
+            />
+          </RowActionRow>
         ),
       },
     ]
@@ -753,24 +828,27 @@ export function WorkspacesPage() {
   }, [manages, isOnlyWorkspace, defaultBudgetName, operates])
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
+    <div className="flex flex-col">
+      <PageIntro
         title="Workspaces"
-        description="The scopes inside this organization that work is grouped into. Each one carries its own members and roles."
         action={
-          creating || !manages ? null : (
+          !manages ? null : (
             <Button
+              ref={createButtonRef}
               variant="primary"
               onPress={() => {
                 setEditing(null)
-                setCreating(true)
+                openCreate()
               }}
             >
               Create workspace
             </Button>
           )
         }
-      />
+      >
+        The scopes inside this organization that work is grouped into. Each one
+        carries its own members and roles.
+      </PageIntro>
 
       {/* `remove.error` is deliberately absent: the confirm dialog renders that
           mutation's error itself, and listing it here too paints the same
@@ -786,12 +864,15 @@ export function WorkspacesPage() {
         </InfoBanner>
       )}
 
-      {creating ? (
-        <CreateWorkspaceForm onClose={() => setCreating(false)} />
-      ) : null}
+      <CreateWorkspaceForm
+        key={creatingCount}
+        isOpen={creating}
+        onClose={() => setCreating(false)}
+        returnFocusRef={createButtonRef}
+      />
 
-      {/* Keyed on the workspace so switching which one is edited remounts the
-          form: its fields seed from `workspace` on mount only. */}
+      {/* Keyed on the workspace: its fields seed from `workspace` on mount
+          only, so the next Edit has to arrive at a fresh form. */}
       {editingWorkspace ? (
         <EditWorkspaceForm
           key={editingWorkspace.id}
@@ -805,17 +886,19 @@ export function WorkspacesPage() {
           title="No workspaces yet"
           description="A workspace groups the work inside this organization and carries its own members and roles. Every organization is created with one, so an empty list usually means the default was deleted."
           actionLabel={manages ? "Create a workspace" : undefined}
-          onAction={manages ? () => setCreating(true) : undefined}
+          onAction={manages ? openCreate : undefined}
         />
       ) : (
-        <DataTable
-          ariaLabel="Workspaces"
-          columns={columns}
-          rows={rows}
-          getRowKey={getWorkspaceRowKey}
-          isLoading={workspaces.isLoading}
-          emptyContent="No workspaces yet."
-        />
+        <TableScrollFrame className="otari-workspaces-table">
+          <DataTable
+            ariaLabel="Workspaces"
+            columns={columns}
+            rows={rows}
+            getRowKey={getWorkspaceRowKey}
+            isLoading={workspaces.isLoading}
+            emptyContent="No workspaces yet."
+          />
+        </TableScrollFrame>
       )}
 
       <ConfirmDialog

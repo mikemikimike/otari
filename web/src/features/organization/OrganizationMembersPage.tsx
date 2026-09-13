@@ -1,5 +1,12 @@
-import { Button, Card, Chip } from "@heroui/react"
+import { Button } from "@heroui/react"
 import { useMemo, useState } from "react"
+import {
+  FiCheckCircle,
+  FiEdit2,
+  FiSlash,
+  FiUserMinus,
+  FiXCircle,
+} from "react-icons/fi"
 
 import type {
   User as ApiUser,
@@ -16,44 +23,50 @@ import type {
   WorkspaceBudgetDefault,
   WorkspaceMemberRole,
 } from "@/client"
+import { CopyableValue } from "@/design-system/actions/CopyField"
+import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
+import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
+import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
+import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
+import { FormDialog } from "@/design-system/feedback/FormDialog"
+import { InfoBanner } from "@/design-system/feedback/InfoBanner"
+import { Checkbox } from "@/design-system/forms/Checkbox"
+import { Field } from "@/design-system/forms/Field"
+import { Select } from "@/design-system/forms/Select"
+import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
+import { Dot } from "@/design-system/indicators/Dot"
+import { PageIntro } from "@/design-system/layout/PageIntro"
+import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
+import { FilterSelect } from "@/design-system/navigation/FilterSelect"
 import {
   accessLabel,
   ModelScopeControl,
 } from "@/features/models/ModelScopeControl"
-import { MembershipStatusChip } from "@/features/organization/MembershipStatusChip"
 import {
-  useAddOrganizationMember,
-  useAddWorkspaceMember,
-  useAllWorkspaceBudgetDefaults,
-  useAllWorkspaceMembers,
   useBudgets,
   useCreateScopedBudget,
   useDeleteScopedBudget,
+  useScopedBudgets,
+  useUpdateScopedBudget,
+} from "@/shared/api/budgets"
+import {
+  useAddOrganizationMember,
   useInviteOrganizationMember,
   useOrganizationContext,
   useOrganizationMembers,
   useRemoveOrganizationMember,
-  useRemoveWorkspaceMember,
   useRevokeOrganizationMemberInvitation,
-  useScopedBudgets,
   useUpdateOrganizationMember,
-  useUpdateScopedBudget,
-  useUpdateUser,
-  useUpdateWorkspaceMemberRole,
-  useUsers,
-  useWorkspaces,
-} from "@/shared/api/hooks"
-import { ConfirmDialog } from "@/shared/components/ConfirmDialog"
-import { DataTable, type DataTableColumn } from "@/shared/components/DataTable"
-import { Field } from "@/shared/components/Field"
+} from "@/shared/api/organizations"
+import { useUpdateUser, useUsers } from "@/shared/api/users"
 import {
-  Checkbox,
-  CopyableValue,
-  ErrorBanner,
-  FilterSelect,
-  InfoBanner,
-  PageHeader,
-} from "@/shared/components/ui"
+  useAddWorkspaceMember,
+  useAllWorkspaceBudgetDefaults,
+  useAllWorkspaceMembers,
+  useRemoveWorkspaceMember,
+  useUpdateWorkspaceMemberRole,
+  useWorkspaces,
+} from "@/shared/api/workspaces"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useDeployment } from "@/shared/hooks/useDeployment"
 
@@ -73,12 +86,12 @@ import {
 // member, viewer) and the server enforces the same two rules this page disables
 // controls for, so a refusal is explained here rather than only reported.
 //
-// What the picker below does *not* do is the thing it used to look like it did
-// (otari#838). An organization role is authority over this tenant; operating the
-// deployment is a separate authority nothing on this page grants, held by a
-// superuser or the bootstrap identity and set from Platform Admin. The two were
-// indistinguishable from here, because promoting somebody to admin changed
-// nothing they could see, so the page now says which one it is setting.
+// What the picker below does *not* do is grant deployment authority (otari#838).
+// An organization role is authority over this tenant; operating the deployment
+// is a separate authority nothing on this page grants, held by a superuser or
+// the bootstrap identity and set from Platform Admin. The two are
+// indistinguishable from here unless the page says which one it is setting,
+// because promoting somebody to admin changes nothing they can see.
 
 // What a member spends and what their keys may call live on the gateway's own
 // `users` row, not on the membership: `organization_member` has no such columns.
@@ -109,6 +122,10 @@ interface WorkspacePlacement {
 // The columns that read the gateway identity behind a membership rather than the
 // membership itself, and so are the deployment operator's. Filtered out for
 // everyone else; see where `operates` is resolved.
+// Withheld from a caller who does not operate the deployment. "access" is no
+// longer a column of its own (it reads under the member's name now) and is
+// gated at that cell instead; the entry stays so the two places that withhold
+// the same fact are findable from one another.
 const DEPLOYMENT_WIDE_COLUMNS = new Set(["access", "spend"])
 
 const ROLE_OPTIONS = MEMBERSHIP_ROLES.map((role) => ({
@@ -116,11 +133,53 @@ const ROLE_OPTIONS = MEMBERSHIP_ROLES.map((role) => ({
   label: membershipLabel(role),
 }))
 
+/**
+ * The frozen dot-and-word: a square mark, an uppercase word in mono, and ink
+ * that says how much to care. No chip, because a chip is a box and this page
+ * has none left.
+ *
+ * The severity rule the rest of the surface follows: a danger dot with muted
+ * words means "worth noticing", a danger dot with danger words means "this is
+ * refusing requests right now". Suspended is the first, blocked is the second.
+ */
+function StatusMark({ status }: { status: string }) {
+  // Not a membership status: it is the gateway refusing this person's keys, and
+  // it is shown here because the membership is active while every request fails.
+  const { dot, ink, word } =
+    status === "blocked"
+      ? { dot: "bg-danger", ink: "text-danger", word: "Blocked" }
+      : status === "active"
+        ? { dot: "bg-success", ink: "text-muted", word: "Active" }
+        : status === "suspended"
+          ? {
+              dot: "bg-danger",
+              ink: "text-muted",
+              word: membershipLabel(status),
+            }
+          : {
+              dot: "bg-text-subtle",
+              ink: "text-subtle",
+              word: membershipLabel(status),
+            }
+  return (
+    <span className={`flex items-center gap-2 text-mono-caption ${ink}`}>
+      <Dot className={dot} />
+      {word.toUpperCase()}
+    </span>
+  )
+}
+
 // Adding someone is an address plus a role, and optionally the workspaces to
 // drop them into in the same request. A local identity is created for an address
 // nothing else knows yet, which is the handle a future sign-in flow claims it
 // by; until then the row is a place to hang a role, which is the point.
-function AddMemberForm({ onClose }: { onClose: () => void }) {
+function AddMemberForm({
+  isOpen,
+  onClose,
+}: {
+  isOpen: boolean
+  onClose: () => void
+}) {
   const add = useAddOrganizationMember()
   const workspaces = useWorkspaces()
   const { selected } = useSelectedWorkspace()
@@ -136,6 +195,14 @@ function AddMemberForm({ onClose }: { onClose: () => void }) {
   // and behaves like one with nothing in it.
   const rows = workspaces.data
   const [seeded, setSeeded] = useState(false)
+  // Everything the operator can change, against what the form was seeded with.
+  // A list of fields drifts: this one read the address alone, so a role or a
+  // workspace change with no address typed closed unguarded.
+  const { isDirty, reset: reseed } = useDirtySnapshot({
+    email,
+    role,
+    workspaceIds,
+  })
   if (!seeded && rows && rows.length > 0) {
     setSeeded(true)
     // The workspace the shell is on, when it is one of this organization's.
@@ -144,7 +211,17 @@ function AddMemberForm({ onClose }: { onClose: () => void }) {
     const preferred = rows.find(
       (workspace) => workspace.id === selected?.workspace_id,
     )
-    setWorkspaceIds([(preferred ?? rows[0]).id])
+    const defaults = [(preferred ?? rows[0]).id]
+    setWorkspaceIds(defaults)
+    // Part of the seed, not a change: this lands after mount, so a snapshot
+    // taken at first render would report the form dirty the moment the roster
+    // answers, and Escape would ask before closing an untouched form.
+    //
+    // The mount values, not `email` and `role` as they stand: the roster pages
+    // through `fetchAllPaged`, so on a cold cache this can fire after the
+    // operator has typed an address, and seeding what they typed would make the
+    // guard forget it.
+    reseed({ email: "", role: "member", workspaceIds: defaults })
   }
 
   const toggleWorkspace = (id: string, checked: boolean) =>
@@ -174,69 +251,65 @@ function AddMemberForm({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Card>
-      <Card.Content className="flex flex-col gap-4 p-5">
-        <h2 className="text-title">Add member</h2>
-        <ErrorBanner error={add.error} />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Email address"
-            value={email}
-            onChange={setEmail}
-            placeholder="alice@example.com"
-            isRequired
-            autoFocus
-            description="The handle this identity is claimed by. Nothing is emailed here; the membership is active straight away. Use Invite member instead to email an accept link."
-          />
-          <FilterSelect
-            label="Role"
-            value={role}
-            onChange={(value) => setRole(asMembershipRole(value) ?? "member")}
-            options={ROLE_OPTIONS}
-          />
-        </div>
-        {workspaces.data && workspaces.data.length > 0 ? (
-          <fieldset className="flex flex-col gap-2">
-            <legend className="text-body">Workspaces (optional)</legend>
-            <span className="text-caption">
-              Joined as a member of each, in the same request, so someone never
-              exists without the access they were added for. Workspace roles are
-              changed afterwards on the Workspaces page.
+    <FormDialog
+      isOpen={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      title="New member"
+      submitLabel="Add member"
+      onSubmit={submit}
+      isPending={add.isPending}
+      isSubmitDisabled={trimmed === ""}
+      isDirty={isDirty}
+      error={add.error}
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label="Email address"
+          value={email}
+          onChange={setEmail}
+          placeholder="alice@example.com"
+          isRequired
+          autoFocus
+          description="The handle this identity is claimed by. Nothing is emailed here; the membership is active straight away. Use Invite member instead to email an accept link."
+        />
+        <Select
+          label="Role"
+          value={role}
+          onChange={(value) => setRole(asMembershipRole(value) ?? "member")}
+          options={ROLE_OPTIONS}
+          reserveMessage={false}
+        />
+      </div>
+      {workspaces.data && workspaces.data.length > 0 ? (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="text-body">Workspaces (optional)</legend>
+          <span className="text-xs text-muted">
+            Joined as a member of each, in the same request, so someone never
+            exists without the access they were added for. Workspace roles are
+            changed afterwards on the Workspaces page.
+          </span>
+          {workspaceIds.length === 0 ? (
+            <span className="text-caption text-warning">
+              With none selected they join the organization but no workspace,
+              and will see nothing until someone assigns them one.
             </span>
-            {workspaceIds.length === 0 ? (
-              <span className="text-xs text-warning">
-                With none selected they join the organization but no workspace,
-                and will see nothing until someone assigns them one.
-              </span>
-            ) : null}
-            {workspaces.data.map((workspace) => (
-              <Checkbox
-                key={workspace.id}
-                isSelected={workspaceIds.includes(workspace.id)}
-                onChange={(isSelected) =>
-                  toggleWorkspace(workspace.id, isSelected)
-                }
-              >
-                {workspace.name}
-              </Checkbox>
-            ))}
-          </fieldset>
-        ) : null}
-        <div className="flex gap-2">
-          <Button
-            variant="primary"
-            isDisabled={trimmed === ""}
-            isPending={add.isPending}
-            onPress={submit}
-          >
-            Add member
-          </Button>
-          <Button variant="ghost" onPress={onClose}>
-            Cancel
-          </Button>
-        </div>
-      </Card.Content>
-    </Card>
+          ) : null}
+          {workspaces.data.map((workspace) => (
+            <Checkbox
+              key={workspace.id}
+              isSelected={workspaceIds.includes(workspace.id)}
+              onChange={(isSelected) =>
+                toggleWorkspace(workspace.id, isSelected)
+              }
+            >
+              {workspace.name}
+            </Checkbox>
+          ))}
+        </fieldset>
+      ) : null}
+    </FormDialog>
   )
 }
 
@@ -245,7 +318,13 @@ function AddMemberForm({ onClose }: { onClose: () => void }) {
 // from AddMemberForm rather than a toggle on it: the two produce different
 // results (`mail_sent`, `accept_link`) and this one has something to show
 // after it succeeds, which AddMemberForm's immediate close does not.
-function InviteMemberForm({ onClose }: { onClose: () => void }) {
+function InviteMemberForm({
+  isOpen,
+  onClose,
+}: {
+  isOpen: boolean
+  onClose: () => void
+}) {
   const invite = useInviteOrganizationMember()
   const workspaces = useWorkspaces()
   const { mail_ready } = useDeployment()
@@ -260,12 +339,28 @@ function InviteMemberForm({ onClose }: { onClose: () => void }) {
 
   const rows = workspaces.data
   const [seeded, setSeeded] = useState(false)
+  // Same snapshot as the add form beside it, and the same reason.
+  const { isDirty, reset: reseed } = useDirtySnapshot({
+    email,
+    role,
+    workspaceIds,
+  })
   if (!seeded && rows && rows.length > 0) {
     setSeeded(true)
     const preferred = rows.find(
       (workspace) => workspace.id === selected?.workspace_id,
     )
-    setWorkspaceIds([(preferred ?? rows[0]).id])
+    const defaults = [(preferred ?? rows[0]).id]
+    setWorkspaceIds(defaults)
+    // Part of the seed, not a change: this lands after mount, so a snapshot
+    // taken at first render would report the form dirty the moment the roster
+    // answers, and Escape would ask before closing an untouched form.
+    //
+    // The mount values, not `email` and `role` as they stand: the roster pages
+    // through `fetchAllPaged`, so on a cold cache this can fire after the
+    // operator has typed an address, and seeding what they typed would make the
+    // guard forget it.
+    reseed({ email: "", role: "member", workspaceIds: defaults })
   }
 
   const toggleWorkspace = (id: string, checked: boolean) =>
@@ -294,101 +389,100 @@ function InviteMemberForm({ onClose }: { onClose: () => void }) {
   // to share by hand when it was not (or when mail is unconfigured entirely).
   if (result) {
     return (
-      <Card>
-        <Card.Content className="flex flex-col gap-4 p-5">
-          <h2 className="text-title">Invitation sent</h2>
-          {result.mail_sent ? (
-            <InfoBanner>
-              An email with an accept link was sent to{" "}
-              <strong>{result.email}</strong>.
-            </InfoBanner>
-          ) : (
-            <InfoBanner>
-              {/* Not "mail isn't configured": mail_sent is also false when a
-                  configured transport's send failed, and that copy would send
-                  an operator to debug a configuration that may be fine. */}
-              Otari did not send the email. Share this link with{" "}
-              <strong>{result.email}</strong> yourself; it works the same either
-              way.
-              <div className="mt-2">
-                <CopyableValue value={result.accept_link} label="Accept link">
-                  <span className="break-all text-xs">
-                    {result.accept_link}
-                  </span>
-                </CopyableValue>
-              </div>
-            </InfoBanner>
-          )}
-          <div className="flex gap-2">
-            <Button variant="primary" onPress={onClose}>
-              Done
-            </Button>
-          </div>
-        </Card.Content>
-      </Card>
+      <FormDialog
+        isOpen={isOpen}
+        onOpenChange={(open) => {
+          if (!open) onClose()
+        }}
+        title="Invitation"
+        // Dismissable only once the email carried the link. When it did not,
+        // this is the only place the link is shown, so the acknowledgement is
+        // the way out rather than one of two.
+        isDismissable={result.mail_sent}
+        submitLabel="Done"
+        onSubmit={onClose}
+        isPending={false}
+      >
+        {result.mail_sent ? (
+          <InfoBanner>
+            An email with an accept link was sent to{" "}
+            <strong>{result.email}</strong>.
+          </InfoBanner>
+        ) : (
+          <InfoBanner>
+            {/* Not "mail isn't configured": mail_sent is also false when a
+                configured transport's send failed, and that copy would send
+                an operator to debug a configuration that may be fine. */}
+            Otari did not send the email. Share this link with{" "}
+            <strong>{result.email}</strong> yourself; it works the same either
+            way.
+            <div className="mt-2">
+              <CopyableValue value={result.accept_link} label="Accept link">
+                <span className="break-all text-xs">{result.accept_link}</span>
+              </CopyableValue>
+            </div>
+          </InfoBanner>
+        )}
+      </FormDialog>
     )
   }
 
   return (
-    <Card>
-      <Card.Content className="flex flex-col gap-4 p-5">
-        <h2 className="text-title">Invite member</h2>
-        <ErrorBanner error={invite.error} />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Email address"
-            value={email}
-            onChange={setEmail}
-            placeholder="alice@example.com"
-            isRequired
-            autoFocus
-            description={
-              mail_ready
-                ? "An email with an accept link is sent here; the membership becomes active once they follow it."
-                : "Invitation email is unavailable, so you will get a link to share with them yourself."
-            }
-          />
-          <FilterSelect
-            label="Role"
-            value={role}
-            onChange={(value) => setRole(asMembershipRole(value) ?? "member")}
-            options={ROLE_OPTIONS}
-          />
-        </div>
-        {workspaces.data && workspaces.data.length > 0 ? (
-          <fieldset className="flex flex-col gap-2">
-            <legend className="text-body">Workspaces (optional)</legend>
-            <span className="text-caption">
-              Granted once the invitation is accepted, not before.
-            </span>
-            {workspaces.data.map((workspace) => (
-              <Checkbox
-                key={workspace.id}
-                isSelected={workspaceIds.includes(workspace.id)}
-                onChange={(isSelected) =>
-                  toggleWorkspace(workspace.id, isSelected)
-                }
-              >
-                {workspace.name}
-              </Checkbox>
-            ))}
-          </fieldset>
-        ) : null}
-        <div className="flex gap-2">
-          <Button
-            variant="primary"
-            isDisabled={trimmed === ""}
-            isPending={invite.isPending}
-            onPress={submit}
-          >
-            Send invitation
-          </Button>
-          <Button variant="ghost" onPress={onClose}>
-            Cancel
-          </Button>
-        </div>
-      </Card.Content>
-    </Card>
+    <FormDialog
+      isOpen={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      title="Invitation"
+      submitLabel="Invite member"
+      onSubmit={submit}
+      isPending={invite.isPending}
+      isSubmitDisabled={trimmed === ""}
+      isDirty={isDirty}
+      error={invite.error}
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label="Email address"
+          value={email}
+          onChange={setEmail}
+          placeholder="alice@example.com"
+          isRequired
+          autoFocus
+          description={
+            mail_ready
+              ? "An email with an accept link is sent here; the membership becomes active once they follow it."
+              : "Invitation email is unavailable, so you will get a link to share with them yourself."
+          }
+        />
+        <Select
+          label="Role"
+          value={role}
+          onChange={(value) => setRole(asMembershipRole(value) ?? "member")}
+          options={ROLE_OPTIONS}
+          reserveMessage={false}
+        />
+      </div>
+      {workspaces.data && workspaces.data.length > 0 ? (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="text-body">Workspaces (optional)</legend>
+          <span className="text-xs text-muted">
+            Granted once the invitation is accepted, not before.
+          </span>
+          {workspaces.data.map((workspace) => (
+            <Checkbox
+              key={workspace.id}
+              isSelected={workspaceIds.includes(workspace.id)}
+              onChange={(isSelected) =>
+                toggleWorkspace(workspace.id, isSelected)
+              }
+            >
+              {workspace.name}
+            </Checkbox>
+          ))}
+        </fieldset>
+      ) : null}
+    </FormDialog>
   )
 }
 
@@ -500,6 +594,14 @@ function MemberEditor({
     })
 
   const canSave = !saving && scopeValid
+  // The workspace rows are a Map, which `JSON.stringify` flattens to `{}`, so
+  // the guard is handed their entries. Both halves seed on mount and neither
+  // changes on its own, so nothing here arms without a keystroke.
+  const { isDirty } = useDirtySnapshot({
+    rows: [...rows],
+    allowedModels,
+    scopeValid,
+  })
 
   const save = async () => {
     if (!canSave || !member.user_id) return
@@ -555,7 +657,7 @@ function MemberEditor({
       // query function even when `enabled` is false, which is what makes it the
       // way to drive a disabled query on purpose. So without this, a tenant
       // saving nothing but a workspace placement would still ask
-      // `/v1/scoped-budgets`, be refused, and land back on the very banner
+      // `/scoped-budgets`, be refused, and land back on the very banner
       // otari#838 exists to remove. There is nothing to write here either: the
       // Budget column is not rendered for them, so every `row.budgetId` is the
       // empty string it was seeded with.
@@ -597,117 +699,130 @@ function MemberEditor({
   }
 
   return (
-    <Card>
-      <Card.Content className="flex flex-col gap-5 p-5">
-        <h2 className="text-title">Edit {memberLabel(member)}</h2>
-        <ErrorBanner error={error} />
+    <FormDialog
+      isOpen
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      // `lg`: the workspace access table is three columns wide.
+      size="lg"
+      title="Edit member"
+      description={memberLabel(member)}
+      submitLabel="Save"
+      onSubmit={() => void save()}
+      isPending={saving}
+      isSubmitDisabled={!scopeValid}
+      isDirty={isDirty}
+      error={error}
+    >
+      {/* Withheld entirely from a caller who does not operate the deployment.
+          `spendRow` comes from `useUsers(operates)`, so for them it is always
+          undefined and the fallback below would report "no spend row yet" for a
+          row that may well exist. That is the confusion the roster's own
+          member cell is gated to avoid: a withheld read must not read as an
+          absent gateway identity. */}
+      {!operates ? null : spendRow ? (
+        <ModelScopeControl
+          title="Model access (default for this member's keys)"
+          description="The models this member's keys may list and call by default. A key can narrow this, but never exceed it."
+          initial={spendRow.allowed_models}
+          onChange={(value, isValid) => {
+            setAllowedModels(value)
+            setScopeValid(isValid)
+          }}
+        />
+      ) : (
+        <span className="text-xs text-muted">
+          No spend row yet, so there is no model access to set. One is minted
+          when a key is issued to this member.
+        </span>
+      )}
 
-        {!operates ? null : spendRow ? (
-          <ModelScopeControl
-            title="Model access (default for this member's keys)"
-            description="The models this member's keys may list and call by default. A key can narrow this, but never exceed it."
-            initial={spendRow.allowed_models}
-            onChange={(value, isValid) => {
-              setAllowedModels(value)
-              setScopeValid(isValid)
-            }}
-          />
-        ) : (
-          <span className="text-caption">
-            No spend row yet, so there is no model access to set. One is minted
-            when a key is issued to this member.
-          </span>
-        )}
-
-        <div className="flex flex-col gap-2">
-          <span className="text-body">Workspace access</span>
-          <div className="max-w-3xl overflow-x-auto">
-            <table className="w-full min-w-lg text-sm">
-              <thead>
-                <tr className="text-left text-caption">
+      <div className="flex flex-col gap-2">
+        <span className="text-body">Workspace access</span>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-lg text-sm">
+            <thead>
+              <tr className="text-left text-xs text-muted">
+                <th scope="col" className="py-1 font-medium">
+                  Workspace
+                </th>
+                <th scope="col" className="py-1 font-medium">
+                  Role
+                </th>
+                {/* Withheld from a caller who does not operate the deployment,
+                    as the roster's own Spend column is. Their `row.budgetId` is
+                    then the empty string it was seeded with, which is what lets
+                    the save skip the scoped-budget writes entirely. */}
+                {operates ? (
                   <th scope="col" className="py-1 font-medium">
-                    Workspace
+                    Budget
                   </th>
-                  <th scope="col" className="py-1 font-medium">
-                    Role
-                  </th>
-                  {operates ? (
-                    <th scope="col" className="py-1 font-medium">
-                      Budget
-                    </th>
-                  ) : null}
-                </tr>
-              </thead>
-              <tbody>
-                {workspaces.map((workspace) => {
-                  const row = rows.get(workspace.id)
-                  if (!row) return null
-                  return (
-                    <tr key={workspace.id} className="border-t border-border">
-                      <td className="py-1.5">
-                        <Checkbox
-                          isSelected={row.member}
-                          onChange={(isSelected) =>
-                            setRow(workspace.id, { member: isSelected })
-                          }
-                        >
-                          {workspace.name}
-                        </Checkbox>
-                      </td>
+                ) : null}
+              </tr>
+            </thead>
+            <tbody>
+              {workspaces.map((workspace) => {
+                const row = rows.get(workspace.id)
+                if (!row) return null
+                return (
+                  <tr key={workspace.id} className="border-t border-border">
+                    <td className="py-1.5">
+                      <Checkbox
+                        isSelected={row.member}
+                        onChange={(next) =>
+                          setRow(workspace.id, { member: next })
+                        }
+                      >
+                        {workspace.name}
+                      </Checkbox>
+                    </td>
+                    <td className="py-1.5">
+                      <FilterSelect
+                        ariaLabel={`Role in ${workspace.name}`}
+                        value={row.role}
+                        onChange={(next) =>
+                          setRow(workspace.id, { role: next })
+                        }
+                        options={ROLE_OPTIONS}
+                        disabled={!row.member}
+                      />
+                    </td>
+                    {operates ? (
                       <td className="py-1.5">
                         <FilterSelect
-                          ariaLabel={`Role in ${workspace.name}`}
-                          value={row.role}
+                          ariaLabel={`Budget in ${workspace.name}`}
+                          value={row.budgetId}
                           onChange={(next) =>
-                            setRow(workspace.id, { role: next })
+                            setRow(workspace.id, { budgetId: next })
                           }
-                          options={ROLE_OPTIONS}
+                          options={budgetOptions(
+                            defaultByWorkspace.get(workspace.id),
+                          )}
                           disabled={!row.member}
                         />
                       </td>
-                      {operates ? (
-                        <td className="py-1.5">
-                          <FilterSelect
-                            ariaLabel={`Budget in ${workspace.name}`}
-                            value={row.budgetId}
-                            onChange={(next) =>
-                              setRow(workspace.id, { budgetId: next })
-                            }
-                            options={budgetOptions(
-                              defaultByWorkspace.get(workspace.id),
-                            )}
-                            disabled={!row.member}
-                          />
-                        </td>
-                      ) : null}
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-          {operates ? (
-            <span className="max-w-2xl text-caption">
-              Each workspace holds its own allowance, so someone in two
-              workspaces has two. The amount and the reset period belong to the
-              budget, so editing one moves everyone held to it; pick a different
-              budget here to change only this person. Adding them to a workspace
-              that has a default member budget gives them that budget unless
-              another is chosen.
-            </span>
-          ) : null}
+                    ) : null}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
-
-        <div className="flex gap-2">
-          <Button variant="primary" isDisabled={!canSave} onPress={save}>
-            {saving ? "Saving…" : "Save changes"}
-          </Button>
-          <Button variant="ghost" isDisabled={saving} onPress={onClose}>
-            Cancel
-          </Button>
-        </div>
-      </Card.Content>
-    </Card>
+        {/* Gated with the Budget column it explains: "pick a different budget
+            here" names a control this caller is not offered. */}
+        {operates ? (
+          <span className="text-xs text-muted">
+            Each workspace holds its own allowance, so someone in two workspaces
+            has two. The amount and the reset period belong to the budget, so
+            editing one moves everyone held to it; pick a different budget here
+            to change only this person. Adding them to a workspace that has a
+            default member budget gives them that budget unless another is
+            chosen.
+          </span>
+        ) : null}
+      </div>
+    </FormDialog>
   )
 }
 
@@ -718,8 +833,8 @@ export function OrganizationMembersPage() {
   const remove = useRemoveOrganizationMember()
   const revoke = useRevokeOrganizationMemberInvitation()
 
-  // Three of this page's reads are deployment-wide (`/v1/users`, `/v1/budgets`,
-  // `/v1/scoped-budgets`) and have answered 403 to a tenant since #821. They are
+  // Three of this page's reads are deployment-wide (`/users`, `/budgets`,
+  // `/scoped-budgets`) and have answered 403 to a tenant since #821. They are
   // not asked for unless the caller may read them: an owner of this organization
   // is not an operator of the deployment, and rendering their refusal put "this
   // endpoint requires deployment operator access" across a page that is theirs
@@ -744,6 +859,8 @@ export function OrganizationMembersPage() {
   const [revoking, setRevoking] = useState<OrganizationMember | null>(null)
   const [adding, setAdding] = useState(false)
   const [inviting, setInviting] = useState(false)
+  const [addCount, setAddCount] = useState(0)
+  const [inviteCount, setInviteCount] = useState(0)
 
   const rows = useMemo(() => members.data ?? [], [members.data])
   const userByAttribution = useMemo(
@@ -808,14 +925,66 @@ export function OrganizationMembersPage() {
         id: "member",
         header: "Member",
         isRowHeader: true,
-        cell: (member) => (
-          <div className="flex flex-col gap-0.5">
-            <span className="text-body">{memberLabel(member)}</span>
-            {member.email && member.full_name ? (
-              <span className="text-caption">{member.email}</span>
-            ) : null}
-          </div>
-        ),
+        // Two lines, which is what sets the 58px row: who they are, and under
+        // it the ceiling every key issued to them inherits. Model access used
+        // to be a lane of its own, and as a lane it was a column of "All
+        // models" repeating down the page; under the name it is read once, with
+        // the person it belongs to. The address keeps its place on that line
+        // where there is one, because it is the handle a sign-in claims and the
+        // only thing distinguishing two people with the same display name.
+        cell: (member) => {
+          const spendRow = member.attribution_user_id
+            ? userByAttribution.get(member.attribution_user_id)
+            : undefined
+          // Gated on `operates` here rather than by `DEPLOYMENT_WIDE_COLUMNS`,
+          // which withholds columns by id and so cannot reach a value living
+          // inside the member cell. Without this a caller who does not operate
+          // the deployment would be shown
+          // every member's model-access ceiling under their name.
+          const access =
+            operates && spendRow ? accessLabel(spendRow.allowed_models) : null
+          const email = member.email && member.full_name ? member.email : null
+          return (
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm text-foreground">
+                {memberLabel(member)}
+              </span>
+              {email || access ? (
+                // Never wraps, and the address is the only part that gives way.
+                // Seeded with real names the line is three facts in a fixed
+                // lane, and letting it wrap took the row off its 58px pitch and
+                // pushed the name off its baseline. The marker is short and
+                // bounded, so the address truncates and keeps its full value in
+                // the title.
+                <span className="flex items-center gap-1.5 text-nowrap text-xs">
+                  {email ? (
+                    <span className="truncate text-muted" title={email}>
+                      {email}
+                    </span>
+                  ) : null}
+                  {email && access ? (
+                    <span aria-hidden className="text-subtle">
+                      ·
+                    </span>
+                  ) : null}
+                  {access ? (
+                    <span
+                      className={`shrink-0 ${
+                        access.tone === "danger"
+                          ? "text-danger"
+                          : access.tone === "muted"
+                            ? "text-subtle"
+                            : "text-muted"
+                      }`}
+                    >
+                      {access.text}
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+            </div>
+          )
+        },
       },
       {
         id: "role",
@@ -875,37 +1044,9 @@ export function OrganizationMembersPage() {
           // active, and every request the person makes is still refused, which
           // is what someone reading this column wants to know.
           return spendRow?.blocked ? (
-            <MembershipStatusChip status="blocked" />
+            <StatusMark status="blocked" />
           ) : (
-            <MembershipStatusChip status={member.status} />
-          )
-        },
-      },
-      {
-        id: "access",
-        header: "Model access",
-        // The default every key issued to this person inherits. A key may narrow
-        // it and never widen it, so this is the ceiling rather than the grant.
-        cell: (member) => {
-          const spendRow = member.attribution_user_id
-            ? userByAttribution.get(member.attribution_user_id)
-            : undefined
-          if (!spendRow) {
-            return <span className="text-caption">&mdash;</span>
-          }
-          const { text, tone } = accessLabel(spendRow.allowed_models)
-          return (
-            <span
-              className={
-                tone === "danger"
-                  ? "text-caption text-danger"
-                  : tone === "muted"
-                    ? "text-caption"
-                    : "text-caption text-foreground"
-              }
-            >
-              {text}
-            </span>
+            <StatusMark status={member.status} />
           )
         },
       },
@@ -922,15 +1063,32 @@ export function OrganizationMembersPage() {
           if (placements.length === 0) {
             return <span className="text-caption">None</span>
           }
+          // Names in prose rather than chips: a chip is a box, and a cell of
+          // three boxes was the loudest thing in a row whose subject is a
+          // person. The ceiling stays with the workspace it applies to, in the
+          // quieter ink, because it is a qualifier on the name and not a second
+          // fact beside it.
           return (
-            <div className="flex flex-wrap gap-1">
-              {placements.map((placement) => (
-                <Chip key={placement.workspaceId} size="sm">
-                  {placement.workspaceName}
-                  {placement.ceiling?.max_budget != null
-                    ? ` · ${usd.format(placement.ceiling.max_budget)}`
-                    : ""}
-                </Chip>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+              {placements.map((placement, index) => (
+                <span
+                  key={placement.workspaceId}
+                  className="flex items-center gap-2"
+                >
+                  {index > 0 ? (
+                    <span aria-hidden className="text-subtle">
+                      ·
+                    </span>
+                  ) : null}
+                  <span className="text-foreground">
+                    {placement.workspaceName}
+                  </span>
+                  {placement.ceiling?.max_budget != null ? (
+                    <span className="text-subtle tabular-nums">
+                      {usd.format(placement.ceiling.max_budget)}
+                    </span>
+                  ) : null}
+                </span>
               ))}
             </div>
           )
@@ -976,14 +1134,14 @@ export function OrganizationMembersPage() {
           // do the wrong thing on a pending invitation.
           if (member.status === "invited" && member.invitation_id) {
             return (
-              <Button
-                size="sm"
-                variant="danger-soft"
-                isDisabled={!manages}
-                onPress={() => setRevoking(member)}
-              >
-                Revoke
-              </Button>
+              <RowActionRow>
+                <RowAction
+                  icon={FiXCircle}
+                  label="Revoke"
+                  isDisabled={!manages}
+                  onPress={() => setRevoking(member)}
+                />
+              </RowActionRow>
             )
           }
           // Blocking stops this person's keys from making requests without
@@ -995,20 +1153,18 @@ export function OrganizationMembersPage() {
             ? userByAttribution.get(member.attribution_user_id)
             : undefined
           return (
-            <div className="flex items-center justify-end gap-1.5">
+            <RowActionRow>
               {manages ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
+                <RowAction
+                  icon={FiEdit2}
+                  label="Edit"
                   onPress={() => setEditingMember(memberRowKey(member))}
-                >
-                  Edit
-                </Button>
+                />
               ) : null}
               {manages && spendRow ? (
-                <Button
-                  size="sm"
-                  variant={spendRow.blocked ? "ghost" : "danger-soft"}
+                <RowAction
+                  icon={spendRow.blocked ? FiCheckCircle : FiSlash}
+                  label={spendRow.blocked ? "Unblock" : "Block"}
                   isDisabled={updateUser.isPending}
                   onPress={() =>
                     updateUser.mutate({
@@ -1016,28 +1172,24 @@ export function OrganizationMembersPage() {
                       body: { blocked: !spendRow.blocked },
                     })
                   }
-                >
-                  {spendRow.blocked ? "Unblock" : "Block"}
-                </Button>
+                />
               ) : null}
-              <span title={blocked}>
-                <Button
-                  size="sm"
-                  variant="danger-soft"
-                  // See the Role cell: the reason has to be in the name, not only
-                  // in the tooltip, to reach anything but a pointer.
-                  aria-label={
-                    blocked
-                      ? `Remove ${memberLabel(member)} (${blocked})`
-                      : undefined
-                  }
-                  isDisabled={blocked !== undefined}
-                  onPress={() => setRemoving(member)}
-                >
-                  Remove
-                </Button>
-              </span>
-            </div>
+              <RowAction
+                icon={FiUserMinus}
+                label="Remove"
+                // See the Role cell: the reason has to be in the name, not only
+                // in the tooltip, to reach anything but a pointer. `RowAction`
+                // puts the same name on a `title` while the action is refused,
+                // which is how the pointer gets it without a wrapper here.
+                ariaLabel={
+                  blocked
+                    ? `Remove ${memberLabel(member)} (${blocked})`
+                    : undefined
+                }
+                isDisabled={blocked !== undefined}
+                onPress={() => setRemoving(member)}
+              />
+            </RowActionRow>
           )
         },
       },
@@ -1059,29 +1211,44 @@ export function OrganizationMembersPage() {
   ])
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
+    <div className="flex flex-col">
+      <PageIntro
         title="Members"
-        description={
-          // The last sentence is about the Model access and Spend columns, which
-          // only a deployment operator is shown, so it is only told to one.
-          operates
-            ? "Who belongs to this organization and what each of them may do. Roles are fixed: owners and admins manage the organization (its workspaces, provider keys, guardrails, pricing and this roster) and read its usage in full, while members and viewers read the workspaces they belong to. No role set here reaches the deployment's own pages, such as Settings and Accounts, which belong to whoever operates the gateway. Budgets and API keys do not attach to this list; they attach to the gateway identity a member is linked to, which is what lets a key be issued to them by name. A member with no such link yet shows no access or spend, and cannot own a key until one exists."
-            : "Who belongs to this organization and what each of them may do. Roles are fixed: owners and admins manage the organization (its workspaces, provider keys, guardrails, pricing and this roster) and read its usage in full, while members and viewers read the workspaces they belong to. No role set here reaches the deployment's own pages, such as Settings and Accounts, which belong to whoever operates the gateway."
-        }
         action={
-          manages && !adding && !inviting ? (
+          manages ? (
+            // Both stay on screen while their dialog is open: the dialog is
+            // over the page rather than in place of the action.
             <div className="flex gap-2">
-              <Button variant="ghost" onPress={() => setAdding(true)}>
+              <Button
+                variant="ghost"
+                onPress={() => {
+                  setAddCount((count) => count + 1)
+                  setAdding(true)
+                }}
+              >
                 Add member
               </Button>
-              <Button variant="primary" onPress={() => setInviting(true)}>
+              <Button
+                variant="primary"
+                onPress={() => {
+                  setInviteCount((count) => count + 1)
+                  setInviting(true)
+                }}
+              >
                 Invite member
               </Button>
             </div>
           ) : null
         }
-      />
+      >
+        {/* The trailing sentences are about the model access shown under a
+            member's name and the Spend column, neither of which a caller who
+            does not operate the deployment is shown, so they are only told to
+            one. */}
+        {operates
+          ? "Who belongs to this organization and what each of them may do. Roles are fixed: owners and admins manage the organization (its workspaces, provider keys, guardrails, pricing and this roster) and read its usage in full, while members and viewers read the workspaces they belong to. No role set here reaches the deployment's own pages, such as Settings and Accounts, which belong to whoever operates the gateway. Budgets and API keys do not attach to this list; they attach to the gateway identity a member is linked to, which is what lets a key be issued to them by name. A member with no such link yet shows no access or spend, and cannot own a key until one exists."
+          : "Who belongs to this organization and what each of them may do. Roles are fixed: owners and admins manage the organization (its workspaces, provider keys, guardrails, pricing and this roster) and read its usage in full, while members and viewers read the workspaces they belong to. No role set here reaches the deployment's own pages, such as Settings and Accounts, which belong to whoever operates the gateway."}
+      </PageIntro>
 
       {/* `remove.error`/`revoke.error` are deliberately absent: their confirm
           dialogs render each mutation's error themselves, and listing it here
@@ -1110,13 +1277,22 @@ export function OrganizationMembersPage() {
         </InfoBanner>
       )}
 
-      {adding ? <AddMemberForm onClose={() => setAdding(false)} /> : null}
-      {inviting ? (
-        <InviteMemberForm onClose={() => setInviting(false)} />
-      ) : null}
+      {/* Keyed on the open count, so each open remounts a blank form. Clearing
+          the draft on close instead would blank the fields while the dialog is
+          still animating away. */}
+      <AddMemberForm
+        key={`add-${addCount}`}
+        isOpen={adding}
+        onClose={() => setAdding(false)}
+      />
+      <InviteMemberForm
+        key={`invite-${inviteCount}`}
+        isOpen={inviting}
+        onClose={() => setInviting(false)}
+      />
 
-      {/* Keyed on the row so switching which member is edited remounts the
-          form: its fields seed from the member on mount only. */}
+      {/* Keyed on the row: its fields seed from the member on mount only, so
+          the next Edit has to arrive at a fresh form. */}
       {editingRow ? (
         <MemberEditor
           key={memberRowKey(editingRow)}
@@ -1139,14 +1315,16 @@ export function OrganizationMembersPage() {
         />
       ) : null}
 
-      <DataTable
-        ariaLabel="Organization members"
-        columns={columns}
-        rows={rows}
-        getRowKey={memberRowKey}
-        isLoading={members.isLoading}
-        emptyContent="No members yet."
-      />
+      <TableScrollFrame className="otari-members-table">
+        <DataTable
+          ariaLabel="Organization members"
+          columns={columns}
+          rows={rows}
+          getRowKey={memberRowKey}
+          isLoading={members.isLoading}
+          emptyContent="No members yet."
+        />
+      </TableScrollFrame>
 
       <ConfirmDialog
         isOpen={removing !== null}

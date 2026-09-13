@@ -1,6 +1,7 @@
-import { Button, Card, Chip, Spinner } from "@heroui/react"
+import { Button, Spinner } from "@heroui/react"
 import { Link } from "@tanstack/react-router"
 import { type ReactNode, useEffect, useRef, useState } from "react"
+import { FiActivity, FiEdit2, FiTrash2 } from "react-icons/fi"
 import type {
   CreateStoredProviderRequest,
   ProviderHealth,
@@ -9,113 +10,164 @@ import type {
   TestProviderResult,
   UpdateStoredProviderRequest,
 } from "@/client"
+import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
+import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
+import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
+import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
+import { errorMessage } from "@/design-system/feedback/errorMessage"
+import { FormDialog } from "@/design-system/feedback/FormDialog"
+import { Field } from "@/design-system/forms/Field"
+import { SecretField } from "@/design-system/forms/SecretField"
+import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
+import { Dot } from "@/design-system/indicators/Dot"
+import { PageIntro } from "@/design-system/layout/PageIntro"
+import { Section } from "@/design-system/layout/Section"
+import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
+import { Tab, TabRow } from "@/design-system/navigation/TabRow"
+import {
+  useOrganizationContext,
+  useProviderKeyEncryption,
+} from "@/shared/api/organizations"
 import {
   useCreateStoredProvider,
   useDeleteStoredProvider,
-  useOrganizationContext,
   useProviderDetail,
   useProviderHealth,
-  useProviderKeyEncryption,
   useProviders,
   useRecheckProviderHealth,
-  useSettings,
   useStoredProviders,
   useTestProviderCredentials,
   useTestStoredProvider,
-  useUpdateSettings,
   useUpdateStoredProvider,
-} from "@/shared/api/hooks"
-import { DataTable, type DataTableColumn } from "@/shared/components/DataTable"
-import { Field } from "@/shared/components/Field"
-import { SecretField } from "@/shared/components/SecretField"
-import {
-  ConfirmButton,
-  ErrorBanner,
-  errorMessage,
-  InfoBanner,
-  PageHeader,
-} from "@/shared/components/ui"
+} from "@/shared/api/providers"
+import { useSettings, useUpdateSettings } from "@/shared/api/settings"
 import { formatRelative } from "@/shared/helpers/format"
 
+import {
+  type CredentialFieldValues,
+  credentialFieldsFor,
+  credentialSpecFor,
+  mergeCredentialFields,
+  splitClientArgs,
+  validateCredentialFields,
+} from "./providerCredentialFields"
 import {
   ClientArgsField,
   formatClientArgs,
   ProviderComboBox,
+  ProviderCredentialFields,
   parseClientArgs,
 } from "./providerFields"
 
-// A "Test connection" button + inline result, testing the form's credentials
-// before they are saved. `getPayload` returns null when the minimum fields for a
-// test are not filled in yet, which disables the button.
-function ConnectionTest({
+// Testing the form's credentials before they are saved, in two nodes because
+// they belong in two places: the button sits in the footer beside the submit,
+// its outcome at the end of the body. The unverified case below is four lines
+// plus the provider's own reply, and a footer that grows shoves the form up
+// under the operator's hands; in the body it scrolls with everything else.
+type ConnectionTestState = ReturnType<typeof useTestProviderCredentials>
+
+// `getPayload` returns null when the minimum fields for a test are not filled
+// in yet, which disables the button.
+function ConnectionTestButton({
+  test,
   getPayload,
 }: {
+  test: ConnectionTestState
   getPayload: () => CreateStoredProviderRequest | null
 }) {
-  const test = useTestProviderCredentials()
   const payload = getPayload()
-
   return (
-    <div className="flex flex-col gap-1.5">
-      <Button
-        variant="outline"
-        isDisabled={payload === null || test.isPending}
-        onPress={() => {
-          if (payload) test.mutate(payload)
-        }}
-      >
-        {test.isPending ? "Testing…" : "Test connection"}
-      </Button>
-      {/* aria-live so the connection outcome is announced to assistive tech. */}
-      <span role="status" aria-live="polite">
-        {test.isPending ? null : test.error ? (
-          <span className="text-xs text-danger">
-            {errorMessage(test.error)}
+    <Button
+      variant="ghost"
+      isDisabled={payload === null || test.isPending}
+      onPress={() => {
+        if (payload) test.mutate(payload)
+      }}
+    >
+      {test.isPending ? "Testing…" : "Test connection"}
+    </Button>
+  )
+}
+
+function ConnectionTestResult({ test }: { test: ConnectionTestState }) {
+  const answered = test.data ?? test.error
+  const ref = useRef<HTMLSpanElement | null>(null)
+  // The body scrolls, and this is its last child: on an `lg` dialog in an 800px
+  // window the custom tab's own fields already fill it, so a verdict rendered
+  // here can land below the fold with the footer button back to "Test
+  // connection" and nothing else, to a sighted operator, having happened.
+  useEffect(() => {
+    if (answered) ref.current?.scrollIntoView({ block: "nearest" })
+  }, [answered])
+  return (
+    // No wrapper, and `empty:hidden` rather than a conditional render: the
+    // parent's `gap-4` would otherwise reserve a row before a test is ever run,
+    // and the live region has to exist before it has something to say.
+    <span
+      ref={ref}
+      role="status"
+      aria-live="polite"
+      className="flex flex-col gap-1.5 empty:hidden"
+    >
+      {test.isPending ? null : test.error ? (
+        <span className="text-xs text-danger">{errorMessage(test.error)}</span>
+      ) : test.data ? (
+        test.data.ok ? (
+          <span className="text-xs font-medium text-success">
+            Connected. {test.data.model_count} model
+            {test.data.model_count === 1 ? "" : "s"} available.
           </span>
-        ) : test.data ? (
-          test.data.ok ? (
-            <span className="text-xs font-medium text-success">
-              Connected. {test.data.model_count} model
-              {test.data.model_count === 1 ? "" : "s"} available.
-            </span>
-          ) : test.data.discovery_unsupported ? (
-            // No /v1/models on this backend: the test cannot confirm the key, but
-            // it is not evidence the key is wrong either (issue #447). The error is
-            // kept because this is the form where the operator just typed api_base,
-            // and a wrong one 404s exactly like an absent listing endpoint.
-            <span className="block max-w-md break-words text-xs text-warning">
-              This provider does not list models, so the key could not be
-              verified here. Save it and use the provider; declare its model ids
-              under <code>models:</code> to have them show up in the catalog. If
-              you did not expect this, check the provider's reply below.
-              {test.data.error ? (
-                <span className="mt-0.5 block text-muted">
-                  {test.data.error}
-                </span>
-              ) : null}
-            </span>
-          ) : (
-            <span className="block max-w-md break-words text-xs text-danger">
-              {test.data.error ?? "Connection failed."}
-            </span>
-          )
-        ) : null}
-      </span>
-    </div>
+        ) : test.data.discovery_unsupported ? (
+          // No /v1/models on this backend: the test cannot confirm the key, but
+          // it is not evidence the key is wrong either (issue #447). The error is
+          // kept because this is the form where the operator just typed api_base,
+          // and a wrong one 404s exactly like an absent listing endpoint.
+          <span className="block max-w-md break-words text-xs text-warning">
+            This provider does not list models, so the key could not be verified
+            here. Save it and use the provider; declare its model ids under{" "}
+            <code>models:</code> to have them show up in the catalog. If you did
+            not expect this, check the provider's reply below.
+            {test.data.error ? (
+              <span className="mt-0.5 block text-muted">{test.data.error}</span>
+            ) : null}
+          </span>
+        ) : (
+          <span className="block max-w-md break-words text-caption text-danger">
+            {test.data.error ?? "Connection failed."}
+          </span>
+        )
+      ) : null}
+    </span>
   )
 }
 
 // Add a hosted provider whose endpoint is built into the SDK: pick it, paste a
 // key. Name and api_base are only exposed under Advanced.
-function KnownProviderForm({ onClose }: { onClose: () => void }) {
+function KnownProviderForm({
+  isOpen,
+  onClose,
+  tabs,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  tabs: ReactNode
+}) {
   const create = useCreateStoredProvider()
+  const test = useTestProviderCredentials()
   const [providerId, setProviderId] = useState("")
   const [apiKey, setApiKey] = useState("")
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [apiBase, setApiBase] = useState("")
   const [name, setName] = useState("")
   const [clientArgsText, setClientArgsText] = useState("")
+  const [credentials, setCredentials] = useState<CredentialFieldValues>({})
   const clientArgs = parseClientArgs(clientArgsText)
+  const credentialFields = credentialFieldsFor(providerId)
+  const credentialErrors = validateCredentialFields(
+    credentialFields,
+    credentials,
+  )
+  const credentialSpec = credentialSpecFor(providerId)
 
   // Autofill hints are fetched lazily for just the selected provider, so the
   // picker itself never imports every provider SDK (issue #365).
@@ -135,39 +187,78 @@ function KnownProviderForm({ onClose }: { onClose: () => void }) {
   const nameHasDelimiter = /[:/]/.test(name)
   // Require the key when the chosen provider says it needs one; keyless local
   // backends (Ollama, llama.cpp) can submit without it.
+  // One snapshot of everything the form owns, seeded on mount, rather than a
+  // list of fields: the list was two of six, so Advanced's rename, API base,
+  // client options and every typed credential (a Bedrock region) were invisible
+  // to the guard and went on Escape with nothing asked. `key={addOpenCount}`
+  // reseeds it per open. See feedback.md.
+  const { isDirty } = useDirtySnapshot({
+    providerId,
+    apiKey,
+    name,
+    apiBase,
+    clientArgsText,
+    credentials,
+  })
   const canSubmit =
     providerId !== "" &&
     !nameHasDelimiter &&
     (!needsKey || apiKey.trim() !== "") &&
     clientArgs.ok &&
-    !create.isPending
+    Object.keys(credentialErrors).length === 0
   // Hold the section open while something inside it is what's blocking submit,
   // so collapsing it can't leave a disabled button with its reason off screen.
   // A hide requested meanwhile is remembered and applies once the field is fixed.
   const advancedOpen = showAdvanced || !clientArgs.ok || nameHasDelimiter
 
+  // The typed fields and the JSON textarea are two views of one `client_args`
+  // object, so the request body is built in one place for both the save and the
+  // connection test.
+  const buildPayload = (): CreateStoredProviderRequest | null =>
+    providerId === "" ||
+    !clientArgs.ok ||
+    Object.keys(credentialErrors).length > 0
+      ? null
+      : {
+          instance: renamed ? name.trim() : providerId,
+          // A renamed instance is no longer named after its provider, so record
+          // the provider it is so routing still resolves.
+          provider_type: renamed ? providerId : null,
+          api_base: apiBase.trim() || null,
+          api_key: apiKey.trim() || null,
+          client_args: mergeCredentialFields(credentials, clientArgs.value),
+        }
+
   const submit = () => {
-    // The clientArgs.ok half is already covered by canSubmit; it is repeated to
-    // narrow the union so `.value` is reachable.
-    if (!canSubmit || !clientArgs.ok) return
-    create.mutate(
-      {
-        instance: renamed ? name.trim() : providerId,
-        // A renamed instance is no longer named after its provider, so record the
-        // provider it is so routing still resolves.
-        provider_type: renamed ? providerId : null,
-        api_base: apiBase.trim() || null,
-        api_key: apiKey.trim() || null,
-        client_args: clientArgs.value,
-      },
-      { onSuccess: onClose },
-    )
+    const payload = buildPayload()
+    // `create.isPending` is a reason not to send twice, not a reason to draw
+    // the primary as refused, so it guards the call rather than `canSubmit`.
+    if (!canSubmit || create.isPending || payload === null) return
+    create.mutate(payload, { onSuccess: onClose })
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <ErrorBanner error={create.error} />
+    <FormDialog
+      isOpen={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      size="lg"
+      title="New provider"
+      tabs={tabs}
+      submitLabel="Add provider"
+      onSubmit={submit}
+      isPending={create.isPending}
+      isSubmitDisabled={!canSubmit}
+      isDirty={isDirty}
+      error={create.error}
+      footerStart={
+        <ConnectionTestButton test={test} getPayload={buildPayload} />
+      }
+    >
       <ProviderComboBox
+        // The known tab is the dialog's default, so this is its first field.
+        autoFocus
         label="Provider"
         value={providerId}
         onChange={(id) => {
@@ -176,22 +267,43 @@ function KnownProviderForm({ onClose }: { onClose: () => void }) {
           // Clear the API base; the effect above refills it from the provider's
           // built-in default once this provider's detail loads.
           setApiBase("")
+          // The typed fields belong to the provider, so a change to it drops
+          // values that no longer have a field to sit in.
+          setCredentials({})
         }}
         description="Its endpoint is built in."
       />
       <SecretField
         value={apiKey}
         onChange={setApiKey}
-        label={selected && !needsKey ? "API key (optional)" : "API key"}
-        description={
+        // The registry names the credential where the provider does not call it
+        // an API key; the optional suffix still tracks whether one is needed.
+        label={
+          selected && !needsKey
+            ? `${credentialSpec?.apiKeyLabel ?? "API key"} (optional)`
+            : (credentialSpec?.apiKeyLabel ?? "API key")
+        }
+        description={[
           selected
             ? needsKey
               ? `${selected.name}'s endpoint is built in — just add your key.`
               : envKeyPresent
                 ? `${selected.env_key} is set on the server, so a key is optional here. Paste one to override it.`
                 : `${selected.name} needs no API key.`
-            : "Stored encrypted. Requires OTARI_SECRET_KEY on the server."
-        }
+            : "Stored encrypted. Requires OTARI_SECRET_KEY on the server.",
+          credentialSpec?.apiKeyHelpText,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      />
+      {/* Outside the Advanced disclosure below: a required field hidden behind
+          a collapsed section is a submit button disabled for a reason off
+          screen. */}
+      <ProviderCredentialFields
+        provider={providerId}
+        values={credentials}
+        onChange={setCredentials}
+        errors={credentialErrors}
       />
       <button
         type="button"
@@ -235,35 +347,24 @@ function KnownProviderForm({ onClose }: { onClose: () => void }) {
           />
         </div>
       ) : null}
-      <div className="flex flex-wrap items-start gap-2">
-        <Button variant="primary" isDisabled={!canSubmit} onPress={submit}>
-          {create.isPending ? "Adding…" : "Add provider"}
-        </Button>
-        <Button variant="ghost" onPress={onClose}>
-          Cancel
-        </Button>
-        <ConnectionTest
-          getPayload={() =>
-            providerId === "" || !clientArgs.ok
-              ? null
-              : {
-                  instance: renamed ? name.trim() : providerId,
-                  provider_type: renamed ? providerId : null,
-                  api_base: apiBase.trim() || null,
-                  api_key: apiKey.trim() || null,
-                  client_args: clientArgs.value,
-                }
-          }
-        />
-      </div>
-    </div>
+      <ConnectionTestResult test={test} />
+    </FormDialog>
   )
 }
 
 // Add a self-hosted or OpenAI-compatible endpoint: name it anything, say what
 // API it speaks, and give the base URL (and a key if it needs one).
-function CustomProviderForm({ onClose }: { onClose: () => void }) {
+function CustomProviderForm({
+  isOpen,
+  onClose,
+  tabs,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  tabs: ReactNode
+}) {
   const create = useCreateStoredProvider()
+  const test = useTestProviderCredentials()
   const [name, setName] = useState("")
   const [providerType, setProviderType] = useState("openai-compatible")
   const [apiBase, setApiBase] = useState("")
@@ -272,15 +373,23 @@ function CustomProviderForm({ onClose }: { onClose: () => void }) {
   const clientArgs = parseClientArgs(clientArgsText)
 
   const nameHasDelimiter = /[:/]/.test(name)
+  // Same snapshot as the known tab, for the same reason: this list had missed
+  // `providerType` and the client options.
+  const { isDirty } = useDirtySnapshot({
+    name,
+    providerType,
+    apiBase,
+    apiKey,
+    clientArgsText,
+  })
   const canSubmit =
     name.trim() !== "" &&
     !nameHasDelimiter &&
     apiBase.trim() !== "" &&
-    clientArgs.ok &&
-    !create.isPending
+    clientArgs.ok
 
   const submit = () => {
-    if (!canSubmit || !clientArgs.ok) return
+    if (!canSubmit || create.isPending || !clientArgs.ok) return
     create.mutate(
       {
         instance: name.trim(),
@@ -294,8 +403,37 @@ function CustomProviderForm({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <ErrorBanner error={create.error} />
+    <FormDialog
+      isOpen={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      size="lg"
+      title="New provider"
+      tabs={tabs}
+      submitLabel="Add provider"
+      onSubmit={submit}
+      isPending={create.isPending}
+      isSubmitDisabled={!canSubmit}
+      isDirty={isDirty}
+      error={create.error}
+      footerStart={
+        <ConnectionTestButton
+          test={test}
+          getPayload={() =>
+            name.trim() === "" || apiBase.trim() === "" || !clientArgs.ok
+              ? null
+              : {
+                  instance: name.trim(),
+                  provider_type: providerType || "openai-compatible",
+                  api_base: apiBase.trim(),
+                  api_key: apiKey.trim() || null,
+                  client_args: clientArgs.value,
+                }
+          }
+        />
+      }
+    >
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
           label="Name"
@@ -345,70 +483,55 @@ function CustomProviderForm({ onClose }: { onClose: () => void }) {
         onChange={setClientArgsText}
         error={clientArgs.ok ? null : clientArgs.error}
       />
-      <div className="flex flex-wrap items-start gap-2">
-        <Button variant="primary" isDisabled={!canSubmit} onPress={submit}>
-          {create.isPending ? "Adding…" : "Add provider"}
-        </Button>
-        <Button variant="ghost" onPress={onClose}>
-          Cancel
-        </Button>
-        <ConnectionTest
-          getPayload={() =>
-            name.trim() === "" || apiBase.trim() === "" || !clientArgs.ok
-              ? null
-              : {
-                  instance: name.trim(),
-                  provider_type: providerType || "openai-compatible",
-                  api_base: apiBase.trim(),
-                  api_key: apiKey.trim() || null,
-                  client_args: clientArgs.value,
-                }
-          }
-        />
-      </div>
-    </div>
+      <ConnectionTestResult test={test} />
+    </FormDialog>
   )
 }
 
 type ProviderTab = "known" | "custom"
 
-function AddProviderForm({ onClose }: { onClose: () => void }) {
+/**
+ * The two ways to attach a provider, in one dialog.
+ *
+ * Each tab keeps its own mutation, its own validity and its own submit, which
+ * is what it had as a panel. The two write the same five fields but derive them
+ * from different questions: one asks which provider and fills the rest from its
+ * built-in detail, the other asks for a name, an API flavor and a base URL. A
+ * shared submit would be a switch on the tab, which is the same code with one
+ * more place to look.
+ *
+ * What is shared is the frame. Each half renders the same `FormDialog` with the
+ * same title, size and tab row, so switching tabs changes the fields and
+ * nothing else, and a half-filled tab still does not survive a switch away from
+ * it, which is what it did as a panel.
+ */
+function AddProviderForm({
+  isOpen,
+  onClose,
+}: {
+  isOpen: boolean
+  onClose: () => void
+}) {
   const [tab, setTab] = useState<ProviderTab>("known")
+  const tabs = (
+    <TabRow>
+      {(
+        [
+          ["known", "Known provider"],
+          ["custom", "Custom endpoint"],
+        ] as const
+      ).map(([id, label]) => (
+        <Tab key={id} isActive={tab === id} onPress={() => setTab(id)}>
+          {label}
+        </Tab>
+      ))}
+    </TabRow>
+  )
 
-  return (
-    <Card>
-      <Card.Content className="flex flex-col gap-4 p-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1 rounded-lg bg-surface-alt p-1">
-            {(
-              [
-                ["known", "Known provider"],
-                ["custom", "Custom endpoint"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={tab === id}
-                onClick={() => setTab(id)}
-                className={
-                  tab === id
-                    ? "rounded-md bg-surface px-3 py-1.5 text-body shadow-sm"
-                    : "rounded-md px-3 py-1.5 text-body text-muted hover:text-foreground"
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {tab === "known" ? (
-          <KnownProviderForm onClose={onClose} />
-        ) : (
-          <CustomProviderForm onClose={onClose} />
-        )}
-      </Card.Content>
-    </Card>
+  return tab === "known" ? (
+    <KnownProviderForm isOpen={isOpen} onClose={onClose} tabs={tabs} />
+  ) : (
+    <CustomProviderForm isOpen={isOpen} onClose={onClose} tabs={tabs} />
   )
 }
 
@@ -430,18 +553,54 @@ function EditProviderForm({
   const [apiBase, setApiBase] = useState(provider.api_base ?? "")
   const [replacingKey, setReplacingKey] = useState(false)
   const [apiKey, setApiKey] = useState("")
+  // An instance keeps its provider's name unless it was renamed, so the
+  // instance is what says which provider this is when provider_type is unset.
+  // Read the same way below, so the fields rendered are the ones the stored
+  // options were split against.
+  const providerId = providerType.trim() || provider.instance
+  const [stored] = useState(() =>
+    splitClientArgs(
+      credentialFieldsFor(provider.provider_type?.trim() || provider.instance),
+      provider.client_args,
+    ),
+  )
   const [clientArgsText, setClientArgsText] = useState(() =>
-    formatClientArgs(provider.client_args),
+    formatClientArgs(stored.rest),
+  )
+  const [credentials, setCredentials] = useState<CredentialFieldValues>(
+    () => stored.typed,
   )
   const clientArgs = parseClientArgs(clientArgsText)
+  const credentialFields = credentialFieldsFor(providerId)
+  const credentialErrors = validateCredentialFields(
+    credentialFields,
+    credentials,
+    stored.redacted,
+  )
+  // `replacingKey` is in the snapshot with the secret it reveals: arming the
+  // replacement and then closing without typing one loses nothing, but a typed
+  // key is work, and the flag is what says the field was ever on screen.
+  const { isDirty } = useDirtySnapshot({
+    providerType,
+    apiBase,
+    replacingKey,
+    apiKey,
+    clientArgsText,
+    credentials,
+  })
+  const blocked = !clientArgs.ok || Object.keys(credentialErrors).length > 0
 
   const submit = () => {
-    if (update.isPending || !clientArgs.ok) return
+    if (update.isPending || blocked) return
     const body: UpdateStoredProviderRequest = {
       provider_type: providerType.trim() || null,
       api_base: apiBase.trim() || null,
       // Sent on every save, so emptying the field clears the stored options.
-      client_args: clientArgs.value,
+      client_args: mergeCredentialFields(
+        credentials,
+        clientArgs.value,
+        stored.redacted,
+      ),
       // Guard against clobbering a concurrent edit; a 412 tells the operator to reload.
       expected_updated_at: provider.updated_at,
     }
@@ -460,83 +619,91 @@ function EditProviderForm({
   }
 
   return (
-    <Card>
-      <Card.Content className="flex flex-col gap-4 p-5">
-        <h2 className="text-title">
-          Edit <code>{provider.instance}</code>
-        </h2>
-        <ErrorBanner error={update.error} />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Provider type"
-            value={providerType}
-            onChange={setProviderType}
-            placeholder="openai"
-          />
-          <Field
-            label="API base"
-            value={apiBase}
-            onChange={setApiBase}
-            placeholder="https://api.openai.com/v1"
-          />
-        </div>
-        <div className="flex flex-col gap-2">
-          {replacingKey ? (
-            <>
-              <SecretField
-                value={apiKey}
-                onChange={setApiKey}
-                label="New API key"
-                description="Stored encrypted. The old key is replaced when you save."
-              />
-              <button
-                type="button"
-                className="self-start text-xs font-medium text-link hover:text-link-hover"
-                onClick={() => {
-                  setReplacingKey(false)
-                  setApiKey("")
-                }}
-              >
-                Keep the current key
-              </button>
-            </>
-          ) : (
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-muted">
-                API key:{" "}
-                <code>
-                  {provider.last4 ? `••••${provider.last4}` : "none set"}
-                </code>
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                onPress={() => setReplacingKey(true)}
-              >
-                Replace key
-              </Button>
-            </div>
-          )}
-        </div>
-        <ClientArgsField
-          value={clientArgsText}
-          onChange={setClientArgsText}
-          error={clientArgs.ok ? null : clientArgs.error}
+    <FormDialog
+      isOpen
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      // `lg` as on the add form: the same five fields, plus whatever typed
+      // credentials this provider declares.
+      size="lg"
+      title="Edit provider"
+      description={<code>{provider.instance}</code>}
+      submitLabel="Save"
+      onSubmit={submit}
+      isPending={update.isPending}
+      isSubmitDisabled={blocked}
+      isDirty={isDirty}
+      error={update.error}
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label="Provider type"
+          value={providerType}
+          onChange={setProviderType}
+          placeholder="openai"
+          autoFocus
+          reserveMessage={false}
         />
-        <div className="flex gap-2">
-          <Button
-            variant="primary"
-            isDisabled={update.isPending || !clientArgs.ok}
-            onPress={submit}
-          >
-            {update.isPending ? "Saving…" : "Save changes"}
-          </Button>
-          <Button variant="ghost" onPress={onClose}>
-            Cancel
-          </Button>
-        </div>
-      </Card.Content>
-    </Card>
+        <Field
+          label="API base"
+          value={apiBase}
+          onChange={setApiBase}
+          placeholder="https://api.openai.com/v1"
+          reserveMessage={false}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        {replacingKey ? (
+          <>
+            <SecretField
+              value={apiKey}
+              onChange={setApiKey}
+              label="New API key"
+              description="Stored encrypted. The old key is replaced when you save."
+            />
+            <button
+              type="button"
+              className="self-start text-xs font-medium text-link hover:text-link-hover"
+              onClick={() => {
+                setReplacingKey(false)
+                setApiKey("")
+              }}
+            >
+              Keep the current key
+            </button>
+          </>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted">
+              API key:{" "}
+              <code>
+                {provider.last4 ? `••••${provider.last4}` : "none set"}
+              </code>
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onPress={() => setReplacingKey(true)}
+            >
+              Replace key
+            </Button>
+          </div>
+        )}
+      </div>
+      <ProviderCredentialFields
+        provider={providerId}
+        values={credentials}
+        onChange={setCredentials}
+        errors={credentialErrors}
+        redacted={stored.redacted}
+      />
+      <ClientArgsField
+        value={clientArgsText}
+        onChange={setClientArgsText}
+        error={clientArgs.ok ? null : clientArgs.error}
+      />
+    </FormDialog>
   )
 }
 
@@ -608,7 +775,7 @@ function TestOutcome({ state }: { state: TestState | undefined }) {
     )
   }
   return (
-    <span className="block max-w-xs break-words text-xs text-danger">
+    <span className="block max-w-xs break-words text-caption text-danger">
       {state.error ?? "Connection failed."}
     </span>
   )
@@ -621,17 +788,27 @@ function TestOutcome({ state }: { state: TestState | undefined }) {
 // listing (its backend never implemented /v1/models) is not unreachable: only
 // discovery is broken, and it may still serve requests, so it gets the amber
 // warning state rather than the red one (issue #447).
+// A repeated column's words, in their own casing. The uppercase these carried
+// was emphasis applied to every row alike, including the reachable ones, which
+// is the state a column watching for failures wants to draw the eye to least.
+// Same treatment, and same reasoning, as Activity's status column.
+const HEALTH_LABELS = {
+  ok: "Reachable",
+  degraded: "No model discovery",
+  unreachable: "Unreachable",
+} as const
+
 function HealthPill({ health }: { health: ProviderHealth | undefined }) {
   if (!health) {
     return <span className="text-caption">—</span>
   }
   const degraded = !health.ok && health.discovery_unsupported
-  const styles = health.ok
-    ? "border-success bg-success-subtle text-success"
-    : degraded
-      ? "border-warning bg-warning-subtle text-warning"
-      : "border-danger bg-danger-subtle text-danger"
-  const dot = health.ok ? "bg-success" : degraded ? "bg-warning" : "bg-danger"
+  // Only a real failure colors its text. Degraded is a provider that answers
+  // requests but lists no models, which is a fact about discovery rather than an
+  // outage, so it reads on the muted rung with the danger dot that says "worth
+  // noticing" without the ink that says "broken".
+  const styles = health.ok || degraded ? "text-muted" : "text-danger"
+  const dot = health.ok ? "bg-success" : "bg-danger"
   // The last-checked time lives in the top summary banner; the row just shows the
   // status. The error (and time) stay available on hover as the pill's tooltip.
   const checked = health.checked_at
@@ -644,14 +821,10 @@ function HealthPill({ health }: { health: ProviderHealth | undefined }) {
   return (
     <span
       title={title}
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${styles}`}
+      className={`flex items-center gap-2 text-mono-caption ${styles}`}
     >
-      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot}`} />
-      {health.ok
-        ? "Reachable"
-        : degraded
-          ? "No model discovery"
-          : "Unreachable"}
+      <Dot className={dot} />
+      {HEALTH_LABELS[health.ok ? "ok" : degraded ? "degraded" : "unreachable"]}
     </span>
   )
 }
@@ -680,8 +853,14 @@ function HealthSummary({
       : "bg-danger"
   const recheck = useRecheckProviderHealth()
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface px-4 py-2.5 text-sm">
-      <span aria-hidden className={`h-2 w-2 rounded-full ${dot}`} />
+    // A band of the page rather than a card, which is what the rest of this page
+    // became: the summary is a region between rules, so the rules are what bound
+    // it and the fill goes.
+    <Section
+      className="border-y border-border py-3"
+      contentClassName="flex flex-wrap items-center gap-3 text-sm"
+    >
+      <Dot className={dot} />
       <span className="font-medium text-foreground">
         {healthy} of {total} provider{total === 1 ? "" : "s"} reachable
       </span>
@@ -702,7 +881,7 @@ function HealthSummary({
       >
         {recheck.isPending ? "Re-checking…" : "Re-check all"}
       </Button>
-    </div>
+    </Section>
   )
 }
 
@@ -717,7 +896,7 @@ function Step({
 }) {
   return (
     <li className="flex gap-3">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary-subtle text-xs font-semibold text-primary-subtle-foreground">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center bg-primary-subtle text-xs font-semibold text-primary-subtle-foreground">
         {n}
       </span>
       <div className="text-sm">
@@ -744,71 +923,79 @@ function OnboardingPanel({
   secretKeyConfigured: boolean
 }) {
   return (
-    <Card>
-      <Card.Content className="flex flex-col gap-4 p-6">
+    <Section
+      className="border-y border-border py-5"
+      contentClassName="flex flex-col gap-4"
+    >
+      <div className="flex items-start gap-3">
+        <Dot className="mt-2.5 bg-accent" />
         <div>
-          <h2 className="text-heading">Welcome to Otari</h2>
+          <h2 className="text-display-sub">Welcome to Otari</h2>
           <p className="mt-1 text-sm text-muted">
             You are signed in. Add a provider to start serving models: three
             quick steps.
           </p>
         </div>
-        <ol className="flex flex-col gap-3">
-          <Step n={1} title="Add a provider">
-            Enter a provider name (like <code>openai</code>) and its API key.
-            Keys are encrypted at rest.
-          </Step>
-          <Step n={2} title="Test the connection">
-            Use <strong>Test</strong> on the provider row to confirm the key
-            works and see how many models it serves.
-          </Step>
-          <Step n={3} title="Send your first request">
-            Once a provider exists, the <strong>Overview</strong> page usually
-            offers a setup guide that hands you an API key and the call to make.
-            Either way, point your app at <code>/v1</code> on this gateway with
-            an API key (the one printed in the server logs starts{" "}
-            <code>gw-…</code>). See the{" "}
-            {/* /welcome is served by the gateway itself, not by a client route, so this
+      </div>
+      <ol className="flex flex-col gap-3">
+        <Step n={1} title="Add a provider">
+          Enter a provider name (like <code>openai</code>) and its API key. Keys
+          are encrypted at rest.
+        </Step>
+        <Step n={2} title="Test the connection">
+          Use <strong>Test</strong> on the provider row to confirm the key works
+          and see how many models it serves.
+        </Step>
+        <Step n={3} title="Send your first request">
+          Once a provider exists, the <strong>Overview</strong> page usually
+          offers a setup guide that hands you an API key and the call to make.
+          Either way, point your app at <code>/v1</code> on this gateway with an
+          API key (the one printed in the server logs starts <code>gw-…</code>).
+          See the{" "}
+          {/* /welcome is served by the gateway itself, not by a client route, so this
                 stays a plain path anchor: a router Link would resolve to /#/welcome, which
                 the catch-all route sends back to the overview. It leaves the SPA, so open a
                 new tab and the operator keeps the dashboard (as the guide's links do). */}
-            <a
-              href="/welcome"
-              target="_blank"
-              rel="noreferrer"
-              className="font-medium text-link hover:text-link-hover"
-            >
-              quickstart
-            </a>
-            .
-          </Step>
-        </ol>
-        {needsPricing ? (
-          <p className="text-sm text-muted">
-            Tip: <code>require_pricing</code> is on, so requests are rejected
-            until pricing is set.{" "}
-            <button
-              type="button"
-              className="font-medium text-link hover:text-link-hover disabled:opacity-50"
-              disabled={enabling}
-              onClick={onEnablePricing}
-            >
-              Enable default pricing
-            </button>{" "}
-            to meter new models with public rates.
-          </p>
-        ) : null}
-        <div>
-          <Button
-            variant="primary"
-            isDisabled={!secretKeyConfigured}
-            onPress={onAddProvider}
+          <a
+            href="/welcome"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-link hover:text-link-hover"
           >
-            Add your first provider
-          </Button>
-        </div>
-      </Card.Content>
-    </Card>
+            quickstart
+          </a>
+          .
+        </Step>
+      </ol>
+      {needsPricing ? (
+        <p className="text-sm text-muted">
+          Tip: <code>require_pricing</code> is on, so requests are rejected
+          until pricing is set.{" "}
+          <button
+            type="button"
+            className="font-medium text-link hover:text-link-hover disabled:opacity-(--disabled-opacity)"
+            disabled={enabling}
+            onClick={onEnablePricing}
+          >
+            Enable default pricing
+          </button>{" "}
+          to meter new models with public rates.
+        </p>
+      ) : null}
+      <div>
+        {/* Disabled at 0.4 rather than hidden. Blocked is not the same as
+              empty: an operator whose server has no secret key has to see the
+              action they are being denied, or the page reads as though adding a
+              provider is not a thing this product does. */}
+        <Button
+          variant="primary"
+          isDisabled={!secretKeyConfigured}
+          onPress={onAddProvider}
+        >
+          Add your first provider
+        </Button>
+      </div>
+    </Section>
   )
 }
 
@@ -823,8 +1010,21 @@ export function ProvidersPage() {
   const updateSettings = useUpdateSettings()
 
   const [addOpen, setAddOpen] = useState(false)
+  const [addOpenCount, setAddOpenCount] = useState(0)
   const [editing, setEditing] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<string>()
   const [tests, setTests] = useState<Record<string, TestState>>({})
+  // `addOpenCount` above is bumped on each open, and the add form is keyed on
+  // it, so the draft (a pasted provider key included) is fresh every time and
+  // untouched through the exit: the dialog keeps its content while it animates
+  // out, so clearing on the way out would blank the body in front of the
+  // operator. See feedback.md, "A draft is fresh on every open and untouched
+  // through the exit". Both openers on this page go through here.
+  const openAdd = () => {
+    setEditing(null)
+    setAddOpenCount((n) => n + 1)
+    setAddOpen(true)
+  }
 
   const rows = buildRows(meta.data?.providers, stored.data)
   const healthByInstance = new Map(
@@ -837,10 +1037,13 @@ export function ProvidersPage() {
     settings.data?.require_pricing === true &&
     settings.data.default_pricing === false
   // Gate adding providers on the server having OTARI_SECRET_KEY, which the
-  // membership context reports and `/v1/settings` no longer answers for every
+  // membership context reports and `/settings` no longer answers for every
   // caller who reaches this page (#839).
   const secretKeyConfigured = useProviderKeyEncryption()
-  const showOnboarding = !loading && rows.length === 0 && !addOpen
+  // Not gated on `addOpen`: unmounting the first-run panel when the dialog
+  // opens takes away the node react-aria restores focus to, so closing drops
+  // focus to `<body>`. The heading's action is ungated for the same reason.
+  const showOnboarding = !loading && rows.length === 0
 
   // Which test run each row is currently showing. A row's result is only worth
   // recording while it is still the answer to the newest thing the operator asked
@@ -933,9 +1136,15 @@ export function ProvidersPage() {
       id: "source",
       header: "Source",
       cell: (row) => (
-        <Chip size="sm" color={row.source === "stored" ? "accent" : "default"}>
-          {row.source === "stored" ? "stored" : "config"}
-        </Chip>
+        // A CATEGORY rather than a state: the vocabulary is closed (stored or
+        // config) and a row's answer never changes on its own. Categories carry
+        // no dot, and this one's was worse than decorative: an accent mark in a
+        // column of statuses reads as a state the column does not carry. The
+        // uppercase stays, which is what separates a category from the states
+        // in the column beside it.
+        <span className="text-mono-caption text-muted">
+          {row.source === "stored" ? "STORED" : "CONFIG"}
+        </span>
       ),
     },
     {
@@ -978,43 +1187,31 @@ export function ProvidersPage() {
       cell: (row) =>
         row.source === "stored" ? (
           <div className="flex flex-col items-end gap-1.5">
-            <div className="flex items-center gap-1.5">
-              <Button
-                size="sm"
-                variant="outline"
+            <RowActionRow>
+              <RowAction
+                icon={FiActivity}
+                label="Test"
                 // A row whose key can't be decrypted can't be tested; Edit/Delete still recover it.
                 isDisabled={
                   tests[row.instance]?.status === "pending" ||
                   row.stored?.decryptable === false
                 }
                 onPress={() => void runTest(row.instance)}
-              >
-                Test
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
+              />
+              <RowAction
+                icon={FiEdit2}
+                label="Edit"
                 onPress={() => {
                   setAddOpen(false)
                   setEditing(row.instance)
                 }}
-              >
-                Edit
-              </Button>
-              <ConfirmButton
-                confirmLabel="Delete"
-                isPending={deleteProvider.isPending}
-                // Clear the verdict too: a provider re-added under the same name
-                // is a different provider, and would otherwise inherit it.
-                onConfirm={() =>
-                  deleteProvider.mutate(row.instance, {
-                    onSuccess: () => clearTest(row.instance),
-                  })
-                }
-              >
-                Delete
-              </ConfirmButton>
-            </div>
+              />
+              <RowAction
+                icon={FiTrash2}
+                label="Delete"
+                onPress={() => setPendingDelete(row.instance)}
+              />
+            </RowActionRow>
             <TestOutcome state={tests[row.instance]} />
           </div>
         ) : (
@@ -1027,26 +1224,25 @@ export function ProvidersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
+      <PageIntro
         title="Providers"
-        description="Add provider API keys here to serve models without editing config.yml. Keys are encrypted at rest."
         action={
-          // The first-run card supplies its own focused call to action. The form
-          // card has its own Close, so the header action is redundant while open.
-          addOpen || showOnboarding ? null : (
-            <Button
-              variant="primary"
-              isDisabled={!secretKeyConfigured}
-              onPress={() => {
-                setEditing(null)
-                setAddOpen(true)
-              }}
-            >
-              Add provider
-            </Button>
-          )
+          <Button
+            // Visible while the dialog is open and beside the first-run
+            // panel's own copy of it: the dialog is over the page. Disabled
+            // rather than hidden without a server secret key, which is the
+            // rule for a control that carries its own reason nearby.
+            variant="primary"
+            isDisabled={!secretKeyConfigured}
+            onPress={openAdd}
+          >
+            Add provider
+          </Button>
         }
-      />
+      >
+        Add provider API keys here to serve models without editing config.yml.
+        Keys are encrypted at rest.
+      </PageIntro>
 
       {/* `settings.error` is deliberately absent. The page reads that endpoint
           only for the pricing hint below, and it is operator-only, so a caller
@@ -1069,30 +1265,39 @@ export function ProvidersPage() {
           stored.error ??
           context.error ??
           health.error ??
-          updateSettings.error ??
-          deleteProvider.error
+          updateSettings.error
         }
       />
 
-      {/* Held back until the context has answered. A context that failed leaves
-          the key state unknown, which disables the control above but is not
-          grounds for telling the operator the key is missing: the banner beside
-          it already names the real error. */}
+      {/* A band of the page, not a tinted box: a square danger dot, the setting
+          named in mono so it is copyable by eye, and the consequence in muted
+          prose. No fill, no border, no radius. */}
+      {/* `context.data &&` as well as the flag: a context read that failed
+          leaves the flag falsy, and claiming the key is unset would be a guess,
+          and the wrong one whenever the deployment has one. The error banner
+          above already names the read that actually failed. */}
       {context.data && !secretKeyConfigured ? (
-        <InfoBanner tone="warning">
-          <code>OTARI_SECRET_KEY</code> is not set, so provider keys can't be
-          encrypted at rest and adding providers from the dashboard is disabled.
-          Set it on the server and restart to add providers here. Providers
-          defined in <code>config.yml</code> keep working without it.
-        </InfoBanner>
+        <Section
+          className="border-y border-border py-3"
+          contentClassName="flex items-start gap-3 text-sm"
+        >
+          <Dot className="mt-2 bg-danger" />
+          <p className="text-muted">
+            <span className="text-mono-caption text-foreground">
+              OTARI_SECRET_KEY
+            </span>{" "}
+            is not set, so provider keys can&rsquo;t be encrypted at rest and
+            adding providers from the dashboard is disabled. Set it on the
+            server and restart to add providers here. Providers defined in{" "}
+            <span className="text-mono-caption">config.yml</span> keep working
+            without it.
+          </p>
+        </Section>
       ) : null}
 
       {showOnboarding ? (
         <OnboardingPanel
-          onAddProvider={() => {
-            setEditing(null)
-            setAddOpen(true)
-          }}
+          onAddProvider={openAdd}
           needsPricing={needsPricing}
           onEnablePricing={() =>
             updateSettings.mutate({ default_pricing: true })
@@ -1109,14 +1314,16 @@ export function ProvidersPage() {
           if it was opened while settings were still loading and the key then turns
           out to be unavailable, retract it so its submit can never reach the create
           mutation. The banner above explains why. */}
-      {addOpen && secretKeyConfigured ? (
-        <AddProviderForm onClose={() => setAddOpen(false)} />
-      ) : null}
+      <AddProviderForm
+        key={addOpenCount}
+        isOpen={addOpen && secretKeyConfigured}
+        onClose={() => setAddOpen(false)}
+      />
       {editingProvider ? (
         <EditProviderForm
-          // Remount when the operator switches rows: the fields are seeded from
-          // the provider once, so without this, editing a second provider would
-          // open with the first one's values (and save them onto it).
+          // The fields are seeded from the provider once, so the next Edit has
+          // to arrive at a fresh form rather than the last provider's values,
+          // which a save would then write onto this one.
           key={editingProvider.instance}
           provider={editingProvider}
           onClose={() => setEditing(null)}
@@ -1137,15 +1344,48 @@ export function ProvidersPage() {
           panel owns the empty state, so a fresh gateway shows one call to action,
           not a panel stacked over a redundant "no rows" table. */}
       {showOnboarding ? null : (
-        <DataTable
-          ariaLabel="Providers"
-          columns={columns}
-          rows={rows}
-          getRowKey={(row) => row.instance}
-          isLoading={loading}
-          emptyContent="No providers yet. Add your first provider to start serving models."
-        />
+        <TableScrollFrame className="otari-providers-table">
+          <DataTable
+            ariaLabel="Providers"
+            columns={columns}
+            rows={rows}
+            getRowKey={(row) => row.instance}
+            isLoading={loading}
+            emptyContent="No providers yet. Add your first provider to start serving models."
+          />
+        </TableScrollFrame>
       )}
+
+      <ConfirmDialog
+        isOpen={pendingDelete !== undefined}
+        // Cleared on the way out: a refusal otherwise sits on the mutation and
+        // greets the next row's confirm as if that row had failed.
+        onOpenChange={(open) => {
+          if (open) return
+          setPendingDelete(undefined)
+          deleteProvider.reset()
+        }}
+        heading="Delete provider"
+        body={
+          pendingDelete
+            ? `${pendingDelete} and the credential stored with it are removed. A request routed to it fails until another provider serves its models.`
+            : null
+        }
+        confirmLabel="Delete provider"
+        isPending={deleteProvider.isPending}
+        error={deleteProvider.error}
+        onConfirm={() => {
+          if (pendingDelete === undefined) return
+          deleteProvider.mutate(pendingDelete, {
+            // Clear the verdict too: a provider re-added under the same name is
+            // a different provider, and would otherwise inherit it.
+            onSuccess: () => {
+              clearTest(pendingDelete)
+              setPendingDelete(undefined)
+            },
+          })
+        }}
+      />
     </div>
   )
 }

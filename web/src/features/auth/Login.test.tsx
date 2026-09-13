@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useAuth } from "@/features/auth/AuthContext"
 import { Login } from "@/features/auth/Login"
+import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { bootstrap } from "@/tests/fixtures"
@@ -28,12 +29,14 @@ function Mounted({
   mailReady = false,
   maintenanceMode = false,
   oauthProviders = [],
+  openSignup = false,
 }: {
   children: React.ReactNode
   signInMethods?: ("master_key" | "password" | "passkey")[]
   mailReady?: boolean
   maintenanceMode?: boolean
   oauthProviders?: string[]
+  openSignup?: boolean
 }) {
   return (
     <AppProviders>
@@ -43,6 +46,7 @@ function Mounted({
           mail_ready: mailReady,
           maintenance_mode: maintenanceMode,
           oauth_providers: oauthProviders,
+          open_signup: openSignup,
         })}
       >
         {children}
@@ -98,7 +102,7 @@ describe("Login", () => {
     expect(await screen.findByText("SIGNED IN")).toBeInTheDocument()
 
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe("/v1/auth/session")
+    expect(url).toBe(`${API_ROOT}/auth/session`)
     expect(init?.method).toBe("POST")
     expect(init?.body).toBe(JSON.stringify({ master_key: "sk-correct" }))
     // The raw key must not land in any JS-readable storage.
@@ -162,6 +166,108 @@ describe("Login", () => {
     ).toBeInTheDocument()
   })
 
+  // otari-ai#2100. A deployment publishes both typed credentials whenever a
+  // member holds a password on one its operator never claimed, and the screen
+  // used to render the pair as either/or: the master-key box, and nowhere to
+  // put the password that would have worked.
+  it("shows the password form when both typed credentials are published", () => {
+    render(
+      <Mounted signInMethods={["master_key", "password"]}>
+        <Harness />
+      </Mounted>,
+    )
+
+    expect(screen.getByLabelText("Email")).toBeInTheDocument()
+    expect(screen.getByLabelText("Password")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Master key")).toBeNull()
+  })
+
+  it("swaps to the master-key box on request, and back", async () => {
+    const user = userEvent.setup()
+    render(
+      <Mounted signInMethods={["master_key", "password"]}>
+        <Harness />
+      </Mounted>,
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Use your master key" }),
+    )
+
+    expect(screen.getByLabelText("Master key")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Email")).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", { name: "Use your email and password" }),
+    )
+
+    expect(screen.getByLabelText("Email")).toBeInTheDocument()
+  })
+
+  it("signs in with a member password on a deployment nobody has claimed", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(JSON.stringify({ user_id: "u1" }), { status: 200 }),
+      )
+    const user = userEvent.setup()
+    render(
+      <Mounted signInMethods={["master_key", "password"]}>
+        <Harness />
+      </Mounted>,
+    )
+
+    await user.type(screen.getByLabelText("Email"), "member@example.com")
+    await user.type(screen.getByLabelText("Password"), "correct-horse")
+    await user.click(screen.getByRole("button", { name: "Sign in" }))
+
+    expect(await screen.findByText("SIGNED IN")).toBeInTheDocument()
+    const body = String(
+      (fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined)?.body,
+    )
+    expect(JSON.parse(body)).toEqual({
+      email: "member@example.com",
+      password: "correct-horse",
+    })
+  })
+
+  it("offers no swap when the gateway publishes one typed credential", () => {
+    render(
+      <Mounted signInMethods={["password"]}>
+        <Harness />
+      </Mounted>,
+    )
+
+    expect(
+      screen.queryByRole("button", { name: /Use your master key/ }),
+    ).toBeNull()
+  })
+
+  it("offers recovery to a member holding a password on an unclaimed deployment", () => {
+    render(
+      <Mounted mailReady signInMethods={["master_key", "password"]}>
+        <Harness />
+      </Mounted>,
+    )
+
+    expect(
+      screen.getByRole("link", { name: /Forgot your password/ }),
+    ).toBeInTheDocument()
+  })
+
+  it("invites registration rather than a claim where signup is open", () => {
+    render(
+      <Mounted mailReady openSignup>
+        <Harness />
+      </Mounted>,
+    )
+
+    expect(
+      screen.getByRole("link", { name: /Create an account/ }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: /Set your password/ })).toBeNull()
+  })
+
   it("links to the auth-free welcome page", () => {
     render(
       <Mounted>
@@ -171,6 +277,38 @@ describe("Login", () => {
 
     const link = screen.getByRole("link", { name: /welcome/i })
     expect(link).toHaveAttribute("href", "/welcome")
+  })
+
+  // The note under the rule explains what becomes of the credential, so it has
+  // to name the credential the form above actually took. One block served both
+  // branches before, telling anyone signing in with an email and password that
+  // their "master key" was exchanged for a cookie.
+  it("names the master key in the credential note on an unclaimed deployment", () => {
+    render(
+      <Mounted>
+        <Harness />
+      </Mounted>,
+    )
+
+    expect(
+      screen.getByText(/master key/, { selector: "a" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/^Your password is sent once/)).toBeNull()
+  })
+
+  it("names the password in the credential note once the deployment is claimed", () => {
+    render(
+      <Mounted signInMethods={["password"]}>
+        <Harness />
+      </Mounted>,
+    )
+
+    expect(
+      screen.getByText(/Your password is sent once and exchanged/),
+    ).toBeInTheDocument()
+    // And the master-key link is gone with it: `/welcome` documents the
+    // bootstrap credential, which is not the one this form takes any more.
+    expect(screen.queryByText(/master key/, { selector: "a" })).toBeNull()
   })
 
   it("shows an error and stays on the form when the key is rejected", async () => {
@@ -218,7 +356,7 @@ describe("Login", () => {
     expect(await screen.findByText("SIGNED IN")).toBeInTheDocument()
 
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe("/v1/auth/session")
+    expect(url).toBe(`${API_ROOT}/auth/session`)
     expect(init?.body).toBe(
       JSON.stringify({
         email: "operator@example.com",
@@ -277,7 +415,7 @@ describe("Login", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }))
 
     expect(await screen.findByText("SIGNED IN")).toBeInTheDocument()
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/v1/auth/session")
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`${API_ROOT}/auth/session`)
   })
 
   it("reports a malformed email locally instead of using browser validation", async () => {
@@ -411,7 +549,7 @@ describe("Login", () => {
   })
 
   it("offers no credential box when the gateway reports it cannot mint a session", async () => {
-    // `/v1/bootstrap` answers [] when it cannot reach its database. A form here
+    // /api/v1/bootstrap answers [] when it cannot reach its database. A form here
     // could only ever be refused, and on a claimed deployment the fallback form
     // would be the master-key one, whose refusal reads as "wrong key".
     render(
@@ -508,7 +646,25 @@ describe("Login", () => {
       name: "Finishing sign-out…",
     })
     expect(submitButton).toBeDisabled()
-    await user.click(submitButton)
+
+    // The submit event straight at the form, rather than a press on the
+    // disabled button, and the difference is not cosmetic.
+    //
+    // A press is not a path a browser has here: Chromium delivers pointerdown
+    // and pointerup to a disabled control but no mousedown, mouseup or click,
+    // so there is no activation for the guard to refuse. Under jsdom the
+    // synthesized press did not vanish either: it produced a submit event 81ms
+    // later, once the revocation had settled and the button read "Sign in",
+    // which signed in with no further interaction and left this test racing
+    // its own next click. That race is what made this test fail about one full
+    // run in three. Enter is no substitute: implicit submission goes through
+    // the default button, which is disabled, so it reaches nothing and the
+    // assertion below would hold with the guard deleted.
+    //
+    // So the guard is exercised where it actually lives, on the submit handler,
+    // by dispatching the event the handler is bound to. Removing
+    // `isSigningOut` from `submit`'s guard fails this line.
+    fireEvent.submit(keyField.closest("form") as HTMLFormElement)
 
     // Blocked: no sign-in POST was attempted while the old sign-out was pending.
     expect(
@@ -793,10 +949,10 @@ describe("Login with a passkey", () => {
       .spyOn(globalThis, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
         const url = String(input)
-        if (url === "/v1/auth/webauthn/authenticate/options") {
+        if (url === `${API_ROOT}/auth/webauthn/authenticate/options`) {
           return Promise.resolve(jsonResponse({ challenge: "Y2hhbGxlbmdl" }))
         }
-        if (url === "/v1/auth/webauthn/authenticate") {
+        if (url === `${API_ROOT}/auth/webauthn/authenticate`) {
           return Promise.resolve(verify())
         }
         // Anything else the shell asks for (the build poll, say) answers
@@ -840,7 +996,9 @@ describe("Login with a passkey", () => {
     await user.keyboard("{Enter}")
 
     expect(
-      fetchMock.mock.calls.some(([url]) => String(url) === "/v1/auth/session"),
+      fetchMock.mock.calls.some(
+        ([url]) => String(url) === `${API_ROOT}/auth/session`,
+      ),
     ).toBe(false)
 
     releaseCeremony(assertion())
@@ -1107,7 +1265,7 @@ describe("Login with a passkey", () => {
 
       await waitFor(() => expect(assign).toHaveBeenCalled())
       expect(fetchMock.mock.calls[0]?.[0]).toBe(
-        "/v1/auth/oauth/google/authorize",
+        `${API_ROOT}/auth/oauth/google/authorize`,
       )
       // Stored *before* the navigation, or the callback would have nothing to
       // compare the returned state against.
@@ -1165,7 +1323,7 @@ describe("Login with a passkey", () => {
 
       expect(
         fetchMock.mock.calls.some(
-          ([url]) => String(url) === "/v1/auth/session",
+          ([url]) => String(url) === `${API_ROOT}/auth/session`,
         ),
       ).toBe(false)
       expect(assign).not.toHaveBeenCalled()

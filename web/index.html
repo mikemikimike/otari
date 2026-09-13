@@ -14,7 +14,7 @@
          is a literal copy of --color-primary; the matching `theme_color` in
          pwaManifest.ts (which generates /pwa/manifest.webmanifest) is the other
          one. Change all three together. -->
-    <meta name="theme-color" content="#4a7d8f" />
+    <meta name="theme-color" content="#0098a4" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Otari" />
@@ -22,7 +22,7 @@
          would run the app shell underneath it, and the shell has no safe-area
          insets to sit out of the way. -->
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <title>Otari Dashboard</title>
+    <title>Otari</title>
     <!-- Applies the remembered theme before the first paint. `useTheme` sets the
          same three properties, but it can only do so once React has mounted,
          which is after the boot screen below has already been painted light: a
@@ -63,14 +63,14 @@
         align-items: center;
         justify-content: center;
         min-height: 100vh;
-        background: var(--color-background, #ffffff);
+        background: var(--color-background, #f7f8f8);
       }
       .app-boot-spinner {
         width: 1.75rem;
         height: 1.75rem;
         border-radius: 9999px;
-        border: 2px solid var(--color-border, #d6dce1);
-        border-top-color: var(--color-primary, #4a7d8f);
+        border: 2px solid var(--color-border, rgb(0 0 0 / 0.06));
+        border-top-color: var(--color-primary, #0098a4);
         animation: app-boot-spin 0.7s linear infinite;
       }
       @keyframes app-boot-spin {

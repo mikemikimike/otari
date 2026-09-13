@@ -1,5 +1,7 @@
-import { Button, Card, Input, Label, Link, TextField } from "@heroui/react"
+import { Button, Input, Label, Link, TextField } from "@heroui/react"
 import { useState } from "react"
+import { FiAlertCircle, FiChevronRight, FiEye, FiEyeOff } from "react-icons/fi"
+import { errorMessage } from "@/design-system/feedback/errorMessage"
 import { useAuth } from "@/features/auth/AuthContext"
 import type { SignInCredential } from "@/shared/api/client"
 import {
@@ -8,7 +10,6 @@ import {
   signInWithPasskey,
   startOAuthSignIn,
 } from "@/shared/api/client"
-import { errorMessage } from "@/shared/components/ui"
 import {
   PasskeyCancelledError,
   supportsPasskeys,
@@ -20,7 +21,7 @@ import {
 } from "@/shared/telemetry/errorCode"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
-
+import { LoginPageShell } from "./LoginPageShell"
 import { rememberOAuthState } from "./OAuthCallbackPage"
 import {
   OAUTH_PROVIDER_ICONS,
@@ -53,55 +54,9 @@ const ERROR_IDS: Record<CredentialField, string> = {
   masterKey: "login-master-key-error",
 }
 
-/**
- * The page frame: optically centered, and stable while the card grows.
- *
- * `items-center` gave the second at the cost of the first. Centering measures
- * the card, so anything that grows it moves its top edge up by half the growth,
- * and opening the first-run disclosure walked the submit button out from under
- * a pointer already resting on it. A flat top offset fixed that and left the
- * card sitting high with the page empty below it.
- *
- * So the offset is half the viewport minus a **constant** half-height, rather
- * than minus the card's real one. 17.5rem is the figure that best fits half of
- * what the card measures at rest across its branches, taken off the running
- * page rather than guessed: 537px for the master key with one footer link,
- * 581px with two, 589px for a password, 721px for a password with all four
- * links. Every one of those lands within 14px of true center, except the
- * tallest, which nearly fills a 900px window anyway. Because the figure is a
- * constant rather than the content's own height, the offset does not move when
- * the disclosure opens or a refusal wraps; the card grows downward from a
- * fixed top edge. `max()` floors it on a window shorter than
- * the card, where the page scrolls instead.
- *
- * `vh`, deliberately, not `dvh`: the dynamic unit shrinks when a phone's soft
- * keyboard opens, which would re-center the card at the exact moment someone is
- * typing into it.
- */
-const PAGE =
-  "flex min-h-full items-start justify-center px-4 pt-[max(2rem,calc(50vh-17.5rem))] pb-16"
+const CARD = "flex flex-col gap-6"
 
-/**
- * The same frame for the unavailable state, whose card is around 351px rather
- * than 537px. Sharing the form's figure would leave this one sitting about
- * 110px high, which is the complaint the computed offset exists to answer.
- */
-const PAGE_FLAT =
-  "flex min-h-full items-start justify-center px-4 pt-[max(2rem,calc(50vh-11.5rem))] pb-16"
-
-/**
- * Card padding, on top of the 16px `<Card>` itself contributes. Read on screen
- * the top and bottom are equal: the bottom's smaller figure is completed by the
- * 12px of invisible padding under the 44px row the last footer link sits in.
- */
-const CARD = "flex flex-col gap-6 px-6 pt-6 pb-3 sm:px-8 sm:pt-8 sm:pb-5"
-
-/**
- * The same card for the unavailable state, which ends in a paragraph rather
- * than a 44px row, so it has no invisible 12px to borrow and pays the padding
- * itself.
- */
-const CARD_FLAT = "flex flex-col gap-6 px-6 py-6 text-center sm:px-8 sm:py-8"
+const CARD_FLAT = "flex flex-col gap-4"
 
 /** The screen's one page-defining line. */
 const HEADING = "text-display"
@@ -114,77 +69,30 @@ const HEADING = "text-display"
  * `bg-surface-muted` is declared nowhere and would compile to nothing at all.
  */
 const CODE_CHIP =
-  "rounded bg-surface-alt px-1 py-px font-mono text-xs whitespace-nowrap text-foreground"
+  "bg-surface-alt px-1 py-px font-mono text-xs whitespace-nowrap text-foreground"
 
 /** Sits on the label row beside a refusal. */
 function AlertIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      aria-hidden="true"
-      className="h-3.5 w-3.5 shrink-0"
-    >
-      <circle cx="12" cy="12" r="9.25" />
-      <path d="M12 7.5v6" strokeLinecap="round" />
-      <path d="M12 16.6h.01" strokeLinecap="round" strokeWidth="2.4" />
-    </svg>
-  )
+  return <FiAlertCircle aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
 }
 
-/**
- * The reveal toggle's two states. Drawn rather than set as a glyph so it takes
- * `currentColor` and renders the same face on every platform.
- */
+/** The reveal toggle's two states, both taking `currentColor`. */
 function EyeIcon({ isCrossedOut }: { isCrossedOut: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      aria-hidden="true"
-      className="h-4.5 w-4.5"
-    >
-      <path
-        d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="12" cy="12" r="2.75" />
-      {isCrossedOut ? (
-        <path d="M4 20 20 4" strokeLinecap="round" strokeWidth="1.8" />
-      ) : null}
-    </svg>
-  )
+  const Glyph = isCrossedOut ? FiEyeOff : FiEye
+  return <Glyph aria-hidden="true" className="h-4.5 w-4.5" />
 }
 
 /** The disclosure's caret, rotating with its `<details open>`. */
 function DisclosureCaret() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
+    <FiChevronRight
       aria-hidden="true"
       className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90 motion-reduce:transition-none"
-    >
-      <path d="M9 5l7 7-7 7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    />
   )
 }
 
-/**
- * The row above a credential box: label and required marker grouped left, the
- * field's refusal right, both on the label's existing 20px line. This is where
- * an `<ErrorBanner>` used to go, between the last field and the button, and it
- * inserted about 46px right where the pointer already was. The card's fixed
- * top edge keeps the page stable when a gateway instruction wraps below this
- * row, rather than hiding the instruction a person needs to act on.
- */
+/** Label, required marker, and inline validation for a credential field. */
 function LabelRow({
   label,
   error,
@@ -218,7 +126,7 @@ function LabelRow({
         <span
           id={errorId}
           role="alert"
-          className="flex min-w-0 items-center gap-1 text-sm text-danger"
+          className="flex min-w-0 items-center gap-1 text-caption text-danger"
         >
           <AlertIcon />
           <span title={message}>{message}</span>
@@ -232,11 +140,21 @@ function LabelRow({
  * The sign-in screen, rendering whichever credential this deployment accepts.
  *
  * A standalone gateway takes the master key until an operator claims it by
- * setting a password, and email and password from then on
- * (mozilla-ai/otari-ai#1716). The gateway publishes which applies in the
- * bootstrap's `sign_in_methods`, so the form is chosen from that rather than
- * from a refusal: presenting the master-key box to a claimed deployment would
- * ask for the one credential its sign-in endpoint no longer takes.
+ * setting a password (mozilla-ai/otari-ai#1716), and takes a password from
+ * whichever identity holds one, whenever one does. The gateway publishes both
+ * facts in the bootstrap's `sign_in_methods`, so the form is chosen from that
+ * rather than from a refusal: presenting the master-key box to a claimed
+ * deployment would ask for the one credential its sign-in endpoint no longer
+ * takes.
+ *
+ * The two are not alternatives to each other, which is what otari-ai#2100 was
+ * about. A deployment publishes both whenever a member holds a password on one
+ * its operator never claimed, and this screen used to show the master-key box
+ * alone, so the member whose password would have worked had no form to put it
+ * in. With both published the password form is what renders, and the
+ * master-key box is one press away under the rule below it: somebody holding a
+ * key knows they hold one, and everybody else would be reading a box about a
+ * credential they have never seen.
  *
  * Below the form sit the ways in that are not a credential: claiming a rostered
  * identity, recovering a forgotten password, and asking for a fresh
@@ -244,13 +162,11 @@ function LabelRow({
  * start by sending a message, so all three are hidden on a deployment whose
  * bootstrap reports `mail_ready: false` rather than offered and then refused
  * with a 503, the way otari#648 already settled it for the invitation form.
- * Recovery is hidden on an unclaimed deployment as well: `master_key` is
- * published exactly while the operator identity holds no password (otari#702),
- * so there is nothing yet for the operator to reset, and the way back in is the
- * master key against `PUT /v1/auth/password` (see docs/access-control.md). A
- * member who signed up on a deployment its operator never claimed is the one
- * case this screen does not serve: it offers the master-key box, and they sign
- * in by calling `POST /v1/auth/session` until the operator claims it.
+ * The two recovery links need one thing more: `password` in that same list,
+ * which is the gateway saying some identity holds one. Nothing has a reset link
+ * to reset before then, and an operator who has not claimed the deployment
+ * recovers through the master key against `PUT /v1/auth/password` instead (see
+ * docs/access-control.md) rather than through a mailed link.
  *
  * A passkey signs in beside the form rather than instead of it (otari#652),
  * offered only when the gateway publishes `passkey` *and* this browser can run
@@ -259,23 +175,38 @@ function LabelRow({
  * configured: a provider nobody set up is absent rather than rendered disabled,
  * and a deployment that configured none carries no OAuth affordance at all.
  *
- * Three decisions here are load-bearing rather than cosmetic, and each carries
- * its own note where it is made: the card is anchored instead of centered, a
- * refusal is rendered on a label row instead of in a banner, and the submit
- * button is never disabled for an empty box. All three are about the moment a
- * pointer is already resting on that button.
+ * Refusals render on the field label, and empty fields remain submittable so
+ * validation can explain what to enter.
  */
 export function Login() {
   const { login, isSigningOut } = useAuth()
   const { recordEvent } = useTelemetry()
-  const { sign_in_methods, mail_ready, maintenance_mode, oauth_providers } =
-    useDeployment()
-  const usesPassword = sign_in_methods.includes("password")
+  const {
+    sign_in_methods,
+    mail_ready,
+    maintenance_mode,
+    oauth_providers,
+    open_signup,
+  } = useDeployment()
+  const offersPasswordForm = sign_in_methods.includes("password")
+  const offersMasterKeyForm = sign_in_methods.includes("master_key")
+  // Both are published whenever a member holds a password on a deployment its
+  // operator never claimed, so which box is on screen is a choice rather than a
+  // reading of the bootstrap. The password form is the default wherever it is
+  // offered, because a deployment has one master key and as many passwords as
+  // it has people.
+  const [typedCredential, setTypedCredential] = useState<
+    "password" | "masterKey"
+  >(offersPasswordForm ? "password" : "masterKey")
+  const usesPassword = typedCredential === "password"
+  const offersCredentialSwitch = offersPasswordForm && offersMasterKeyForm
   // An empty list is the gateway saying it cannot mint a session at all right
-  // now, which is what `/v1/bootstrap` answers when it cannot reach its
-  // database. Falling through to a credential form would offer the operator a
-  // box whose only possible outcome is a refusal, and on a claimed deployment
-  // it would be the *master-key* box, whose refusal reads as "wrong key".
+  // now. Two ways to get there: `/bootstrap` answers [] when it cannot reach
+  // its database, and `normalizeBootstrap` fills the same [] in for a gateway
+  // too old to publish the field (otari#806). Falling through to a credential
+  // form would offer the operator a box whose only possible outcome is a
+  // refusal, and on a claimed deployment it would be the *master-key* box,
+  // whose refusal reads as "wrong key".
   const signInUnavailable = sign_in_methods.length === 0
   // Every flow below the form begins with an email, so none of them can work
   // on a gateway that cannot send one. The two recovery links need one thing
@@ -285,7 +216,11 @@ export function Login() {
   // signup already flips the deployment to `password`, so this is not the
   // caller who needs a resend being left without one.
   const offersSignup = mail_ready
-  const offersRecovery = mail_ready && usesPassword
+  // Off the bootstrap rather than off `usesPassword`, which now says which box
+  // is showing: whether a password can be reset is a fact about the deployment,
+  // and it does not stop being true while somebody is looking at the master-key
+  // box.
+  const offersRecovery = mail_ready && offersPasswordForm
   // Two independent conditions, and both have to hold. The gateway publishes
   // `passkey` only while some credential could actually answer, and a browser
   // that cannot run the ceremony would turn the button into a dead end.
@@ -581,28 +516,28 @@ export function Login() {
 
   if (signInUnavailable) {
     return (
-      <div className={PAGE_FLAT}>
-        <Card className="w-full max-w-md">
-          <Card.Content className={CARD_FLAT}>
-            {/* Grouped so the mark sits 16px from the heading it belongs to,
-                the way it does on the form. alt="" because the <h1> under it
-                already names the product. */}
-            <div className="flex flex-col items-center gap-4">
-              <img src="/favicon.svg" alt="" className="h-10 w-11" />
-              <h1 className={HEADING}>Otari sign-in is unavailable</h1>
-            </div>
-            <p className="text-sm text-muted">
-              This gateway cannot start a session at the moment, which usually
-              means it cannot reach its database. It reports which credentials
-              it accepts once it recovers, so reload this page to try again.
-            </p>
-            <p className="text-sm text-muted">
-              The management API is unaffected by this screen and still accepts
-              the master key.
-            </p>
-          </Card.Content>
-        </Card>
-      </div>
+      <LoginPageShell>
+        <div className={CARD_FLAT}>
+          <h1 className={HEADING}>Otari sign-in is unavailable</h1>
+          {/* Two causes, because reloading only answers one of them. An empty
+              `sign_in_methods` is what the gateway sends when it cannot reach
+              its database, and also what `normalizeBootstrap` fills in for a
+              gateway too old to publish the field at all (otari#806). Naming
+              only the first sends an operator to restart a database that was
+              never the problem. */}
+          <p className="text-sm text-muted">
+            This gateway published no sign-in method. That usually means it
+            cannot reach its database, and it says which credentials it accepts
+            once it recovers, so reloading is worth a try. It can also mean the
+            gateway is older than the dashboard it is serving, and reloading
+            will not settle that: the two have to be brought back into step.
+          </p>
+          <p className="text-sm text-muted">
+            The management API is unaffected by this screen and still accepts
+            the master key.
+          </p>
+        </div>
+      </LoginPageShell>
     )
   }
 
@@ -620,318 +555,366 @@ export function Login() {
   // actionable of the two if they ever did collide.
   if (maintenance_mode) {
     return (
-      <div className={PAGE_FLAT}>
-        <Card className="w-full max-w-md">
-          <Card.Content className={CARD_FLAT}>
-            <div className="flex flex-col items-center gap-4">
-              <img src="/favicon.svg" alt="" className="h-10 w-11" />
-              <h1 className={HEADING}>Otari is under maintenance</h1>
-            </div>
-            <p className="text-sm text-muted">
-              This gateway is not starting new dashboard sessions while it is
-              being updated. It should be back shortly, so reload this page to
-              try again.
-            </p>
-            <p className="text-sm text-muted">
-              The API is unaffected by this screen and still serves requests,
-              and the management API still accepts the master key.
-            </p>
-          </Card.Content>
-        </Card>
-      </div>
+      <LoginPageShell>
+        <div className={CARD_FLAT}>
+          <h1 className={HEADING}>Otari is under maintenance</h1>
+          <p className="text-sm text-muted">
+            This gateway is not starting new dashboard sessions while it is
+            being updated. It should be back shortly, so reload this page to try
+            again.
+          </p>
+          <p className="text-sm text-muted">
+            The API is unaffected by this screen and still serves requests, and
+            the management API still accepts the master key.
+          </p>
+        </div>
+      </LoginPageShell>
     )
   }
 
   return (
-    <div className={PAGE}>
-      <Card className="w-full max-w-md">
-        <Card.Content className={CARD}>
-          <div className="flex flex-col items-center gap-4 text-center">
-            {/* Decorative: the <h1> beside it says "Otari Dashboard". */}
-            <img src="/favicon.svg" alt="" className="h-10 w-11" />
-            <div className="flex flex-col gap-1.5">
-              <h1 className={HEADING}>Otari Dashboard</h1>
-              <p className="text-sm text-pretty text-muted">
-                {usesPassword
-                  ? "Sign in to browse models, set pricing, and manage settings."
-                  : "Sign in with your master key to browse models, set pricing, and manage settings."}
-              </p>
-            </div>
-          </div>
+    <LoginPageShell>
+      <div className={CARD}>
+        <div className="flex flex-col gap-1.5">
+          <h1 className={HEADING}>Otari</h1>
+          <p className="text-sm text-pretty text-muted">
+            {usesPassword
+              ? "Sign in to browse models, set pricing, and manage settings."
+              : "Sign in with your master key to browse models, set pricing, and manage settings."}
+          </p>
+        </div>
 
-          {/* Section boundaries read 24px on screen throughout. A 44px row
+        {/* Section boundaries read 24px on screen throughout. A 44px row
               carries 12px of invisible padding above and below its own text, so
               the column next to one runs at 12px to land on the same 24px: the
               master-key branch has the disclosure's summary row in it, and the
               password branch has no such row and spaces at the full 24px. */}
-          <form
-            className={`flex flex-col ${usesPassword ? "gap-6" : "gap-3"}`}
-            noValidate
-            onSubmit={(event) => {
-              event.preventDefault()
-              void submit()
-            }}
-          >
-            {usesPassword ? (
-              <>
-                <TextField
-                  value={email}
-                  onChange={(next) => {
-                    setEmail(next)
-                    clearError()
-                  }}
-                  type="email"
-                  isRequired
-                  validationBehavior={VALIDATION}
-                  isInvalid={errorField === "email"}
-                  className="flex flex-col gap-2"
-                >
-                  <LabelRow
-                    label="Email"
-                    error={errorField === "email" ? error : null}
-                    errorId={ERROR_IDS.email}
-                  />
-                  {/* 16px, not the 14px HeroUI drops to from `sm:` up: under
+        <form
+          className={`flex flex-col ${usesPassword ? "gap-6" : "gap-3"}`}
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault()
+            void submit()
+          }}
+        >
+          {usesPassword ? (
+            <>
+              <TextField
+                value={email}
+                onChange={(next) => {
+                  setEmail(next)
+                  clearError()
+                }}
+                type="email"
+                isRequired
+                validationBehavior={VALIDATION}
+                isInvalid={errorField === "email"}
+                className="flex flex-col gap-2"
+              >
+                <LabelRow
+                  label="Email"
+                  error={errorField === "email" ? error : null}
+                  errorId={ERROR_IDS.email}
+                />
+                {/* 16px, not the 14px HeroUI drops to from `sm:` up: under
                       16px iOS Safari zooms the page on focus. No autoFocus,
                       which on a page load raises the soft keyboard over half a
                       phone screen and makes a focus ring the resting state. */}
+                <Input
+                  placeholder="you@example.com"
+                  autoComplete="username"
+                  aria-describedby={
+                    errorField === "email" ? ERROR_IDS.email : undefined
+                  }
+                  className="h-10 text-base"
+                />
+              </TextField>
+              <TextField
+                value={password}
+                onChange={(next) => {
+                  setPassword(next)
+                  clearError()
+                }}
+                type="password"
+                isRequired
+                validationBehavior={VALIDATION}
+                isInvalid={errorField === "password"}
+                className="flex flex-col gap-2"
+              >
+                <LabelRow
+                  label="Password"
+                  error={errorField === "password" ? error : null}
+                  errorId={ERROR_IDS.password}
+                />
+                <Input
+                  autoComplete="current-password"
+                  aria-describedby={
+                    errorField === "password" ? ERROR_IDS.password : undefined
+                  }
+                  className="h-10 text-base"
+                />
+              </TextField>
+            </>
+          ) : (
+            <>
+              <TextField
+                value={masterKey}
+                onChange={(next) => {
+                  setMasterKey(next)
+                  clearError()
+                }}
+                type={isKeyVisible ? "text" : "password"}
+                isRequired
+                validationBehavior={VALIDATION}
+                isInvalid={errorField === "masterKey"}
+                className="flex flex-col gap-2"
+              >
+                <LabelRow
+                  label="Master key"
+                  error={errorField === "masterKey" ? error : null}
+                  errorId={ERROR_IDS.masterKey}
+                />
+                <div className="relative">
                   <Input
-                    placeholder="you@example.com"
-                    autoComplete="username"
+                    placeholder="otari-mk-…"
+                    autoComplete="off"
                     aria-describedby={
-                      errorField === "email" ? ERROR_IDS.email : undefined
+                      errorField === "masterKey"
+                        ? ERROR_IDS.masterKey
+                        : undefined
                     }
-                    className="h-11 text-base"
+                    fullWidth
+                    className="h-10 pr-14 font-mono text-base"
                   />
-                </TextField>
-                <TextField
-                  value={password}
-                  onChange={(next) => {
-                    setPassword(next)
-                    clearError()
-                  }}
-                  type="password"
-                  isRequired
-                  validationBehavior={VALIDATION}
-                  isInvalid={errorField === "password"}
-                  className="flex flex-col gap-2"
-                >
-                  <LabelRow
-                    label="Password"
-                    error={errorField === "password" ? error : null}
-                    errorId={ERROR_IDS.password}
-                  />
-                  <Input
-                    autoComplete="current-password"
-                    aria-describedby={
-                      errorField === "password" ? ERROR_IDS.password : undefined
+                  {/* Center on the field even when the mobile touch target grows. */}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    isIconOnly
+                    size="sm"
+                    aria-label={
+                      isKeyVisible ? "Hide master key" : "Show master key"
                     }
-                    className="h-11 text-base"
-                  />
-                </TextField>
-              </>
-            ) : (
-              <>
-                <TextField
-                  value={masterKey}
-                  onChange={(next) => {
-                    setMasterKey(next)
-                    clearError()
-                  }}
-                  type={isKeyVisible ? "text" : "password"}
-                  isRequired
-                  validationBehavior={VALIDATION}
-                  isInvalid={errorField === "masterKey"}
-                  className="flex flex-col gap-2"
-                >
-                  <LabelRow
-                    label="Master key"
-                    error={errorField === "masterKey" ? error : null}
-                    errorId={ERROR_IDS.masterKey}
-                  />
-                  <div className="relative">
-                    <Input
-                      placeholder="otari-mk-…"
-                      autoComplete="off"
-                      aria-describedby={
-                        errorField === "masterKey"
-                          ? ERROR_IDS.masterKey
-                          : undefined
-                      }
-                      fullWidth
-                      className="h-11 pr-11 font-mono text-base"
-                    />
-                    {/* A 40-character key pasted into a masked box cannot be
-                        checked against the one in the logs, which is the whole
-                        reason to fail a sign-in twice. The visible target is
-                        the 36px slot inside a 44px field; `before` carries the
-                        44px touch floor past it, rather than a hover fill the
-                        height of the whole field doing it. */}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      isIconOnly
-                      size="sm"
-                      aria-label={
-                        isKeyVisible ? "Hide master key" : "Show master key"
-                      }
-                      onPress={() => setIsKeyVisible((shown) => !shown)}
-                      className="absolute top-1 right-1 h-9 w-9 text-muted before:absolute before:-inset-1"
-                    >
-                      <EyeIcon isCrossedOut={isKeyVisible} />
-                    </Button>
-                  </div>
-                </TextField>
-                <details className="group">
-                  <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm font-medium text-link hover:text-link-hover [&::-webkit-details-marker]:hidden">
-                    <DisclosureCaret />
-                    First run? Where to find your key
-                  </summary>
-                  {/* The 12px tail is what keeps the gap to the button reading
+                    onPress={() => setIsKeyVisible((shown) => !shown)}
+                    className="absolute top-1/2 right-1 h-9 w-9 -translate-y-1/2 text-muted before:absolute before:-inset-1"
+                  >
+                    <EyeIcon isCrossedOut={isKeyVisible} />
+                  </Button>
+                </div>
+              </TextField>
+              <details className="group">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm font-medium text-link hover:text-link-hover [&::-webkit-details-marker]:hidden">
+                  <DisclosureCaret />
+                  First run? Where to find your key
+                </summary>
+                {/* The 12px tail is what keeps the gap to the button reading
                       24px once this is open, since the 12px it sits at closed
                       is the summary row's invisible padding doing that job. */}
-                  <p className="pb-3 text-caption">
-                    No <code className={CODE_CHIP}>OTARI_MASTER_KEY</code> set?
-                    Otari printed one to the server logs on startup. Find it
-                    with{" "}
-                    <code className={CODE_CHIP}>
-                      docker logs &lt;container&gt;
-                    </code>
-                    .
-                  </p>
-                </details>
-              </>
-            )}
-            {/* Disabled only while a prior sign-out is still revoking (#557),
+                <p className="pb-3 text-caption">
+                  No <code className={CODE_CHIP}>OTARI_MASTER_KEY</code> set?
+                  Otari printed one to the server logs on startup. Find it with{" "}
+                  <code className={CODE_CHIP}>
+                    docker logs &lt;container&gt;
+                  </code>
+                  .
+                </p>
+              </details>
+            </>
+          )}
+          {/* Disabled only while a prior sign-out is still revoking (#557),
                 or while another credential is already mid-flight. Never for an
                 empty box: see readCredential. */}
-            <Button
-              type="submit"
-              variant="primary"
-              fullWidth
-              isDisabled={
-                isSubmitting ||
-                isSigningOut ||
-                isPasskeyPending ||
-                pendingProvider !== null
-              }
-              className="h-11"
-            >
-              {isSigningOut
-                ? "Finishing sign-out…"
-                : isSubmitting
-                  ? "Signing in…"
-                  : "Sign in"}
-            </Button>
-          </form>
+          <Button
+            type="submit"
+            variant="primary"
+            fullWidth
+            isDisabled={
+              isSubmitting ||
+              isSigningOut ||
+              isPasskeyPending ||
+              pendingProvider !== null
+            }
+            className="h-11"
+          >
+            {isSigningOut
+              ? "Finishing sign-out…"
+              : isSubmitting
+                ? "Signing in…"
+                : "Sign in"}
+          </Button>
+        </form>
 
-          {offersPasskey || oauthProviders.length > 0 ? (
-            <div className="flex flex-col gap-3">
-              {/* A rule with the word on it, rather than a bare divider: these
+        {offersCredentialSwitch ||
+        offersPasskey ||
+        oauthProviders.length > 0 ? (
+          <div className="flex flex-col gap-3">
+            {/* A rule with the word on it, rather than a bare divider: these
                   are alternatives to the form above, not a second step of it,
                   and an unlabeled line reads as the latter. One rule for both
                   groups, however many buttons follow it, because they are all
                   the same alternative: another way to prove the same thing. */}
-              <div className="flex items-center gap-3 text-caption" aria-hidden>
-                <span className="h-px flex-1 bg-border" />
-                or
-                <span className="h-px flex-1 bg-border" />
-              </div>
-              {offersPasskey ? (
+            <div
+              className="flex items-center gap-3 text-xs text-muted"
+              aria-hidden
+            >
+              <span className="h-px flex-1 bg-border" />
+              or
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            {/* The other typed credential, under the same rule as the passkey
+                and the provider buttons because it is the same kind of thing:
+                another way to prove who you are, not a second step of the form
+                above. Swapping the box clears whatever was typed into the one
+                being put away, so a refusal from the credential nobody is
+                looking at any more cannot stay on screen. */}
+            {offersCredentialSwitch ? (
+              <Button
+                type="button"
+                variant="ghost"
+                fullWidth
+                isDisabled={
+                  isSubmitting ||
+                  isSigningOut ||
+                  isPasskeyPending ||
+                  pendingProvider !== null
+                }
+                onPress={() => {
+                  setTypedCredential(usesPassword ? "masterKey" : "password")
+                  setEmail("")
+                  setPassword("")
+                  setMasterKey("")
+                  setError(null)
+                  setErrorField(null)
+                }}
+                className="h-11"
+              >
+                {usesPassword
+                  ? "Use your master key"
+                  : "Use your email and password"}
+              </Button>
+            ) : null}
+            {offersPasskey ? (
+              <Button
+                type="button"
+                variant="ghost"
+                fullWidth
+                isDisabled={
+                  isSubmitting || isSigningOut || pendingProvider !== null
+                }
+                onPress={() => void submitPasskey()}
+                className="h-11"
+              >
+                {isPasskeyPending
+                  ? "Waiting for your passkey…"
+                  : "Use a passkey"}
+              </Button>
+            ) : null}
+            {oauthProviders.map((provider) => {
+              const Mark = OAUTH_PROVIDER_ICONS[provider]
+              const isRedirecting = pendingProvider === provider
+              return (
                 <Button
+                  key={provider}
                   type="button"
-                  variant="secondary"
+                  variant="ghost"
                   fullWidth
                   isDisabled={
-                    isSubmitting || isSigningOut || pendingProvider !== null
+                    isSubmitting ||
+                    isSigningOut ||
+                    isPasskeyPending ||
+                    pendingProvider !== null
                   }
-                  onPress={() => void submitPasskey()}
+                  onPress={() => void submitOAuth(provider)}
                   className="h-11"
                 >
-                  {isPasskeyPending
-                    ? "Waiting for your passkey…"
-                    : "Use a passkey"}
-                </Button>
-              ) : null}
-              {oauthProviders.map((provider) => {
-                const Mark = OAUTH_PROVIDER_ICONS[provider]
-                const isRedirecting = pendingProvider === provider
-                return (
-                  <Button
-                    key={provider}
-                    type="button"
-                    variant="secondary"
-                    fullWidth
-                    isDisabled={
-                      isSubmitting ||
-                      isSigningOut ||
-                      isPasskeyPending ||
-                      pendingProvider !== null
-                    }
-                    onPress={() => void submitOAuth(provider)}
-                    className="h-11"
-                  >
-                    {/* The mark is decorative: the label beside it already
+                  {/* The mark is decorative: the label beside it already
                         names the provider, so announcing it again would read
                         the button's own text twice. Dropped while redirecting,
                         so the row does not keep a logo beside a label that no
                         longer names a provider to press. */}
-                    {isRedirecting ? null : (
-                      <Mark className="text-xl" aria-hidden />
-                    )}
-                    {isRedirecting
-                      ? "Redirecting…"
-                      : `Sign in with ${oauthProviderLabel(provider)}`}
-                  </Button>
-                )
-              })}
-            </div>
-          ) : null}
+                  {isRedirecting ? null : (
+                    <Mark className="text-xl" aria-hidden />
+                  )}
+                  {isRedirecting
+                    ? "Redirecting…"
+                    : `Sign in with ${oauthProviderLabel(provider)}`}
+                </Button>
+              )
+            })}
+          </div>
+        ) : null}
 
-          <div className="flex flex-col items-center gap-3">
-            <p className="text-center text-caption text-balance">
-              Sent once and exchanged for a session cookie. Never stored in the
-              browser.
+        {/* Under a rule of its own: what becomes of the credential is a
+                note about the form above rather than a step of it, and the
+                separator is what says so now that no card edge does.
+                Left-aligned with the column, like everything else in it. */}
+        <div className="flex flex-col gap-3 border-t border-border pt-5">
+          {/* Names the credential the form above actually took. Only the
+              master-key branch links to /welcome: a claimed deployment signs in
+              with a password, so pointing at the bootstrap guide there would
+              explain the wrong credential. The master key itself is not gone,
+              it stays an API credential and the recovery path
+              (docs/access-control.md), which is why the two service-unavailable
+              screens above still say the management API accepts it. */}
+          {usesPassword ? (
+            <p className="text-xs text-muted">
+              Your password is sent once and exchanged for a session cookie. It
+              is never stored in the browser.
             </p>
-            {/* No rule above these: at 1.38:1 the border was a line nobody
-                could see, separating two things nobody was confusing. The rows
+          ) : (
+            <p className="text-xs text-muted">
+              Your{" "}
+              <a
+                href="/welcome"
+                className="font-medium text-link hover:text-link-hover"
+              >
+                master key
+              </a>{" "}
+              is sent once and exchanged for a session cookie. It is never
+              stored in the browser.
+            </p>
+          )}
+          {/* The rows
                 themselves take no gap, because each is 44px around a 20px line
                 and so already sits 24px from its neighbor's text. */}
-            {/* `text-center` because a link long enough to wrap on a phone
-                (the signup row does at 390px) would otherwise rag left out of
-                the lane the single-line rows sit in. */}
-            <div className="flex flex-col items-center text-center">
-              {/* Deployment-neutral wording (otari#835): "this gateway" read as
+          <div className="flex flex-col">
+            {/* Deployment-neutral wording (otari#835): "this gateway" read as
                   a self-hosted process on a hosted control plane, where the same
                   screen is the sign-in for an invited tenant. */}
-              {offersSignup ? (
-                <PublicAuthLink to="#/signup">
-                  Invited or added by an admin? Set your password
-                </PublicAuthLink>
-              ) : null}
-              {offersRecovery ? (
-                <PublicAuthLink to="#/recover-password">
-                  Forgot your password?
-                </PublicAuthLink>
-              ) : null}
-              {offersRecovery ? (
-                <PublicAuthLink to="#/resend-verification">
-                  Need a new verification link?
-                </PublicAuthLink>
-              ) : null}
-              {/* Not a `PublicAuthLink`: `/welcome` is a page the gateway
+            {/* One link, two sentences, because the page behind it does two
+                different things (`open_signup` in the bootstrap) and the wrong
+                sentence strands whoever reads it: a stranger invited to create
+                an account on a closed deployment gets nothing, and a member of
+                an open one is left waiting for an admin who is not coming. */}
+            {offersSignup ? (
+              <PublicAuthLink to="#/signup">
+                {open_signup
+                  ? "New to this deployment? Create an account"
+                  : "Invited or added by an admin? Set your password"}
+              </PublicAuthLink>
+            ) : null}
+            {offersRecovery ? (
+              <PublicAuthLink to="#/recover-password">
+                Forgot your password?
+              </PublicAuthLink>
+            ) : null}
+            {offersRecovery ? (
+              <PublicAuthLink to="#/resend-verification">
+                Need a new verification link?
+              </PublicAuthLink>
+            ) : null}
+            {/* Not a `PublicAuthLink`: `/welcome` is a page the gateway
                   serves, so this one really is a navigation and not a hash
                   change. Sized to match the links above it. */}
-              <Link
-                href="/welcome"
-                className="inline-flex min-h-11 items-center text-sm font-medium text-link hover:text-link-hover"
-              >
-                New to Otari? Open the welcome guide
-              </Link>
-            </div>
+            <Link
+              href="/welcome"
+              className="inline-flex min-h-11 items-center text-sm font-medium text-link hover:text-link-hover"
+            >
+              New to Otari? Open the welcome guide
+            </Link>
           </div>
-        </Card.Content>
-      </Card>
-    </div>
+        </div>
+      </div>
+    </LoginPageShell>
   )
 }

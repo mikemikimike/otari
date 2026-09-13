@@ -36,7 +36,7 @@ describe("App", () => {
       if (path === "/dashboard-build.json") {
         return { build: "test-build" } as never
       }
-      if (path === "/v1/settings") {
+      if (path === "/settings") {
         return { default_pricing: true, require_pricing: false } as never
       }
       return [] as never
@@ -46,15 +46,15 @@ describe("App", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("Loading page…")
     expect(await screen.findByText("Lazy overview")).toBeInTheDocument()
+    expect(document.title).toBe("Overview · Otari")
   })
 
   it("asks a local-operator deployment to sign in", () => {
     // No stored session marker, so the shell is not reachable yet.
     renderApp(bootstrap())
+    expect(document.title).toBe("Sign in · Otari")
 
-    expect(
-      screen.getByRole("heading", { name: "Otari Dashboard" }),
-    ).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Otari" })).toBeInTheDocument()
   })
 
   it("renders the data-plane landing page for a hybrid gateway", () => {
@@ -84,6 +84,7 @@ describe("App", () => {
     expect(
       screen.getByRole("link", { name: "Manage this gateway on otari.ai" }),
     ).toHaveAttribute("href", "https://otari.ai")
+    expect(document.title).toBe("Gateway · Otari")
     // The management shell is not merely hidden behind a sign-in here.
     expect(screen.queryByRole("navigation")).toBeNull()
   })
@@ -96,16 +97,14 @@ describe("App", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       /does not know what it is connected to/,
     )
-    expect(
-      screen.queryByRole("heading", { name: "Otari Dashboard" }),
-    ).toBeNull()
+    expect(screen.queryByRole("heading", { name: "Otari" })).toBeNull()
   })
 
   it("renders the accept-invitation page ahead of the sign-in screen", async () => {
     vi.mocked(apiFetch).mockImplementation(async (path) => {
       if (
         typeof path === "string" &&
-        path.startsWith("/v1/invitations/validate")
+        path.startsWith("/invitations/validate")
       ) {
         return {
           email: "ada@example.com",
@@ -123,9 +122,8 @@ describe("App", () => {
     // Not the sign-in screen, even though no session marker is stored: the
     // token in the link is this visitor's whole credential, not a session.
     expect(await screen.findByText("Acme")).toBeInTheDocument()
-    expect(
-      screen.queryByRole("heading", { name: "Otari Dashboard" }),
-    ).toBeNull()
+    expect(document.title).toBe("Accept invitation · Otari")
+    expect(screen.queryByRole("heading", { name: "Otari" })).toBeNull()
   })
 
   it("renders a public auth page ahead of the sign-in screen", async () => {
@@ -139,9 +137,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Email verified" }),
     ).toBeInTheDocument()
-    expect(
-      screen.queryByRole("heading", { name: "Otari Dashboard" }),
-    ).toBeNull()
+    expect(screen.queryByRole("heading", { name: "Otari" })).toBeNull()
   })
 
   it("sends a completed OAuth sign-in on to the dashboard rather than leaving it on the callback page", async () => {
@@ -197,7 +193,7 @@ describe("App", () => {
     vi.mocked(apiFetch).mockImplementation(async (path, init) => {
       if (
         typeof path === "string" &&
-        path.startsWith("/v1/invitations/validate")
+        path.startsWith("/invitations/validate")
       ) {
         const body = init?.body ? JSON.parse(String(init.body)) : {}
         return {
@@ -220,5 +216,88 @@ describe("App", () => {
 
     expect(await screen.findByText("bob@example.com")).toBeInTheDocument()
     expect(screen.queryByText("ada@example.com")).toBeNull()
+  })
+})
+
+// otari#806: a dashboard from `main` served by a gateway built before a field
+// was added. The field is absent rather than null, the generated type says it is
+// always there, and these pages render above the router's own catch boundary, so
+// a throw here was a blank document.
+describe("a bootstrap from an older gateway", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+    window.location.hash = ""
+  })
+
+  // Deleting from the current fixture rather than writing a literal: the case
+  // is "this key never arrived", and it should keep meaning that as the
+  // bootstrap grows fields.
+  function older(...absent: string[]) {
+    const wire = { ...bootstrap() } as Record<string, unknown>
+    for (const field of absent) {
+      delete wire[field]
+    }
+    return wire as Parameters<typeof App>[0]["bootstrap"]
+  }
+
+  it("still renders the sign-in screen without oauth_providers", () => {
+    const { container } = renderApp(older("oauth_providers"))
+
+    expect(screen.getByRole("heading", { name: "Otari" })).toBeInTheDocument()
+    expect(container).not.toBeEmptyDOMElement()
+  })
+
+  it("says so, rather than blanking, without sign_in_methods", () => {
+    // The field Login reads three times, 25 lines before it reads
+    // oauth_providers, so a guard on the second one alone never runs here.
+    // An empty list is the honest completion (naming a credential the gateway
+    // never published would be the guess), and Login already has a screen for
+    // a deployment that offers none.
+    const { container } = renderApp(older("sign_in_methods"))
+
+    expect(container).not.toBeEmptyDOMElement()
+    expect(
+      screen.getByRole("heading", { name: "Otari sign-in is unavailable" }),
+    ).toBeInTheDocument()
+  })
+
+  it("still renders the invitation page, which reads the same field", () => {
+    vi.mocked(apiFetch).mockImplementation(async () => [] as never)
+    window.location.hash = "#/accept-invitation?token=some-token"
+
+    const { container } = renderApp(older("oauth_providers"))
+
+    expect(container).not.toBeEmptyDOMElement()
+    expect(
+      screen.getByRole("heading", { name: "Organization invitation" }),
+    ).toBeInTheDocument()
+  })
+
+  it("shows the boundary's panel when a page above the router throws", () => {
+    // React logs a caught render error whatever catches it, so the assertion is
+    // about what is on screen rather than about silence.
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    // Present but not the shape the type promises, which is the half of skew a
+    // default cannot complete: `Login` throws where only the boundary in `App`
+    // can catch it, and without one the document is empty.
+    const { container } = renderApp({
+      ...bootstrap(),
+      oauth_providers: 3 as unknown as string[],
+    })
+
+    expect(container).not.toBeEmptyDOMElement()
+    expect(screen.getByRole("alert")).toBeInTheDocument()
+  })
+
+  it("still renders a public auth page, which reads it on the no-mail path", () => {
+    window.location.hash = "#/recover-password"
+
+    const { container } = renderApp(older("oauth_providers", "mail_ready"))
+
+    expect(container).not.toBeEmptyDOMElement()
+    expect(
+      screen.getByRole("heading", { name: "Not available on this gateway" }),
+    ).toBeInTheDocument()
   })
 })

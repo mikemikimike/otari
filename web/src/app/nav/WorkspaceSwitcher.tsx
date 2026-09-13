@@ -1,7 +1,9 @@
-import { Button, Modal, Popover } from "@heroui/react"
+import { Button, Popover } from "@heroui/react"
 import { useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 import { FiCheck, FiChevronDown, FiMail, FiPlus } from "react-icons/fi"
+import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
+import { ProductMark } from "@/design-system/ProductMark"
 import { CreateOrganizationForm } from "@/features/organization/CreateOrganizationForm"
 import { canManage } from "@/features/organization/roles"
 import { CreateWorkspaceForm } from "@/features/workspaces/WorkspacesPage"
@@ -10,10 +12,9 @@ import {
   useOrganizationMemberships,
   usePendingOrganizationInvitations,
   useSwitchOrganization,
-} from "@/shared/api/hooks"
-import { ErrorBanner } from "@/shared/components/ui"
+} from "@/shared/api/organizations"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
-import { NAV_TRANSITION, navIndicatorClass } from "./rowStyles"
+import { NAV_TRANSITION, navBandRowClass, navIndicatorClass } from "./rowStyles"
 
 // The menu's own rhythm, which is the rail's: a 44px row and a 32px heading
 // block. The eyebrow above the organization is shorter (28px), because it opens
@@ -87,6 +88,22 @@ export function WorkspaceSwitcher({
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [creatingOrganization, setCreatingOrganization] = useState(false)
+  // Bumped on each open, and the create form is keyed on it, so the draft is
+  // fresh every time and untouched through the exit: the dialog keeps its
+  // content while it animates out, so clearing on the way out would blank the
+  // body in front of the operator. See feedback.md, "A draft is fresh on every
+  // open and untouched through the exit".
+  const [creatingCount, setCreatingCount] = useState(0)
+  const openCreateWorkspace = () => {
+    setOpen(false)
+    setCreatingCount((n) => n + 1)
+    setCreating(true)
+  }
+  const [creatingOrganizationCount, setCreatingOrganizationCount] = useState(0)
+  const openCreateOrganization = () => {
+    setCreatingOrganizationCount((n) => n + 1)
+    setCreatingOrganization(true)
+  }
   // Owners and admins only, which is what the server says of
   // `POST /v1/workspaces` and what the Workspaces page gates its own create
   // control on. Without it a member or a viewer is handed the whole form from
@@ -117,8 +134,8 @@ export function WorkspaceSwitcher({
     <>
       <Popover isOpen={open} onOpenChange={setOpen}>
         {/* HeroUI's Button, not a plain one: the popover wires its trigger through
-          react-aria. `w-auto!` overrides the width the variant sets, which
-          otherwise stops this short of the rail rather than spanning it.
+          react-aria. It fills the band it opens the rail with, so the hover
+          fill is the band rather than a box inset inside it.
 
           Collapsing narrows the trigger to the mark, but it stays the same
           trigger: the rail's collapsed state is remembered, so a switcher that
@@ -133,24 +150,38 @@ export function WorkspaceSwitcher({
           // the popover itself is what names the current workspace (it marks it
           // with a check), and this label is what assistive tech reads.
           aria-label={`Switch workspace, currently ${workspaceName} in ${organizationName}`}
-          // 56px tall in both states, so the rail's first block is the same height
-          // whichever context it is in: the organization rail's "Back to" row sits
-          // in a box of exactly this height. The fill is the rail's own ground with
-          // a border, not a white card, which is what keeps it reading as part of
-          // the chrome rather than as the first item in the list.
+          // A row, not a box. It had a border and its own fill, which made the
+          // rail open with an outlined card sitting above a list of flat rows;
+          // the artboard draws it blended into the chrome, distinguished by its
+          // height and its mark rather than by an edge. So it takes the same
+          // hover fill the nav rows take and nothing else.
+          //
+          // It fills the 56px band in both states, so the rail's first block is
+          // the same height whichever context it is in: the organization rail's
+          // "Back to" row fills the same band. The band's own rule is what the
+          // fill stops at, which is why the height comes from `h-full` rather
+          // than from a floor of its own.
           className={
             collapsed
-              ? `min-h-14 w-full! items-center justify-center rounded-[0.625rem] border border-border bg-background-alt px-0 hover:border-accent ${NAV_TRANSITION}`
-              : `min-h-14 w-full! items-center justify-start gap-2.5 rounded-[0.625rem] border border-border bg-background-alt px-2.5 py-2 text-left hover:border-accent ${NAV_TRANSITION}`
+              ? `items-center justify-center hover:bg-surface-alt ${navBandRowClass({ collapsed })} ${NAV_TRANSITION}`
+              : `items-center justify-start gap-2.5 py-2 text-left hover:bg-surface-alt ${navBandRowClass()} ${NAV_TRANSITION}`
           }
         >
           {/* The mark is the switcher's hero, as in the prototype: the product
             name is not repeated in the header, so this is where it lives. */}
-          <img
-            src="/favicon.svg"
-            alt=""
-            className="h-[1.875rem] w-[1.875rem] shrink-0"
-          />
+          {/* A 28px lane, so the mark sits where a nav row's icon sits rather
+              than floating at its own size. No fill: the lane used to paint
+              `bg-surface-subtle`, which is the fill a SELECTED nav row wears,
+              so the product mark read both as a logo on a gray box and as the
+              one row in the rail that was chosen. The alignment was the half
+              worth keeping (otari-ai#2123). */}
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+            {/* Width only: the mark is 273 by 250, so a height of its own would
+                stretch it. It fills the tile's width and centers on the short
+                axis, which is why the tile is a flex box rather than a square
+                the image is told to fill. */}
+            <ProductMark className="h-auto w-7 text-accent" />
+          </span>
           {collapsed ? null : (
             <>
               <span className="flex min-w-0 flex-1 flex-col gap-px">
@@ -305,10 +336,7 @@ export function WorkspaceSwitcher({
               <button
                 type="button"
                 className={`${MENU_ROW} font-semibold text-muted hover:bg-surface-alt hover:text-foreground`}
-                onClick={() => {
-                  setOpen(false)
-                  setCreating(true)
-                }}
+                onClick={openCreateWorkspace}
               >
                 <PlusMark />
                 <span className="min-w-0 flex-1 truncate">
@@ -325,7 +353,7 @@ export function WorkspaceSwitcher({
               className={`${MENU_ROW} text-muted hover:bg-surface-alt hover:text-foreground`}
               onClick={() => {
                 setOpen(false)
-                setCreatingOrganization(true)
+                openCreateOrganization()
               }}
             >
               <PlusMark />
@@ -336,73 +364,41 @@ export function WorkspaceSwitcher({
           </Popover.Dialog>
         </Popover.Content>
       </Popover>
-      {/* Reuses the Workspaces page's own form rather than restating its fields:
-          the popover has no room for a form, and it dismisses on the first click
-          outside itself, which a name field cannot survive. */}
-      <Modal isOpen={creating} onOpenChange={setCreating}>
-        {/* The menu row is the trigger, and it lives inside a popover that has
-            already dismissed by the time this opens, so the modal is driven from
-            state instead. HeroUI still renders a press responder for the trigger
-            slot and warns when nothing fills it, which is why this is hidden
-            rather than absent; `SettingsPage` does the same for its own dialog. */}
-        <Modal.Trigger className="hidden">Create workspace</Modal.Trigger>
-        {/* An explicit dim: HeroUI maps `--backdrop` to opaque black, which the
-            AlertDialog softens itself and the Modal does not, so without this the
-            page behind the form goes fully black. */}
-        <Modal.Backdrop className="bg-backdrop/50">
-          {/* A fixed width, not the content's own. The container is the
-              `sm:w-fit` element and `size="md"` only caps the dialog at
-              `max-w-md`, so the modal was as wide as whatever was in it: a
-              message longer than the fields made it jump out to the cap the
-              moment one appeared. 28rem is that cap, so this pins the width it
-              was already growing to, and the dialog's own `w-full` fills it.
-              Below `sm` the container is `w-full` and this does not apply. */}
-          <Modal.Container
-            placement="center"
-            size="md"
-            className="sm:w-[28rem]"
-          >
-            <Modal.Dialog aria-label="Create workspace" className="p-0">
-              <CreateWorkspaceForm
-                onClose={() => setCreating(false)}
-                // Creating from the scope switcher is a request to work in the
-                // new workspace, so the flow ends inside it rather than back on
-                // the page it was started from: the shell's scope moves, and the
-                // overview is where that scope reads. Selecting by id is enough
-                // even though the switcher's list comes from the organization
-                // context: the mutation invalidates that context, and the
-                // selection resolves against the membership as soon as it
-                // arrives. Navigating also leaves whatever organization-scoped
-                // page the operator was on, which the new scope does not apply
-                // to.
-                onCreated={(workspace) => {
-                  select(workspace.id)
-                  void navigate({ to: "/" })
-                }}
-                hold={createHold}
-              />
-            </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
-      {/* Its own modal rather than one dialog switching on which row opened it:
-          the two forms share no field, and a single state would have to encode
-          "which" as well as "open". */}
-      <Modal
+      {/* Both entry points from this menu open the dialog every create in the
+          dashboard opens in, rather than a Modal wrapped by hand here: the two
+          forms were already the page's, and what was local was the frame. */}
+      {/* Keyed on an open counter like its sibling below: nothing here unmounts
+          either form, so the remount on the way in is what clears the draft,
+          and with it the `holding` flag a create that navigates leaves set. An
+          unkeyed mount leaves the next open spinning, its Cancel and Close
+          disabled. */}
+      <CreateWorkspaceForm
+        // Namespaced, not the bare counter: the two forms are siblings and both
+        // counters start at 0, so bare numbers collide on every open where they
+        // match and React resolves its sibling key map last-write-wins.
+        key={`workspace-${creatingCount}`}
+        isOpen={creating}
+        onClose={() => setCreating(false)}
+        // Creating from the scope switcher is a request to work in the new
+        // workspace, so the flow ends inside it rather than back on the page it
+        // was started from: the shell's scope moves, and the overview is where
+        // that scope reads. Selecting by id is enough even though the switcher's
+        // list comes from the organization context: the mutation invalidates
+        // that context, and the selection resolves against the membership as
+        // soon as it arrives. Navigating also leaves whatever
+        // organization-scoped page the operator was on, which the new scope does
+        // not apply to.
+        onCreated={(workspace) => {
+          select(workspace.id)
+          void navigate({ to: "/" })
+        }}
+        hold={createHold}
+      />
+      <CreateOrganizationForm
+        key={`organization-${creatingOrganizationCount}`}
         isOpen={creatingOrganization}
-        onOpenChange={setCreatingOrganization}
-      >
-        <Modal.Trigger className="hidden">Create organization</Modal.Trigger>
-        <Modal.Backdrop className="bg-backdrop/50">
-          <Modal.Container placement="center" size="md">
-            <Modal.Dialog aria-label="Create organization" className="p-0">
-              <CreateOrganizationForm
-                onClose={() => setCreatingOrganization(false)}
-              />
-            </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
+        onClose={() => setCreatingOrganization(false)}
+      />
     </>
   )
 }

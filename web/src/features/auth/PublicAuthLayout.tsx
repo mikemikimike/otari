@@ -1,18 +1,9 @@
-import { Card, Link } from "@heroui/react"
+import { Link } from "@heroui/react"
 import type { ReactNode } from "react"
 
-/**
- * The card every page in front of a session renders into.
- *
- * The platform's `PreloginLayout` is the ancestor, but three of the four
- * things it does are hosted-product chrome that has no counterpart here: the
- * Mozilla.ai byline, the marketing footer, and the pin that forces the auth
- * flow to the light theme regardless of the visitor's preference. A
- * self-hosted dashboard is an operator tool whose theme is the operator's
- * choice, so what survives the port is the shape `Login` and
- * `AcceptInvitationPage` already established here: one centered card, the
- * mark, a heading, and a body.
- */
+import { LoginPageShell } from "./LoginPageShell"
+
+/** Shared content and frame for every public authentication page. */
 export function PublicAuthLayout({
   title,
   description,
@@ -27,29 +18,22 @@ export function PublicAuthLayout({
   footer?: ReactNode
 }) {
   return (
-    <div className="flex min-h-full items-center justify-center p-6">
-      <Card className="w-full max-w-md">
-        <Card.Content className="flex flex-col gap-5 p-7">
-          <div className="flex flex-col items-center gap-3 text-center">
-            <img src="/favicon.svg" alt="Otari" className="h-12 w-12" />
-            <div>
-              <h1 className="text-display">{title}</h1>
-              {description ? (
-                <p className="mt-1 text-sm text-muted">{description}</p>
-              ) : null}
-            </div>
-          </div>
+    <LoginPageShell>
+      <div className="flex flex-col gap-1.5">
+        <h1 className="text-display">{title}</h1>
+        {description ? (
+          <p className="text-sm text-pretty text-muted">{description}</p>
+        ) : null}
+      </div>
 
-          {children}
+      {children}
 
-          {footer ? (
-            <div className="flex flex-col items-center border-t border-border pt-2 text-center">
-              {footer}
-            </div>
-          ) : null}
-        </Card.Content>
-      </Card>
-    </div>
+      {footer ? (
+        <div className="flex flex-col border-t border-border pt-5">
+          {footer}
+        </div>
+      ) : null}
+    </LoginPageShell>
   )
 }
 

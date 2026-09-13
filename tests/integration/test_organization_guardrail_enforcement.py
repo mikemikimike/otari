@@ -2,7 +2,7 @@
 
 The management surface is covered in ``test_organization_guardrails.py``; this is
 the other half of otari#654's Definition of Done, the request path enforcing what
-the configuration says. Every case goes through ``/v1/messages`` with the
+the configuration says. Every case goes through ``/api/v1/messages`` with the
 provider call patched out and the guardrails service stubbed with an
 ``httpx.MockTransport``, so what is asserted is admission: whether a check ran at
 all, what it was sent, and what the verdict did to the request.
@@ -21,6 +21,7 @@ import pytest
 from any_llm.types.messages import MessageResponse, MessageUsage, TextBlock
 from fastapi.testclient import TestClient
 
+from gateway.core.config import API_ROOT
 from gateway.services.secret_box import generate_secret_key
 
 _DEPLOYMENT_URL = "http://anyguardrails:8000"
@@ -79,14 +80,14 @@ class _Guardrails:
 
 def _default_workspace_id(client: TestClient, master_key_header: dict[str, str]) -> str:
     """The workspace an API-key request bills to on a fresh deployment."""
-    listed = client.get("/v1/workspaces", headers=master_key_header)
+    listed = client.get(f"{API_ROOT}/workspaces", headers=master_key_header)
     assert listed.status_code == 200
     workspace_id: str = listed.json()["data"][0]["id"]
     return workspace_id
 
 
 def _mandate(client: TestClient, master_key_header: dict[str, str], **entry: Any) -> dict[str, Any]:
-    response = client.post("/v1/organizations/me/guardrails", json=entry, headers=master_key_header)
+    response = client.post(f"{API_ROOT}/organizations/me/guardrails", json=entry, headers=master_key_header)
     assert response.status_code == 201, response.text
     stored: dict[str, Any] = response.json()
     return stored
@@ -112,7 +113,7 @@ def _post(
         return _text_response("served")
 
     with patch("gateway.api.routes.messages.amessages", new=fake_amessages):
-        response: httpx.Response = cast(Any, client).post("/v1/messages", json=body, headers=headers)
+        response: httpx.Response = cast(Any, client).post(f"{API_ROOT}/messages", json=body, headers=headers)
     return response
 
 
@@ -166,7 +167,7 @@ def test_an_entry_scoped_to_another_workspace_does_not_reach_this_one(
 ) -> None:
     monkeypatch.setenv("OTARI_GUARDRAILS_URL", _DEPLOYMENT_URL)
     created = client.post(
-        "/v1/workspaces",
+        f"{API_ROOT}/workspaces",
         json={"name": "Elsewhere"},
         headers=master_key_header,
     )
@@ -200,10 +201,10 @@ def test_an_entry_for_every_workspace_reaches_one_created_after_it(
         mode="block",
         applies_to_all_workspaces=True,
     )
-    created = client.post("/v1/workspaces", json={"name": "Fresh"}, headers=master_key_header)
+    created = client.post(f"{API_ROOT}/workspaces", json={"name": "Fresh"}, headers=master_key_header)
     assert created.status_code in (200, 201), created.text
     key = client.post(
-        "/v1/keys",
+        f"{API_ROOT}/keys",
         json={"key_name": "fresh-key", "workspace_id": created.json()["id"]},
         headers=master_key_header,
     )
@@ -345,7 +346,7 @@ def test_a_disabled_entry_stops_running_without_being_deleted(
         client, master_key_header, profile="prompt-injection", mode="block", applies_to_all_workspaces=True
     )
     disabled = client.patch(
-        f"/v1/organizations/me/guardrails/{entry['id']}",
+        f"{API_ROOT}/organizations/me/guardrails/{entry['id']}",
         json={"enabled": False},
         headers=master_key_header,
     )
@@ -404,3 +405,63 @@ def test_an_entry_without_an_endpoint_uses_the_deployments_own(
     assert response.status_code == 200
     assert guardrails.calls[0]["host"] == "anyguardrails"
     assert guardrails.calls[0]["authorization"] is None
+
+
+def test_a_secret_parameter_is_masked_on_read_and_survives_an_edit_of_the_rest(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """A guardrail vendor key typed into the parameter form never comes back out (otari-ai#2118)."""
+    entry = _mandate(
+        client,
+        master_key_header,
+        profile="patronus",
+        mode="monitor",
+        validate_kwargs={"threshold": 0.8, "patronus_api_key": "pat-live-key"},
+        applies_to_all_workspaces=True,
+    )
+    assert entry["validate_kwargs"] == {"threshold": 0.8, "patronus_api_key": "***"}
+
+    listed = client.get(f"{API_ROOT}/organizations/me/guardrails", headers=master_key_header)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"][0]["validate_kwargs"] == {"threshold": 0.8, "patronus_api_key": "***"}
+
+    # What the dashboard sends when someone changes the threshold: the whole
+    # dict, with the mask where the credential it was never shown belongs.
+    edited = client.patch(
+        f"{API_ROOT}/organizations/me/guardrails/{entry['id']}",
+        json={"validate_kwargs": {"threshold": 0.5, "patronus_api_key": "***"}},
+        headers=master_key_header,
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["validate_kwargs"] == {"threshold": 0.5, "patronus_api_key": "***"}
+
+
+def test_the_check_is_sent_the_stored_secret_parameter_and_not_the_mask(
+    client: TestClient,
+    api_key_header: dict[str, str],
+    master_key_header: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Masking is a serialization rule, so the request path still reads the row."""
+    monkeypatch.setenv("OTARI_GUARDRAILS_URL", _DEPLOYMENT_URL)
+    entry = _mandate(
+        client,
+        master_key_header,
+        profile="patronus",
+        mode="monitor",
+        validate_kwargs={"threshold": 0.8, "patronus_api_key": "pat-live-key"},
+        applies_to_all_workspaces=True,
+    )
+    edited = client.patch(
+        f"{API_ROOT}/organizations/me/guardrails/{entry['id']}",
+        json={"validate_kwargs": {"threshold": 0.5, "patronus_api_key": "***"}},
+        headers=master_key_header,
+    )
+    assert edited.status_code == 200, edited.text
+    guardrails = _Guardrails(valid=True)
+
+    response = _post(client, api_key_header, _REQUEST, guardrails, monkeypatch)
+
+    assert response.status_code == 200
+    assert guardrails.calls[0]["validate_kwargs"] == {"threshold": 0.5, "patronus_api_key": "pat-live-key"}

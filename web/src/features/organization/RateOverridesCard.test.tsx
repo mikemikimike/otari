@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { OrganizationContext, OrganizationPricingOverride } from "@/client"
 import { RateOverridesCard } from "@/features/organization/RateOverridesCard"
+import { API_ROOT } from "@/shared/api/client"
 import { organizationContext } from "@/tests/fixtures"
 import { renderWithRouter } from "@/tests/router"
 
@@ -65,7 +66,7 @@ function mockApi({
       method,
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     })
-    if (url.includes("/v1/organizations/me/pricing")) {
+    if (url.includes(`${API_ROOT}/organizations/me/pricing`)) {
       if (method === "GET") {
         return jsonResponse({ data: overrides, count: overrides.length })
       }
@@ -107,7 +108,7 @@ describe("RateOverridesCard", () => {
     expect(await screen.findByText("openai:gpt-4o")).toBeInTheDocument()
     expect(await screen.findByText("$2.50")).toBeInTheDocument()
     expect(await screen.findByText(/^From /)).toBeInTheDocument()
-    expect(await screen.findByText("Active")).toBeInTheDocument()
+    expect(await screen.findByText("ACTIVE")).toBeInTheDocument()
   })
 
   it("shows an unset cache rate as absent rather than as zero", async () => {
@@ -145,7 +146,7 @@ describe("RateOverridesCard", () => {
   it("shows the error rather than the empty state when the list fails", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input)
-      if (url.includes("/v1/organizations/me/pricing")) {
+      if (url.includes(`${API_ROOT}/organizations/me/pricing`)) {
         return jsonResponse({ detail: "pricing is unavailable" }, 503)
       }
       return jsonResponse(organizationContext())
@@ -184,7 +185,7 @@ describe("RateOverridesCard", () => {
       const write = requests.find(
         (request) =>
           request.method === "POST" &&
-          request.url.includes("/v1/organizations/me/pricing"),
+          request.url.includes(`${API_ROOT}/organizations/me/pricing`),
       )
       expect(write?.body).toMatchObject({
         model_key: "anthropic:claude-sonnet-5",
@@ -192,6 +193,59 @@ describe("RateOverridesCard", () => {
         output_price_per_million: 15,
       })
     })
+  })
+
+  it("puts focus in the first rate when editing, not on the frame's Close", async () => {
+    // The add path's first field is the model key, which carries `autoFocus`.
+    // Editing replaces it with a read-only block, so without this the dialog
+    // opened with focus on Close.
+    mockApi({ overrides: [pricingOverride()] })
+    const user = userEvent.setup()
+
+    await renderPage()
+
+    await user.click(await screen.findByRole("button", { name: /^edit$/i }))
+
+    const dialog = await screen.findByRole("dialog")
+    await waitFor(() =>
+      expect(
+        within(dialog).getByLabelText(/input, per 1m tokens/i),
+      ).toHaveFocus(),
+    )
+  })
+
+  it("does not greet the next open with the last attempt's refusal", async () => {
+    // The create and replace mutations live inside the dialog, below the card's
+    // key, so the remount that clears the draft clears the refusal with it.
+    // Held in the card they outlived both: a blank form arrived under the
+    // previous attempt's banner.
+    mockApi({ overrides: [], writeStatus: 409 })
+    const user = userEvent.setup()
+
+    await renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: /add override/i }),
+    )
+    await user.type(
+      await screen.findByLabelText(/model key/i),
+      "anthropic:claude-sonnet-5",
+    )
+    await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
+    await user.type(screen.getByLabelText(/output, per 1m tokens/i), "15")
+    await user.click(screen.getByRole("button", { name: /^add override$/i }))
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument()
+
+    // Out through the guard, then in again.
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Discard" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await user.click(screen.getByRole("button", { name: /add override/i }))
+
+    const reopened = await screen.findByRole("dialog")
+    expect(within(reopened).queryByRole("alert")).toBeNull()
+    expect(within(reopened).getByLabelText(/model key/i)).toHaveValue("")
   })
 
   it("refuses a model key with no provider prefix before sending it", async () => {
@@ -262,7 +316,7 @@ describe("RateOverridesCard", () => {
     await waitFor(() => {
       const write = requests.find((request) => request.method === "PUT")
       expect(write?.url).toContain(
-        "/v1/organizations/me/pricing/11111111-1111-1111-1111-111111111111",
+        `${API_ROOT}/organizations/me/pricing/11111111-1111-1111-1111-111111111111`,
       )
       expect(write?.body).toMatchObject({ input_price_per_million: 1.25 })
       // Immutable on this endpoint, so the body must not carry it.
@@ -291,6 +345,30 @@ describe("RateOverridesCard", () => {
     expect(requests.some((request) => request.method === "PUT")).toBe(false)
   })
 
+  it("seeds each opener's dialog fresh, whichever one was used last", async () => {
+    // Keying a dialog on an open counter is only right if every opener bumps
+    // it. This card has two, Add and a row's Edit, and one that skipped the
+    // bump would leave the previous open's rates in the fields. Rates are the
+    // expensive case: an inherited figure is what a model is billed at.
+    mockApi({ overrides: [pricingOverride()] })
+    const user = userEvent.setup()
+
+    await renderPage()
+
+    await user.click(await screen.findByRole("button", { name: /edit/i }))
+    const edited = await screen.findByLabelText(/input, per 1m tokens/i)
+    expect(edited).not.toHaveValue("")
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }))
+
+    await user.click(
+      await screen.findByRole("button", { name: /add override/i }),
+    )
+    expect(await screen.findByLabelText(/input, per 1m tokens/i)).toHaveValue(
+      "",
+    )
+    expect(await screen.findByLabelText(/model key/i)).toHaveValue("")
+  })
+
   it("deletes an override after a confirmation", async () => {
     const requests = mockApi({
       overrides: [pricingOverride()],
@@ -312,7 +390,7 @@ describe("RateOverridesCard", () => {
           (request) =>
             request.method === "DELETE" &&
             request.url.includes(
-              "/v1/organizations/me/pricing/11111111-1111-1111-1111-111111111111",
+              `${API_ROOT}/organizations/me/pricing/11111111-1111-1111-1111-111111111111`,
             ),
         ),
       ).toBe(true)

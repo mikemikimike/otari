@@ -8,6 +8,7 @@ on the SQLite file each test stands up, so there is no PostgreSQL to wait for.
 """
 
 import logging
+import re
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,7 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from gateway.api.deps import reset_config
 from gateway.api.routes import bootstrap as bootstrap_route
 from gateway.api.routes.bootstrap import HOSTED_SURFACES, STANDALONE_SURFACES
-from gateway.core.config import GatewayConfig
+from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import reset_db
 from gateway.main import create_app
 
@@ -93,7 +94,7 @@ def test_standalone_reports_a_local_operator_and_the_full_surface_set(tmp_path: 
     app = create_app(_standalone(tmp_path))
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -110,6 +111,7 @@ def test_standalone_reports_a_local_operator_and_the_full_surface_set(tmp_path: 
         "passkeys_ready": False,
         "oauth_providers": [],
         "mail_ready": False,
+        "open_signup": False,
     }
 
 
@@ -129,7 +131,7 @@ def test_a_database_outage_reports_no_sign_in_rather_than_failing(
     app = create_app(_standalone(tmp_path))
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.status_code == 200
     assert response.json()["deployment_type"] == "standalone"
@@ -146,9 +148,9 @@ def test_bootstrap_needs_no_credential(tmp_path: Path) -> None:
     app = create_app(_standalone(tmp_path))
 
     with TestClient(app) as client:
-        anonymous = client.get("/v1/bootstrap")
-        # Named to contrast with /v1/settings, which the same client cannot read.
-        settings = client.get("/v1/settings")
+        anonymous = client.get(f"{API_ROOT}/bootstrap")
+        # Named to contrast with /api/v1/settings, which the same client cannot read.
+        settings = client.get(f"{API_ROOT}/settings")
 
     assert anonymous.status_code == 200
     assert settings.status_code == 401
@@ -168,7 +170,7 @@ def test_passkeys_ready_turns_on_with_an_address_alone(tmp_path: Path) -> None:
     unconfigured = _standalone(tmp_path)
 
     with TestClient(create_app(unconfigured)) as client:
-        answered = client.get("/v1/bootstrap").json()
+        answered = client.get(f"{API_ROOT}/bootstrap").json()
         assert answered["passkeys_ready"] is False
         assert "passkey" not in answered["sign_in_methods"]
 
@@ -180,7 +182,7 @@ def test_passkeys_ready_turns_on_with_an_address_alone(tmp_path: Path) -> None:
     ready.public_base_url = "https://otari.example.com"
 
     with TestClient(create_app(ready)) as client:
-        answered = client.get("/v1/bootstrap").json()
+        answered = client.get(f"{API_ROOT}/bootstrap").json()
         assert answered["passkeys_ready"] is True
         # Still no registered passkey, so it is not offered as a sign-in yet.
         assert "passkey" not in answered["sign_in_methods"]
@@ -199,7 +201,7 @@ def test_mail_ready_turns_on_only_with_a_transport_and_a_public_url(tmp_path: Pa
     transport_only.mail_from_email = "otari@example.com"
 
     with TestClient(create_app(transport_only)) as client:
-        assert client.get("/v1/bootstrap").json()["mail_ready"] is False
+        assert client.get(f"{API_ROOT}/bootstrap").json()["mail_ready"] is False
 
     reset_config()
     reset_db()
@@ -210,18 +212,43 @@ def test_mail_ready_turns_on_only_with_a_transport_and_a_public_url(tmp_path: Pa
     ready.public_base_url = "https://otari.example.com"
 
     with TestClient(create_app(ready)) as client:
-        assert client.get("/v1/bootstrap").json()["mail_ready"] is True
+        assert client.get(f"{API_ROOT}/bootstrap").json()["mail_ready"] is True
 
 
-# A surface names its router's ``/v1/`` prefix, so the prefix is derived from the
+def test_open_signup_is_published_only_with_mail_to_carry_the_verification(tmp_path: Path) -> None:
+    """Both halves, because the page reads this to decide whether to invite registrations.
+
+    The route refuses without a transport anyway, so publishing the setting
+    alone would advertise a form whose every submit answers 503.
+    """
+    no_mail = _standalone(tmp_path)
+    no_mail.open_signup = True
+
+    with TestClient(create_app(no_mail)) as client:
+        assert client.get(f"{API_ROOT}/bootstrap").json()["open_signup"] is False
+
+    reset_config()
+    reset_db()
+
+    ready = _standalone(tmp_path)
+    ready.open_signup = True
+    ready.smtp_host = "smtp.example.com"
+    ready.mail_from_email = "otari@example.com"
+    ready.public_base_url = "https://otari.example.com"
+
+    with TestClient(create_app(ready)) as client:
+        assert client.get(f"{API_ROOT}/bootstrap").json()["open_signup"] is True
+
+
+# A surface names its router's ``/api/v1/`` prefix, so the prefix is derived from the
 # name. One is nested rather than top-level and cannot be: the organization's own
-# provider keys hang off ``/v1/organizations``, and naming them ``organizations``
+# provider keys hang off ``/api/v1/organizations``, and naming them ``organizations``
 # would collapse them into the roster surface, which is a different page with
 # different access. Listed here rather than in the surface tuple itself so the
 # tuple stays the plain list of names the dashboard gates on.
 SURFACE_ROUTE_PREFIXES = {
-    "organization_providers": "/v1/organizations/me/provider-keys",
-    "organization_usage": "/v1/organizations/me/usage",
+    "organization_providers": f"{API_ROOT}/organizations/me/provider-keys",
+    "organization_usage": f"{API_ROOT}/organizations/me/usage",
 }
 
 
@@ -248,8 +275,8 @@ def test_every_surface_names_a_route_the_gateway_mounts(
     mounted = {getattr(route, "path", "") for route in app.routes}
 
     for surface in surfaces:
-        prefix = SURFACE_ROUTE_PREFIXES.get(surface, f"/v1/{surface}")
-        assert any(path.startswith(prefix) for path in mounted), f"surface {surface!r} names no mounted /v1/ route"
+        prefix = SURFACE_ROUTE_PREFIXES.get(surface, f"{API_ROOT}/{surface}")
+        assert any(path.startswith(prefix) for path in mounted), f"surface {surface!r} names no mounted /api/v1/ route"
 
 
 
@@ -267,7 +294,7 @@ def test_hosted_swaps_the_process_wide_provider_page_for_the_per_organization_on
     app = create_app(_hosted(tmp_path))
 
     with TestClient(app) as client:
-        answered = client.get("/v1/bootstrap").json()
+        answered = client.get(f"{API_ROOT}/bootstrap").json()
 
     assert answered["deployment_type"] == "hosted"
     # Still this deployment's own sign-in: "hosted_user" is a session minted by
@@ -295,14 +322,14 @@ def test_hosted_answers_everything_below_the_edition_the_way_standalone_does(tmp
     """
     standalone_app = create_app(_standalone(tmp_path))
     with TestClient(standalone_app) as client:
-        standalone = client.get("/v1/bootstrap").json()
+        standalone = client.get(f"{API_ROOT}/bootstrap").json()
 
     reset_config()
     reset_db()
 
     hosted_app = create_app(_hosted(tmp_path))
     with TestClient(hosted_app) as client:
-        hosted = client.get("/v1/bootstrap").json()
+        hosted = client.get(f"{API_ROOT}/bootstrap").json()
 
     differ = {key for key in standalone if standalone[key] != hosted[key]}
     assert differ == {"deployment_type", "surfaces"}
@@ -329,7 +356,7 @@ def test_hybrid_reports_no_session_no_surfaces_and_the_hosted_url(monkeypatch: p
     app = create_app(_hybrid())
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -346,8 +373,8 @@ def test_hybrid_reports_no_session_no_surfaces_and_the_hosted_url(monkeypatch: p
         "passkeys_ready": False,
         "oauth_providers": [],
         "mail_ready": False,
+        "open_signup": False,
     }
-
 
 
 def test_hybrid_bootstrap_leaks_no_secret(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -356,7 +383,7 @@ def test_hybrid_bootstrap_leaks_no_secret(monkeypatch: pytest.MonkeyPatch) -> No
     app = create_app(_hybrid())
 
     with TestClient(app) as client:
-        body = client.get("/v1/bootstrap").text
+        body = client.get(f"{API_ROOT}/bootstrap").text
 
     assert PLATFORM_TOKEN not in body
 
@@ -368,7 +395,7 @@ def test_management_url_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None
     app = create_app(_hybrid(management_url="https://staging.otari.example/"))
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.json()["management_url"] == "https://staging.otari.example/"
 
@@ -391,7 +418,7 @@ def test_a_management_url_that_is_not_an_http_link_fails_at_startup(
     else:
         app = create_app(_hybrid(management_url=configured))
         with TestClient(app) as client:
-            assert client.get("/v1/bootstrap").json()["management_url"] == "https://otari.ai"
+            assert client.get(f"{API_ROOT}/bootstrap").json()["management_url"] == "https://otari.ai"
 
 
 
@@ -400,7 +427,7 @@ def test_a_deployment_with_no_docs_url_points_at_the_bundled_guide(tmp_path: Pat
     app = create_app(_standalone(tmp_path))
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.json()["docs_url"] is None
 
@@ -416,7 +443,7 @@ def test_docs_url_is_published_to_a_standalone_dashboard(tmp_path: Path) -> None
     app = create_app(_standalone(tmp_path, docs_url="https://docs.otari.ai/en/"))
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.json()["docs_url"] == "https://docs.otari.ai/en/"
 
@@ -432,7 +459,7 @@ def test_a_hybrid_gateway_carries_the_hosted_docs_link_too(monkeypatch: pytest.M
     app = create_app(_hybrid(docs_url="https://docs.otari.ai/en/"))
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.json()["docs_url"] == "https://docs.otari.ai/en/"
 
@@ -473,7 +500,7 @@ def test_a_deployment_with_no_legal_urls_leaves_the_account_menu_as_it_was(tmp_p
     app = create_app(_standalone(tmp_path))
 
     with TestClient(app) as client:
-        body = client.get("/v1/bootstrap").json()
+        body = client.get(f"{API_ROOT}/bootstrap").json()
 
     assert body["terms_url"] is None
     assert body["privacy_url"] is None
@@ -497,7 +524,7 @@ def test_a_hosted_deployment_publishes_the_legal_pages_on_its_own_site(tmp_path:
     )
 
     with TestClient(app) as client:
-        body = client.get("/v1/bootstrap").json()
+        body = client.get(f"{API_ROOT}/bootstrap").json()
 
     assert body["management_url"] is None
     assert body["terms_url"] == "https://otari.ai/terms"
@@ -511,7 +538,7 @@ def test_a_hybrid_gateway_carries_its_own_legal_pages_too(monkeypatch: pytest.Mo
     app = create_app(_hybrid(terms_url="https://otari.ai/terms", privacy_url="https://otari.ai/privacy"))
 
     with TestClient(app) as client:
-        body = client.get("/v1/bootstrap").json()
+        body = client.get(f"{API_ROOT}/bootstrap").json()
 
     assert body["terms_url"] == "https://otari.ai/terms"
     assert body["privacy_url"] == "https://otari.ai/privacy"
@@ -552,7 +579,7 @@ def test_a_blank_legal_url_is_an_unset_one(field: str) -> None:
 def test_a_link_url_carrying_a_credential_is_refused_at_load(field: str, configured: str) -> None:
     """The refusal ``data_plane_url`` already made, for the same reason.
 
-    ``GET /v1/bootstrap`` is unauthenticated, so a credential written into any
+    ``GET /api/v1/bootstrap`` is unauthenticated, so a credential written into any
     of these link fields would reach every browser that asked for it, which no
     redaction in the operator-gated config viewer would cover. ``docs_url`` is
     covered too: it rides the same validator and the same response.
@@ -577,7 +604,7 @@ def test_the_unauthenticated_bootstrap_cannot_publish_a_legal_page_credential(tm
     )
 
     with TestClient(app) as client:
-        body = client.get("/v1/bootstrap").text
+        body = client.get(f"{API_ROOT}/bootstrap").text
 
     for field in ('"terms_url"', '"privacy_url"'):
         assert "@" not in body.split(field)[1].split(",")[0]
@@ -594,7 +621,7 @@ def test_a_hosted_control_plane_publishes_where_its_data_plane_is(tmp_path: Path
     app = create_app(_hosted(tmp_path, data_plane_url="https://gateway.otari.ai"))
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.json()["data_plane_url"] == "https://gateway.otari.ai"
 
@@ -609,7 +636,7 @@ def test_a_hosted_control_plane_that_names_no_data_plane_answers_null(tmp_path: 
     app = create_app(_hosted(tmp_path))
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.json()["data_plane_url"] is None
 
@@ -618,7 +645,7 @@ def test_standalone_never_publishes_a_data_plane_url(tmp_path: Path) -> None:
     """A standalone gateway is its own data plane, so the browser's origin is right.
 
     Configured or not, it answers null: the address that reached this page is an
-    address that reaches ``/v1/chat/completions``, which is more reliable than
+    address that reaches ``/api/v1/chat/completions``, which is more reliable than
     anything this process could report about itself from behind a proxy.
     """
     config = _standalone(tmp_path)
@@ -626,7 +653,7 @@ def test_standalone_never_publishes_a_data_plane_url(tmp_path: Path) -> None:
     app = create_app(config)
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.json()["data_plane_url"] is None
 
@@ -637,7 +664,7 @@ def test_a_hybrid_gateway_never_publishes_a_data_plane_url(monkeypatch: pytest.M
     app = create_app(_hybrid())
 
     with TestClient(app) as client:
-        response = client.get("/v1/bootstrap")
+        response = client.get(f"{API_ROOT}/bootstrap")
 
     assert response.json()["data_plane_url"] is None
 
@@ -669,7 +696,7 @@ def test_a_data_plane_url_that_is_not_an_http_link_is_refused_at_load(configured
 def test_a_data_plane_url_carrying_a_query_or_fragment_is_refused_at_load(configured: str) -> None:
     """The one bad value an http(s) check alone would let through.
 
-    This is a base URL a client appends ``/v1/chat/completions`` to, so a query
+    This is a base URL a client appends ``/api/v1/chat/completions`` to, so a query
     string would swallow that path into a parameter value and a fragment would
     drop it after the hash. Both parse as absolute http(s) URLs and neither is
     recoverable downstream, unlike ``docs_url``, which is a link a person
@@ -686,7 +713,7 @@ def test_a_data_plane_url_carrying_a_query_or_fragment_is_refused_at_load(config
 def test_a_data_plane_url_carrying_a_credential_is_refused(configured: str) -> None:
     """Refused at load, because this value is published to anyone who asks.
 
-    ``GET /v1/bootstrap`` is unauthenticated, so a credential here would reach
+    ``GET /api/v1/bootstrap`` is unauthenticated, so a credential here would reach
     any browser that requested it, which no redaction in the operator-gated
     config viewer would cover. The snippet built from it would also put the
     whole address into a curl command somebody pastes into a shell history.
@@ -705,7 +732,7 @@ def test_the_unauthenticated_bootstrap_cannot_publish_a_credential(tmp_path: Pat
     app = create_app(_hosted(tmp_path, data_plane_url="https://gateway.otari.ai"))
 
     with TestClient(app) as client:
-        body = client.get("/v1/bootstrap").text
+        body = client.get(f"{API_ROOT}/bootstrap").text
 
     assert "@" not in body.split('"data_plane_url"')[1].split(",")[0]
 
@@ -719,6 +746,8 @@ def test_a_blank_data_plane_url_is_an_unset_one(configured: str) -> None:
 @pytest.mark.parametrize(
     "configured",
     [
+        f"https://gateway.otari.ai{API_ROOT}",
+        f"https://gateway.otari.ai{API_ROOT}/",
         "https://gateway.otari.ai/v1",
         "https://gateway.otari.ai/v1/",
         "https://gateway.otari.ai/V1",
@@ -727,20 +756,23 @@ def test_a_blank_data_plane_url_is_an_unset_one(configured: str) -> None:
         # what a curl example on this very page shows. Caught because any
         # segment counts, not only the last one, which an earlier version of
         # this guard got wrong and let render the path twice over.
+        f"https://gateway.otari.ai{API_ROOT}/chat/completions",
         "https://gateway.otari.ai/v1/chat/completions",
         "https://gateway.otari.ai/v1/messages",
     ],
 )
-def test_a_data_plane_url_that_already_names_v1_is_refused(configured: str) -> None:
+def test_a_data_plane_url_that_already_carries_the_api_root_is_refused(configured: str) -> None:
     """The likelier mistake, refused where it is cheap.
 
-    Everywhere else a client meets one, "base URL" means the ``/v1`` address, so
-    writing that here is the natural error, and it renders a snippet posting to
-    ``/v1/v1/chat/completions``: it looks right and 404s on first use. Refused
-    rather than stripped, because stripping would be silent and would be wrong
-    for a gateway genuinely mounted under such a path.
+    Everywhere else a client meets one, "base URL" means the ``/api/v1``
+    address, so writing that here is the natural error, and it renders a
+    snippet posting to ``/api/v1/api/v1/chat/completions``: it looks right and
+    404s on first use. Refused rather than stripped, because stripping would be
+    silent and would be wrong for a gateway genuinely mounted under such a path.
+    A bare ``/v1`` is refused for the same reason; it is the root every SDK's
+    ``base_url`` ends with.
     """
-    with pytest.raises(ValidationError, match="must not contain a /v1 segment"):
+    with pytest.raises(ValidationError, match=rf"API root \({re.escape(API_ROOT)}\).*appends that path itself"):
         GatewayConfig(data_plane_url=configured)
 
 
@@ -748,6 +780,7 @@ def test_a_data_plane_url_that_already_names_v1_is_refused(configured: str) -> N
     "configured",
     [
         "https://api.example.com/otari",
+        "https://api.example.com/otari/",
         # Not a ``v1`` segment, so it survives: the guard matches whole segments
         # rather than a prefix, or a real deployment would be refused for the
         # first three characters of its path.
@@ -760,11 +793,11 @@ def test_a_path_that_does_not_name_v1_is_left_alone(configured: str) -> None:
     The guard has to stay narrow enough that it cannot cost an operator a
     deployment shape the gateway otherwise supports.
     """
-    assert GatewayConfig(data_plane_url=configured).data_plane_url == configured
+    assert GatewayConfig(data_plane_url=configured).data_plane_url == configured.rstrip("/")
 
 
 def test_a_trailing_slash_is_trimmed_from_the_data_plane_url() -> None:
-    """The dashboard suffixes this with ``/v1``, and ``//v1`` is a different path.
+    """The dashboard suffixes this with ``/api/v1``, and ``//api/v1`` is a different path.
 
     Normalized once here rather than at each consumer, since the value travels to
     a browser that builds a URL from it.

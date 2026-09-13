@@ -1,22 +1,28 @@
-import { Button, Card, Chip } from "@heroui/react"
 import { useState } from "react"
+import { FiEdit2, FiTrash2 } from "react-icons/fi"
 
 import type { WorkspaceMcpServer } from "@/client"
+import { Button } from "@/design-system/actions/Button"
+import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
+import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
+import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
+import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
+import { InfoBanner } from "@/design-system/feedback/InfoBanner"
+import { Dot } from "@/design-system/indicators/Dot"
+import { PageIntro } from "@/design-system/layout/PageIntro"
+import { TableScrollFrame } from "@/design-system/layout/TableScrollFrame"
 import { canManageWorkspace } from "@/features/organization/roles"
 import {
   McpServerDialog,
   type McpServerDraft,
 } from "@/features/tools/McpServerDialog"
+import { useOrganizationContext } from "@/shared/api/organizations"
 import {
   useCreateWorkspaceMcpServer,
   useDeleteWorkspaceMcpServer,
-  useOrganizationContext,
   useUpdateWorkspaceMcpServer,
   useWorkspaceMcpServers,
-} from "@/shared/api/hooks"
-import { ConfirmDialog } from "@/shared/components/ConfirmDialog"
-import { DataTable, type DataTableColumn } from "@/shared/components/DataTable"
-import { ErrorBanner, InfoBanner } from "@/shared/components/ui"
+} from "@/shared/api/tools"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 
 // The MCP servers this workspace has registered, which a request reaches by
@@ -39,20 +45,33 @@ function tokenChip(server: WorkspaceMcpServer) {
   // The token itself is write-only, so this is the only thing the API can say
   // about it, and the only thing worth a column: whether a request to this
   // server will carry a credential.
+  // Affirmative: a server that carries a credential is marked, and one that
+  // does not is the unmarked state rather than a second badge saying so.
   return server.has_token ? (
-    <Chip size="sm" variant="secondary">
-      Stored
-    </Chip>
+    <span className="flex items-center gap-2 text-mono-caption text-muted">
+      <Dot className="bg-accent" />
+      STORED
+    </span>
   ) : (
-    <span className="text-muted">None</span>
+    <span className="text-subtle">None</span>
   )
 }
 
+/** The page's own opening line, which the `/tools` card does not carry. */
+const PAGE_DESCRIPTION =
+  "MCP endpoints a workspace's requests can reach by naming their ids, without carrying a URL or a bearer token of their own. Each is checked for SSRF safety when it is stored and again when a request uses it, and its token is encrypted at rest."
+
 export function WorkspaceMcpServersCard({
-  showHeading = true,
+  variant = "card",
 }: {
-  /** Suppressed on the page whose own title already says "MCP servers". */
-  showHeading?: boolean
+  /**
+   * Where this is rendering. As a `card` it is one section at the foot of
+   * `/tools`, with its own `h2` and the register control beside it. As a
+   * `page` it *is* `/tools/mcp-servers`, so it renders that page's opening
+   * instead and the control sits in the heading row there, which is where
+   * every other page in the dashboard keeps the one thing it creates.
+   */
+  variant?: "card" | "page"
 }) {
   const { selected, isLoading: workspaceLoading } = useSelectedWorkspace()
   const context = useOrganizationContext()
@@ -69,17 +88,23 @@ export function WorkspaceMcpServersCard({
   const remove = useDeleteWorkspaceMcpServer()
 
   const [isDialogOpen, setDialogOpen] = useState(false)
+  // Bumped on every open and used as the dialog's key, so the draft is cleared
+  // on the way in. Clearing it on close would blank the fields while the dialog
+  // is still animating away.
+  const [openCount, setOpenCount] = useState(0)
   const [editing, setEditing] = useState<WorkspaceMcpServer>()
   const [pendingDelete, setPendingDelete] = useState<WorkspaceMcpServer>()
 
-  const heading = showHeading ? (
-    <h2 className="text-title">MCP servers</h2>
-  ) : null
+  const isPage = variant === "page"
 
   if (!selected) {
     return (
       <section className="flex flex-col gap-2">
-        {heading}
+        {isPage ? (
+          <PageIntro title="MCP servers">{PAGE_DESCRIPTION}</PageIntro>
+        ) : (
+          <h2 className="text-title">MCP servers</h2>
+        )}
         <InfoBanner>
           {workspaceLoading
             ? "Reading the workspaces you belong to."
@@ -97,12 +122,14 @@ export function WorkspaceMcpServersCard({
   const openAdd = () => {
     setEditing(undefined)
     create.reset()
+    setOpenCount((count) => count + 1)
     setDialogOpen(true)
   }
 
   const openEdit = (server: WorkspaceMcpServer) => {
     setEditing(server)
     update.reset()
+    setOpenCount((count) => count + 1)
     setDialogOpen(true)
   }
 
@@ -168,9 +195,10 @@ export function WorkspaceMcpServersCard({
       // (`--chip-fg` per `.chip--success`), and it is what the two cards next
       // door already use.
       cell: (row) => (
-        <Chip size="sm" color={row.enabled ? "success" : "default"}>
-          {row.enabled ? "Enabled" : "Disabled"}
-        </Chip>
+        <span className="flex items-center gap-2 text-mono-caption text-muted">
+          <Dot className={row.enabled ? "bg-success" : "bg-text-subtle"} />
+          {row.enabled ? "ENABLED" : "DISABLED"}
+        </span>
       ),
     },
   ]
@@ -179,30 +207,42 @@ export function WorkspaceMcpServersCard({
       id: "actions",
       header: "",
       cell: (row) => (
-        <div className="flex justify-end gap-2">
-          <Button size="sm" variant="ghost" onPress={() => openEdit(row)}>
-            Edit
-          </Button>
-          <Button size="sm" variant="ghost" onPress={() => openDelete(row)}>
-            Delete
-          </Button>
-        </div>
+        <RowActionRow>
+          <RowAction
+            icon={FiEdit2}
+            label="Edit"
+            onPress={() => openEdit(row)}
+          />
+          <RowAction
+            icon={FiTrash2}
+            label="Delete"
+            onPress={() => openDelete(row)}
+          />
+        </RowActionRow>
       ),
     })
   }
 
+  const addButton = manages ? (
+    <Button variant="primary" onPress={openAdd}>
+      Add MCP server
+    </Button>
+  ) : null
+
   return (
     <section className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {heading}
-        {manages ? (
-          <Button size="sm" variant="primary" onPress={openAdd}>
-            Add MCP server
-          </Button>
-        ) : null}
-      </div>
+      {isPage ? (
+        <PageIntro title="MCP servers" action={addButton}>
+          {PAGE_DESCRIPTION}
+        </PageIntro>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-title">MCP servers</h2>
+          {addButton}
+        </div>
+      )}
 
-      <p className="text-sm text-muted">
+      <p className="max-w-prose text-sm text-muted">
         Endpoints that requests billed to {selected.name} can use by naming
         their ids in <code className="font-mono">mcp_server_ids</code>. A
         request may still pass its own servers inline; these are the ones it
@@ -215,27 +255,25 @@ export function WorkspaceMcpServersCard({
 
       <ErrorBanner error={query.error} />
 
-      <Card>
-        <Card.Content className="p-0">
-          <DataTable
-            ariaLabel={`MCP servers for ${selected.name}`}
-            columns={columns}
-            rows={rows}
-            getRowKey={(row) => row.id}
-            isLoading={query.isPending && !query.data}
-            // Deliberately asserts nothing about the workspace: an empty table
-            // is also what a failed request leaves behind, and the banner above
-            // is the only thing that knows which of the two happened.
-            emptyContent={
-              manages
-                ? "No MCP server registered. Add one to let this workspace's requests name it by id."
-                : "No MCP server registered."
-            }
-          />
-        </Card.Content>
-      </Card>
+      <TableScrollFrame className="otari-mcp-table">
+        <DataTable
+          ariaLabel={`MCP servers for ${selected.name}`}
+          columns={columns}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          isLoading={query.isPending && !query.data}
+          // Deliberately asserts nothing about the workspace: an empty table
+          // is also what a failed request leaves behind, and the banner above
+          // is the only thing that knows which of the two happened.
+          emptyContent="No MCP server registered. Add one to let this workspace's requests name it by id."
+        />
+      </TableScrollFrame>
 
+      {/* Keyed on the open count, so each open remounts the form: it seeds its
+          fields on mount, and one row's draft must not survive into the next
+          row's dialog. */}
       <McpServerDialog
+        key={openCount}
         isOpen={isDialogOpen}
         onOpenChange={setDialogOpen}
         editing={editing}

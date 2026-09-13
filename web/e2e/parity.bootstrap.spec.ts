@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test"
+import { API_ROOT } from "@/shared/api/client"
 
 // The shell reads /v1/bootstrap before it renders anything, so every other spec
 // here already depends on it answering: a failure paints an error banner in
@@ -8,7 +9,7 @@ import { expect, test } from "@playwright/test"
 test("the deployment bootstrap is served unauthenticated", async ({
   request,
 }) => {
-  const response = await request.get("/v1/bootstrap")
+  const response = await request.get(`${API_ROOT}/bootstrap`)
 
   expect(response.status()).toBe(200)
   expect(await response.json()).toEqual({
@@ -62,5 +63,9 @@ test("the deployment bootstrap is served unauthenticated", async ({
     // No SMTP configured in this e2e environment, so invitations are
     // creatable but not emailed; see docs/configuration.md#mail.
     mail_ready: false,
+    // Closed, which is the default and is what mail_ready above would force
+    // anyway: signup sends a verification link, so a deployment that cannot
+    // send one registers nobody.
+    open_signup: false,
   })
 })
