@@ -1,4 +1,4 @@
-import { AlertDialog, Button } from "@heroui/react"
+import { Button } from "@heroui/react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 
@@ -8,6 +8,7 @@ import type {
   PricingResponse,
 } from "@/client"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
+import { Dialog, DialogSection } from "@/design-system/feedback/Dialog"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
@@ -79,58 +80,62 @@ function PricingRefreshDialog({
   isPending,
   onAccept,
   onReject,
+  onDismiss,
 }: {
   preview: PricingRefreshPreview
   error: Error | null
   isPending: boolean
   onAccept: () => void
   onReject: () => void
+  onDismiss: () => void
 }) {
   return (
-    <AlertDialog.Backdrop>
-      <AlertDialog.Container placement="center" size="lg">
-        <AlertDialog.Dialog>
-          <AlertDialog.Header>
-            <AlertDialog.Heading>
-              Review default price updates
-            </AlertDialog.Heading>
-          </AlertDialog.Header>
-          <AlertDialog.Body className="flex flex-col gap-4">
-            <p className="text-sm text-muted">
-              {preview.added_count} added, {preview.changed_count} changed, and{" "}
-              {preview.removed_count} removed upstream model prices. The
-              accepted catalog is saved in the database with source{" "}
-              <code>genai-prices</code> and reloads after a restart. Your{" "}
-              {preview.protected_model_count} custom model price
-              {preview.protected_model_count === 1 ? "" : "s"} remain unchanged.
-            </p>
-            {preview.changes.length > 0 ? (
-              <ul className="max-h-60 list-disc overflow-auto pl-5 text-body">
-                {preview.changes.map((change) => (
-                  <li key={change.model_key}>
-                    {change.model_key}: {change.change}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {preview.changes_truncated ? (
-              <p className="text-caption">
-                Only the first 100 changes are shown.
-              </p>
-            ) : null}
-            <ErrorBanner error={error} />
-          </AlertDialog.Body>
-          <AlertDialog.Footer>
-            <Button variant="ghost" isDisabled={isPending} onPress={onReject}>
-              Reject changes
-            </Button>
-            <Button variant="primary" isPending={isPending} onPress={onAccept}>
-              Accept price updates
-            </Button>
-          </AlertDialog.Footer>
-        </AlertDialog.Dialog>
-      </AlertDialog.Container>
-    </AlertDialog.Backdrop>
+    <Dialog
+      isOpen
+      // Dismissing is "not now", not "reject". The preview is a row the gateway
+      // is holding for review, so closing the frame leaves it pending and the
+      // notice above offers it again; rejecting discards it server-side and is
+      // what the footer's own control is for. Refused outright while a mutation
+      // is in flight, which is the same answer the two buttons give.
+      onOpenChange={(isOpen) => (isOpen ? undefined : onDismiss())}
+      isDismissable={!isPending}
+      title="Review default price updates"
+      size="lg"
+      actions={
+        <>
+          <Button variant="ghost" isDisabled={isPending} onPress={onReject}>
+            Reject changes
+          </Button>
+          <Button variant="primary" isPending={isPending} onPress={onAccept}>
+            Accept price updates
+          </Button>
+        </>
+      }
+    >
+      <DialogSection>
+        <p className="text-sm text-muted">
+          {preview.added_count} added, {preview.changed_count} changed, and{" "}
+          {preview.removed_count} removed upstream model prices. The accepted
+          catalog is saved in the database with source <code>genai-prices</code>{" "}
+          and reloads after a restart. Your {preview.protected_model_count}{" "}
+          custom model price
+          {preview.protected_model_count === 1 ? "" : "s"} remain unchanged.
+        </p>
+        {preview.changes.length > 0 ? (
+          <ul className="max-h-60 list-disc overflow-auto pl-5 text-body">
+            {preview.changes.map((change) => (
+              <li key={change.model_key}>
+                {change.model_key}: {change.change}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {preview.changes_truncated ? (
+          <p className="text-caption">Only the first 100 changes are shown.</p>
+        ) : null}
+        <ErrorBanner error={error} />
+      </DialogSection>
+    </Dialog>
   )
 }
 
@@ -158,6 +163,11 @@ function PricingRefreshSection() {
 
   const close = () => {
     previewRefresh.reset()
+    // The two mutations' errors are the frame's, not the page's, so they go
+    // with it: dismissing after a failed accept and reopening would otherwise
+    // greet the operator with the banner from the attempt before.
+    confirmRefresh.reset()
+    rejectRefresh.reset()
     setReviewingPending(false)
   }
   const reject = () => {
@@ -228,27 +238,20 @@ function PricingRefreshSection() {
           </div>
         ) : null}
       </Section>
-      <AlertDialog
-        isOpen={preview !== undefined}
-        onOpenChange={(isOpen) => (!isOpen ? reject() : undefined)}
-      >
-        <AlertDialog.Trigger className="hidden">
-          Review price updates
-        </AlertDialog.Trigger>
-        {preview ? (
-          <PricingRefreshDialog
-            preview={preview}
-            error={confirmRefresh.error ?? rejectRefresh.error}
-            isPending={isPending}
-            onAccept={() =>
-              confirmRefresh.mutate(undefined, {
-                onSuccess: close,
-              })
-            }
-            onReject={reject}
-          />
-        ) : null}
-      </AlertDialog>
+      {preview ? (
+        <PricingRefreshDialog
+          preview={preview}
+          error={confirmRefresh.error ?? rejectRefresh.error}
+          isPending={isPending}
+          onAccept={() =>
+            confirmRefresh.mutate(undefined, {
+              onSuccess: close,
+            })
+          }
+          onReject={reject}
+          onDismiss={close}
+        />
+      ) : null}
     </>
   )
 }

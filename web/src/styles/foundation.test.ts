@@ -1162,7 +1162,6 @@ describe("content text wears a type role", () => {
       "features/routing/RoutingPage.tsx",
       "the candidate cap, a consequence note in the button row",
     ],
-    ["features/usage/ShareDialog.tsx", "a notice in the dialog's button row"],
   ]
   const RULED = new Map(CAPTION_SIZE_IS_RULED)
 

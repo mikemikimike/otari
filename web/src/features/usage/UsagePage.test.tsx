@@ -513,7 +513,9 @@ describe("UsagePage", () => {
     await user.click(
       screen.getByRole("button", { name: "Share usage as an image" }),
     )
-    await screen.findByText("Share this view as an image")
+    // By role: a `Dialog` fills HeroUI's trigger slot with its own title and
+    // hides it, so the string is in the document twice.
+    await screen.findByRole("dialog", { name: "Share this view as an image" })
 
     // The panel reads the page's own summary. If it ever grows a query of its
     // own, opening it would add a /v1/usage/summary call with a different

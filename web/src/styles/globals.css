@@ -2245,10 +2245,10 @@ main {
   max-height: calc(var(--visual-viewport-height, 100dvh) - 15rem);
 }
 
-/* The three sizes, as modifiers rather than a value the component sets inline:
+/* The four sizes, as modifiers rather than a value the component sets inline:
  * what the unlayered rule above beats is a `width`, and nothing declares these,
  * so a class here has nothing to lose to. The phone block below is later still,
- * which is what lets a sheet ignore all three. */
+ * which is what lets a sheet ignore all four. */
 .otari-form-dialog--sm,
 .otari-dialog--sm {
   width: 27.5rem;
@@ -2260,6 +2260,16 @@ main {
 .otari-form-dialog--lg,
 .otari-dialog--lg {
   width: 40rem;
+}
+/* The one size that is about the body's shape rather than its length: a frame
+ * whose content is two columns side by side, where `lg` leaves the second one
+ * too narrow to hold its own controls. `ShareDialog` is the case, and it is the
+ * reason this exists rather than a call site widening itself: a width spelled
+ * on the dialog loses to the unlayered `.modal__dialog` rule above, so the only
+ * class that can win is one in this family. */
+.otari-form-dialog--xl,
+.otari-dialog--xl {
+  width: 58rem;
 }
 
 /* A field fills this dialog. `Field` and `SecretField` cap themselves at

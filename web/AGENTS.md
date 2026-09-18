@@ -319,6 +319,16 @@ new cell into the live table and reading the result back.
 - Overwrite `last_used` with a real timestamp first. Every row in the seed says
   "never", and that one substitution moves a measured overflow from 0 to 23px.
 
+**A dialog's bounding box is a few percent large while it opens.** The overlay
+animates in on a scale transform, so `getBoundingClientRect()` read right after
+the frame becomes visible returns the box mid-animation: a 928px dialog measured
+963, and its container measured 1336 on a 1280 viewport, both the same 1.0438
+factor. It reads as a width rule that lost a cascade fight, which is the thing
+anyone measuring a dialog is usually there to check. `getComputedStyle(el).width`
+is unaffected by the transform and is the number a width assertion wants;
+`e2e/dashboard.spec.ts`'s share frame is the worked example. The background-tab
+entry above is the same instrument failing from the other direction.
+
 **And absence from the built CSS proves nothing on its own.** Tailwind emits
 only the utilities something in the tree asks for, so checking whether a
 `@utility` or a token survived the build needs a consumer inside `src` that

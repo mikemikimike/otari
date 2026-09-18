@@ -15,6 +15,7 @@ import type {
 import { ModelPricingPage } from "@/features/pricing/ModelPricingPage"
 import { API_ROOT } from "@/shared/api/client"
 import { organizationContext } from "@/tests/fixtures"
+import { getModalBackdrop } from "@/tests/modal"
 import { withRouter } from "@/tests/router"
 
 const SETTINGS: GatewaySettings = {
@@ -262,7 +263,7 @@ describe("ModelPricingPage", () => {
     )
 
     expect(
-      await screen.findByRole("alertdialog", {
+      await screen.findByRole("dialog", {
         name: "Review default price updates",
       }),
     ).toBeInTheDocument()
@@ -277,7 +278,7 @@ describe("ModelPricingPage", () => {
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("alertdialog", {
+        screen.queryByRole("dialog", {
           name: "Review default price updates",
         }),
       ).not.toBeInTheDocument(),
@@ -300,7 +301,7 @@ describe("ModelPricingPage", () => {
     await user.click(
       screen.getByRole("button", { name: "Check for price updates" }),
     )
-    await screen.findByRole("alertdialog", {
+    await screen.findByRole("dialog", {
       name: "Review default price updates",
     })
 
@@ -308,7 +309,7 @@ describe("ModelPricingPage", () => {
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("alertdialog", {
+        screen.queryByRole("dialog", {
           name: "Review default price updates",
         }),
       ).not.toBeInTheDocument(),
@@ -320,6 +321,52 @@ describe("ModelPricingPage", () => {
           init?.method === "POST",
       ),
     ).toBe(true)
+  })
+
+  // Dismissing is not rejecting: the preview is a row the gateway holds until
+  // an operator decides, so Escape and a backdrop click put the frame away and
+  // leave it pending. Both assert the absence of the reject call, which is the
+  // whole point of the distinction.
+  it.each([
+    [
+      "Escape",
+      async (user: ReturnType<typeof userEvent.setup>) =>
+        user.keyboard("{Escape}"),
+    ],
+    [
+      "a backdrop click",
+      async (user: ReturnType<typeof userEvent.setup>) =>
+        user.click(getModalBackdrop()),
+    ],
+  ])("closes the review without rejecting it on %s", async (_name, dismiss) => {
+    const fetchMock = mockApi()
+    const user = userEvent.setup()
+
+    renderPage(<ModelPricingPage />)
+    await screen.findByText("Default pricing catalog")
+    await user.click(
+      screen.getByRole("button", { name: "Check for price updates" }),
+    )
+    await screen.findByRole("dialog", {
+      name: "Review default price updates",
+    })
+
+    await dismiss(user)
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Review default price updates",
+        }),
+      ).not.toBeInTheDocument(),
+    )
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith(`${API_ROOT}/pricing/refresh/reject`) &&
+          init?.method === "POST",
+      ),
+    ).toBe(false)
   })
 
   it("offers the update the scheduled check left for review, and accepts it", async () => {
@@ -335,7 +382,7 @@ describe("ModelPricingPage", () => {
       screen.getByRole("button", { name: "Review pending update" }),
     )
     expect(
-      await screen.findByRole("alertdialog", {
+      await screen.findByRole("dialog", {
         name: "Review default price updates",
       }),
     ).toBeInTheDocument()
@@ -347,7 +394,7 @@ describe("ModelPricingPage", () => {
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("alertdialog", {
+        screen.queryByRole("dialog", {
           name: "Review default price updates",
         }),
       ).not.toBeInTheDocument(),

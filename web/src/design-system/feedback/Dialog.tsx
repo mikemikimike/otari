@@ -4,8 +4,8 @@ import { FiX } from "react-icons/fi"
 
 import { Button } from "../actions/Button"
 
-/** `sm` 440px, `md` 520px (the default), `lg` 640px. */
-export type DialogSize = "sm" | "md" | "lg"
+/** `sm` 440px, `md` 520px (the default), `lg` 640px, `xl` 928px. */
+export type DialogSize = "sm" | "md" | "lg" | "xl"
 
 /** Which ink the scanning arc is drawn in. */
 export type ScanTone = "accent" | "danger"
