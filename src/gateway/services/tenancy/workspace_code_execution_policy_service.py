@@ -52,8 +52,8 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.models.entities import WorkspaceCodeExecutionPolicy
 from gateway.models.tenancy import User, Workspace
+from gateway.models.tools import WorkspaceCodeExecutionPolicy
 from gateway.services.mcp_loop import MAX_TOOL_ITERATIONS_CAP
 from gateway.services.sandbox_backend import (
     CODE_EXECUTION_TOOL_NAME,
@@ -299,7 +299,7 @@ class WorkspaceCodeExecutionPolicyService:
 
     def __init__(self, db: AsyncSession, *, sandbox_configured: bool, allowed_images: tuple[str, ...] = ()):
         self.db = db
-        self.organizations = OrganizationService(db)
+        self.organizations = OrganizationService(db, membership_listener=None)
         # Passed in rather than read here: whether a sandbox is configured, and
         # which images an operator curated, are questions about the running
         # deployment's config, which the route layer already holds and a service

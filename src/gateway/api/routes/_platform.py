@@ -34,7 +34,7 @@ from gateway.core.usage import (
     cache_write_tokens_of,
 )
 from gateway.log_config import logger
-from gateway.metrics import record_abandoned_attempt
+from gateway.metrics import REGISTRY, Counter
 from gateway.models.mcp import McpServerConfig, ResolvedMcpServer
 from gateway.services.bedrock_gateway_auth import build_bedrock_client_args
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
@@ -45,9 +45,29 @@ from gateway.services.mcp_stateless import (
     McpExecutionError,
 )
 from gateway.services.sandbox_backend import SandboxNotReachableError
-from gateway.services.web_search_backend import WebSearchNotReachableError
+from gateway.services.web_retrieval_backend import WebSearchNotReachableError
 
 T = TypeVar("T")
+
+ABANDONED_ATTEMPTS = Counter(
+    "gateway_abandoned_attempts",
+    "Total upstream attempts abandoned before their first chunk (provider fallback / timeout waste)",
+    ["provider", "model", "reason", "position"],
+    registry=REGISTRY,
+)
+
+
+def record_abandoned_attempt(provider: str, model: str, reason: str, position: int) -> None:
+    """Record an upstream attempt abandoned before it produced its first chunk.
+
+    ``reason`` is one of ``timeout`` (the first-chunk wait elapsed),
+    ``build_error`` (opening the upstream stream failed), or ``upstream_error``
+    (the upstream raised before yielding a chunk). ``position`` is the attempt's
+    index in the resolved routing plan; label cardinality stays bounded by the
+    plan length.
+    """
+    ABANDONED_ATTEMPTS.labels(provider=provider, model=model, reason=reason, position=str(position)).inc()
+
 
 # Status codes returned by the platform's usage-report endpoint that the
 # gateway should NOT retry. Auth, payment-required, not-found, conflict, gone,
@@ -1013,19 +1033,18 @@ async def _resolve_platform_mcp_server(
 async def _resolve_platform_web_search(
     config: GatewayConfig,
     user_token: str,
+    requested_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     """Resolve the workspace's web-search policy via the platform.
 
-    POSTs an empty body to `/gateway/web-search/resolve` (via `_post_resolve`,
-    which owns the shared guard/headers/status-code ladder) and returns the
-    parsed JSON dict on 200 (``{enabled, provider, max_results, purpose_hint,
-    allowed_domains, blocked_domains, provider_options}``).
+    New gateways send the exact managed web capabilities the request declared.
+    ``None`` retains the legacy Search-only body for compatibility callers.
     """
     payload = await _post_resolve(
         config,
         user_token=user_token,
         path="/gateway/web-search/resolve",
-        body={},
+        body={} if requested_tools is None else {"requested_tools": requested_tools},
         client_error_detail="Web search resolution failed",
     )
     return payload if isinstance(payload, dict) else {}

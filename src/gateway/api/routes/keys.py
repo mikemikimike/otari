@@ -9,14 +9,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
-from gateway.api.deps import CurrentIdentity, get_config, get_db, require_deployment_operator
-from gateway.auth.models import generate_api_key, hash_key, key_prefix
+from gateway.api.deps import CallerOrganization, get_config, get_db, require_deployment_operator
+from gateway.auth.models import generate_api_key, hash_key, key_prefix, key_suffix
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import APIKey, User
+from gateway.core.surface import Surface
+from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import Workspace
-from gateway.repositories.users_repository import get_or_create_default_user
+from gateway.models.users import User
+from gateway.repositories.users_repository import get_or_create_default_user, owned_by_organization
 from gateway.services.model_access import is_allowlist_subset, validate_allowed_models
-from gateway.services.tenancy import OrganizationService
 from gateway.services.workspace_scope import organization_default_workspace_id
 
 # A key inherits its user's default allow-list and may narrow it, never broaden
@@ -32,27 +33,17 @@ router = APIRouter(
     dependencies=[Depends(require_deployment_operator)],
 )
 
-
-async def _caller_organization_id(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    identity: CurrentIdentity,
-) -> uuid.UUID:
-    """The organization this request acts in.
-
-    A key is minted, listed and revoked inside one organization, so every route
-    here resolves the caller's before it touches a row. A dashboard session names
-    the identity behind it and resolves that identity's active organization,
-    which is what ``POST /api/v1/organizations/me/switch`` moves; a header master key
-    names nobody, resolves the bootstrap operator, and therefore acts in the
-    default organization. That is the same rule ``services/workspace_scope``
-    already documents for a deployment-wide write, so an operator running several
-    organizations behind one gateway works in the one they are currently in
-    rather than across all of them (otari#817).
-    """
-    return (await OrganizationService(db).get_active_organization_for_user(identity)).id
+SURFACE = Surface("keys")
 
 
-CallerOrganization = Annotated[uuid.UUID, Depends(_caller_organization_id)]
+# Every key surface reads the keys a person created, and none of them reads the
+# ones this deployment minted for itself: an internal key carries a stored
+# credential (``models/api_keys.APIKey.internal_secret``), so a rotation or a
+# revoke through these routes would leave the holder presenting a key that no
+# longer authenticates, with nothing on screen to explain it. A read is excluded
+# for the same reason a write is, because the id a read hands back is what a write
+# is aimed with, and a 404 is the answer a route with no business in a row gives.
+NOT_INTERNAL = col(APIKey.internal_secret).is_(None)
 
 
 async def _load_key_in_organization(
@@ -79,7 +70,11 @@ async def _load_key_in_organization(
     statement = (
         select(APIKey)
         .join(Workspace, col(Workspace.id) == col(APIKey.workspace_id))
-        .where(col(APIKey.id) == key_id, col(Workspace.organization_id) == organization_id)
+        .where(
+            col(APIKey.id) == key_id,
+            col(Workspace.organization_id) == organization_id,
+            NOT_INTERNAL,
+        )
     )
     if owner_user_id is not None:
         statement = statement.where(col(APIKey.user_id) == owner_user_id)
@@ -141,9 +136,10 @@ class CreateKeyResponse(BaseModel):
 
     id: str
     key: str
-    # Leading characters of the key, echoed so the client can key its show-once
-    # reveal to the same fingerprint the list will display afterward.
+    # Leading and trailing characters of the key, echoed so the client can key its
+    # show-once reveal to the same fingerprint the list will display afterward.
     key_prefix: str | None
+    key_suffix: str | None
     key_name: str | None
     user_id: str | None
     created_at: str
@@ -160,9 +156,11 @@ class KeyInfo(BaseModel):
     """Response model for key information."""
 
     id: str
-    # Display-only fingerprint (leading characters of the plaintext key). Null for
-    # keys minted before the prefix was recorded; the full key is never returned.
+    # Display-only fingerprint (leading and trailing characters of the plaintext
+    # key). Either is null for keys minted before that half was recorded, and neither
+    # can be back-filled; the full key is never returned.
     key_prefix: str | None
+    key_suffix: str | None
     key_name: str | None
     user_id: str | None
     created_at: str
@@ -182,6 +180,7 @@ class KeyInfo(BaseModel):
             id=str(key.id),
             workspace_id=key.workspace_id,
             key_prefix=str(key.key_prefix) if key.key_prefix else None,
+            key_suffix=str(key.key_suffix) if key.key_suffix else None,
             key_name=str(key.key_name) if key.key_name else None,
             user_id=str(key.user_id) if key.user_id else None,
             created_at=key.created_at.isoformat(),
@@ -259,6 +258,16 @@ async def create_key(
                 alias=f"User {request.user_id}",
             )
             db.add(user)
+        elif not await owned_by_organization(db, user.user_id, organization_id):
+            # An owner this organization cannot name, which is another
+            # organization's person: the same 404 an unknown id would get, so the
+            # refusal reports no more than the read on ``/users`` does. Minting
+            # here would bill this organization's traffic to their ledger and
+            # their budget (otari-ai#2108).
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with id '{request.user_id}' not found",
+            )
         elif user.deleted_at is not None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -312,6 +321,7 @@ async def create_key(
         workspace_id=workspace_id,
         key_hash=key_hash,
         key_prefix=key_prefix(api_key),
+        key_suffix=key_suffix(api_key),
         key_name=request.key_name,
         user_id=user_id,
         expires_at=request.expires_at,
@@ -357,7 +367,7 @@ async def list_keys(
     statement = (
         select(APIKey)
         .join(Workspace, col(Workspace.id) == col(APIKey.workspace_id))
-        .where(col(Workspace.organization_id) == organization_id)
+        .where(col(Workspace.organization_id) == organization_id, NOT_INTERNAL)
     )
     if workspace_id is not None:
         statement = statement.where(col(APIKey.workspace_id) == workspace_id)
@@ -464,6 +474,7 @@ async def rotate_key(
     new_api_key = generate_api_key()
     key.key_hash = hash_key(new_api_key)
     key.key_prefix = key_prefix(new_api_key)
+    key.key_suffix = key_suffix(new_api_key)
     key.last_used_at = None
 
     try:

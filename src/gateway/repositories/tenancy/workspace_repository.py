@@ -87,6 +87,13 @@ class WorkspaceRepository(BaseRepository[Workspace, WorkspaceCreate, WorkspaceUp
         )
         return list(result.scalars().all()), count
 
+    async def get_ids_by_organization(self, organization_id: uuid.UUID) -> list[uuid.UUID]:
+        """Return the ID of every workspace in an organization."""
+        result = await self.db.execute(
+            select(col(Workspace.id)).where(col(Workspace.organization_id) == organization_id)
+        )
+        return list(result.scalars().all())
+
     async def get_by_organization_and_name(self, organization_id: uuid.UUID, name: str) -> Workspace | None:
         """Return an organization's workspace with this name, or None."""
         result = await self.db.execute(
@@ -283,6 +290,13 @@ class WorkspaceMemberRepository:
                 col(Workspace.organization_id) == organization_id,
                 col(WorkspaceMember.status) == "active",
             )
+        )
+        return list(result.scalars().all())
+
+    async def ids_for_workspace(self, workspace_id: uuid.UUID) -> list[uuid.UUID]:
+        """Every membership ID in a workspace."""
+        result = await self.db.execute(
+            select(col(WorkspaceMember.id)).where(col(WorkspaceMember.workspace_id) == workspace_id)
         )
         return list(result.scalars().all())
 

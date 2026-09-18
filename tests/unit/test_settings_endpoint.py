@@ -225,6 +225,7 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
     for name in (
         "mcp_allow_private_hosts",
         "web_search_allow_private_hosts",
+        "web_retrieval_trust_env_proxy",
         "provider_allow_private_hosts",
         "sandbox_url",
         "guardrails_url",
@@ -244,6 +245,17 @@ def test_settings_includes_full_config_view(tmp_path: Path) -> None:
     # Secrets and complex catalog fields are never surfaced here.
     for secret in ("master_key", "providers", "pricing", "aliases", "platform"):
         assert secret not in by_key, secret
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_web_fetch_enablement_is_visible_and_startup_only(enabled: bool) -> None:
+    config = GatewayConfig(web_fetch_enabled=enabled)
+    field = next(field for field in _config_fields(config) if field.key == "web_fetch_enabled")
+
+    assert field.value is enabled
+    assert field.group == "Tools & network access"
+    assert field.type == "bool"
+    assert field.settable is False
 
 
 def test_config_view_redacts_url_credentials() -> None:
@@ -316,6 +328,16 @@ def test_config_view_shows_the_legal_link_targets() -> None:
     # Read-only: where the legal pages live is a restart-time decision.
     assert by_key["terms_url"].settable is False
     assert by_key["privacy_url"].settable is False
+
+
+def test_the_viewer_shows_the_ui_base_url_actually_in_use() -> None:
+    # Unset, public_base_url answers for it, so showing the bare field would
+    # tell an operator debugging a link that nothing is configured.
+    config = GatewayConfig(public_base_url="https://otari.example.com")
+    shown = {field.key: field.value for field in _config_fields(config)}
+
+    assert shown["ui_base_url"] == "https://otari.example.com"
+    assert GatewayConfig(ui_base_url="https://app.example.com").ui_base_url == "https://app.example.com"
 
 
 def test_every_config_field_is_shown_or_deliberately_omitted() -> None:

@@ -82,6 +82,8 @@ export function pricingResponse(
     cache_write_price_per_million: null,
     cache_write_1h_price_per_million: null,
     pricing_tiers: [],
+    unit: "tokens",
+    origin: "api",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
@@ -97,6 +99,7 @@ const STANDALONE_SURFACES = [
   "keys",
   "models",
   "organizations",
+  "playground",
   "pricing",
   "providers",
   "routing",
@@ -109,11 +112,14 @@ const STANDALONE_SURFACES = [
 
 // The same list for a hosted (multi-tenant) deployment, kept in step with
 // HOSTED_SURFACES beside it: the process-global provider page drops, the
-// organization-scoped one takes its place, and the organization-wide Usage page
-// appears, being a destination only where "my organization" is narrower than
-// "everything" (otari-ai#1963).
+// organization-scoped one takes its place, the Playground drops because a
+// control plane serves no inference (otari#822), and the organization-wide
+// Usage page appears, being a destination only where "my organization" is
+// narrower than "everything" (otari-ai#1963).
+const HOSTED_DROPS = new Set(["providers", "playground"])
+
 export const HOSTED_SURFACES = [
-  ...STANDALONE_SURFACES.filter((surface) => surface !== "providers"),
+  ...STANDALONE_SURFACES.filter((surface) => !HOSTED_DROPS.has(surface)),
   "organization_providers",
   "organization_usage",
 ]
@@ -152,6 +158,9 @@ export function bootstrap(
     // clearing a list it does not care about.
     oauth_providers: [],
     mail_ready: false,
+    // Off by default, matching the config default; the public-catalog tests
+    // turn it on.
+    public_catalog: false,
     // Closed, matching the default posture: the signup tests that want
     // registration turn it on rather than every other test turning it off.
     open_signup: false,
@@ -190,6 +199,8 @@ export function organizationContext(
       user_id: "33333333-3333-3333-3333-333333333333",
       email: null,
       full_name: "Operator",
+      has_password: false,
+      claims_deployment: true,
     },
     role: "owner",
     status: "active",
@@ -427,6 +438,7 @@ export function apiKey(overrides: Partial<ApiKey> = {}): ApiKey {
     // NOT NULL on the server: a key always belongs to exactly one workspace.
     workspace_id: "11111111-1111-1111-1111-111111111111",
     key_prefix: "gw-AbC3dE",
+    key_suffix: "7xKp",
     key_name: "ci-bot",
     user_id: "alice",
     created_at: "2026-01-01T00:00:00+00:00",
@@ -613,6 +625,9 @@ export function orgProviderKey(
     // the server and only the tail of the key is ever published.
     last4: "abcd",
     is_org_default: false,
+    // The default is a key this deployment can actually read. A test wanting the
+    // other case says so, because that is the state the dashboard has to show.
+    usable: true,
     archived_at: null,
     created_at: "2026-08-24T00:00:00+00:00",
     updated_at: null,
@@ -633,6 +648,9 @@ export function workspaceProviderKeyOverride(
     disabled: false,
     is_effective_default: true,
     is_effective_enabled: true,
+    usable: true,
+    // Empty is the answer "every model this key serves", never "no model".
+    allowed_models: [],
     ...overrides,
   }
 }

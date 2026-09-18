@@ -9,12 +9,14 @@ import { FormDialog } from "@/design-system/feedback/FormDialog"
 import { Field } from "@/design-system/forms/Field"
 import { Select } from "@/design-system/forms/Select"
 import { useDirtySnapshot } from "@/design-system/forms/useDirtySnapshot"
+import { ProviderInstanceComboBox } from "@/features/providers/ProviderInstanceComboBox"
 import {
   useCreateOrganizationSpendCeiling,
   useUpdateOrganizationSpendCeiling,
 } from "@/shared/api/budgets"
 
-import { budgetLabel, limitLabel, scopeLabel } from "./organizationBudget"
+import { budgetLabeler, hasBudgetName } from "./budgetLabel"
+import { limitLabel, scopeLabel } from "./organizationBudget"
 
 // The form behind both Add and Edit for a spend ceiling.
 //
@@ -32,8 +34,6 @@ export interface SpendCeilingDraft {
   name: string | null
 }
 
-const ORGANIZATION_SCOPE = "organization"
-
 export interface SpendCeilingDialogProps {
   isOpen: boolean
   onOpenChange: (open: boolean) => void
@@ -42,6 +42,13 @@ export interface SpendCeilingDialogProps {
   /** The organization's own budgets, which are the only ones a ceiling may name. */
   budgets: readonly OrganizationBudget[]
   workspaces: readonly Workspace[]
+  /**
+   * The organization's own id, which is the `scope_id` an organization-wide
+   * ceiling is created with. The endpoint resolves every scope id as a uuid, so
+   * a word standing in for "the organization" resolves to nothing and is
+   * refused (otari-ai#2147); the target control carries real ids only.
+   */
+  organizationId: string
   organizationName: string
   /** Called once a save has landed, so the caller can close this. */
   onSaved: () => void
@@ -53,6 +60,7 @@ export function SpendCeilingDialog({
   editing,
   budgets,
   workspaces,
+  organizationId,
   organizationName,
   onSaved,
 }: SpendCeilingDialogProps) {
@@ -77,12 +85,13 @@ export function SpendCeilingDialog({
     }
     create.mutate(draft, onDone)
   }
-  // "organization", or a workspace id. One control rather than a kind and an id,
-  // because the two scopes this page creates are a closed list and asking for a
-  // kind first would be a step with one real choice in it.
+  // The organization's id, or a workspace's. One control rather than a kind and
+  // an id, because the two scopes this page creates are a closed list and asking
+  // for a kind first would be a step with one real choice in it; the kind is
+  // derived at submit from which id was picked.
   // Seeded on mount only, because the caller remounts this on each open.
   const seed = {
-    target: ORGANIZATION_SCOPE,
+    target: organizationId,
     budgetId: editing?.budget_id ?? budgets[0]?.budget_id ?? "",
     provider: editing?.provider_key_id ?? "",
     name: editing?.name ?? "",
@@ -112,10 +121,16 @@ export function SpendCeilingDialog({
     reseed({ target, budgetId: landed, provider, name })
   }
 
-  const ownOptions = budgets.map((budget) => ({
-    value: budget.budget_id,
-    label: `${budgetLabel(budget)} — ${limitLabel(budget)}`,
-  }))
+  const nameBudget = budgetLabeler(budgets)
+  const ownOptions = budgets.map((budget) => {
+    const label = nameBudget(budget)
+    return {
+      value: budget.budget_id,
+      // An unnamed budget's label already reads as what it caps, so appending
+      // the limit again would say the figure twice.
+      label: hasBudgetName(budget) ? `${label} — ${limitLabel(budget)}` : label,
+    }
+  })
   // A ceiling holding a budget set at the deployment level opens on an id no
   // option carries, and `Select` renders such a value as itself: a raw
   // uuid where the budget's name belongs. Carried as its own labelled option
@@ -137,7 +152,7 @@ export function SpendCeilingDialog({
 
   const targetOptions = [
     {
-      value: ORGANIZATION_SCOPE,
+      value: organizationId,
       label: `${organizationName} (whole organization)`,
     },
     ...workspaces.map((workspace) => ({
@@ -171,7 +186,7 @@ export function SpendCeilingDialog({
   const submit = () => {
     if (blockedReason !== undefined) return
     save({
-      scope_type: target === ORGANIZATION_SCOPE ? "organization" : "workspace",
+      scope_type: target === organizationId ? "organization" : "workspace",
       // The editing path never reaches here with a changed scope: the endpoint
       // ignores both fields on a PATCH and the controls are not rendered.
       scope_id: editing?.scope_id ?? target,
@@ -217,7 +232,7 @@ export function SpendCeilingDialog({
             options={targetOptions}
             reserveMessage={false}
           />
-          <Field
+          <ProviderInstanceComboBox
             label="Provider instance"
             value={provider}
             onChange={setProvider}

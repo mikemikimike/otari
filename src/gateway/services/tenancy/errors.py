@@ -812,6 +812,33 @@ class OrganizationPricingOverlapError(TenancyConflictError):
         )
 
 
+class OrganizationPricingManagedModelError(TenancyForbiddenError):
+    """An override aimed at a model the deployment, not the organization, pays for.
+
+    An override is how an organization records what it pays for a model it
+    supplies the provider key for. Two cases raise this: a model addressed through
+    a ``config.providers`` instance, and a bare ``provider:model`` key that the
+    bound ``ModelProviderPort`` would serve on a deployment-owned hosted credential
+    because a workspace lacks a usable BYO key. Both mean the deployment holds the
+    upstream credential and settles the upstream bill, so the rate is the
+    deployment price list's and a tenant-set rate would decide what that
+    deployment charges itself. A zero is the sharp end of it, since cost is also
+    what a budget counts down.
+
+    Withheld from an organization manager, not from everyone: a deployment
+    operator is the party that pays, so the standalone deployment whose one
+    administrator is also its only tenant keeps setting its own rates exactly as
+    before (otari-ai#2095).
+    """
+
+    def __init__(self, model_key: str):
+        super().__init__(
+            f"'{model_key}' resolves on a credential this deployment, not your organization, supplies, "
+            "so its rate is set on the deployment price list rather than per organization. An override "
+            "applies to a model your organization supplies its own provider key for."
+        )
+
+
 class InvitationNotFoundError(TenancyNotFoundError):
     """No invitation matches the token or id given.
 
@@ -1053,7 +1080,7 @@ class WorkspaceWebSearchDomainsExcludedError(TenancyForbiddenError):
     The two lists are intersected rather than overridden, so this is the empty
     intersection: every domain the request asked for is one the workspace does
     not permit. Refused rather than run, because an empty effective allow-list
-    is read by ``_build_web_search_backend`` as *no* allow-list (an empty list
+    is read by ``_build_web_retrieval_backend`` as *no* allow-list (an empty list
     is falsy), which would turn the narrowest possible policy into no policy at
     all.
     """
@@ -1219,6 +1246,7 @@ __all__ = [
     "OAuthNotConfiguredError",
     "OAuthStateError",
     "OrganizationNotFoundError",
+    "OrganizationPricingManagedModelError",
     "OrganizationPricingNotFoundError",
     "OrganizationScopeNotFoundError",
     "OrganizationScopedBudgetAlreadyExistsError",

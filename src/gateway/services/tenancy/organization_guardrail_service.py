@@ -59,8 +59,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.models.entities import OrganizationGuardrail, OrganizationGuardrailWorkspace
-from gateway.models.guardrails import GuardrailConfig
+from gateway.models.guardrails import GuardrailConfig, OrganizationGuardrail, OrganizationGuardrailWorkspace
 from gateway.models.secret_fields import redact_secret_like_values, restore_redacted_values
 from gateway.models.tenancy import User
 from gateway.repositories.tenancy import WorkspaceRepository
@@ -116,7 +115,7 @@ class OrganizationGuardrailCreate(BaseModel):
 
     ``credential`` is never stored as sent: it is encrypted with
     ``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention
-    `entities.WorkspaceMcpServer` and `entities.ProviderCredential` use. It is
+    `tools.WorkspaceMcpServer` and `providers.ProviderCredential` use. It is
     sent to the endpoint as ``Authorization: Bearer`` when the guardrail runs,
     so it authenticates this gateway to the guardrails service the entry names.
     A guardrail *vendor's* own key is not this: the guardrails service builds
@@ -477,7 +476,7 @@ class OrganizationGuardrailService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.organizations = OrganizationService(db)
+        self.organizations = OrganizationService(db, membership_listener=None)
 
     async def _manageable_organization_id(self, user: User) -> uuid.UUID:
         """The caller's organization, having checked they may manage its guardrails.

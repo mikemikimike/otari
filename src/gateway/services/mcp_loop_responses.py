@@ -42,7 +42,7 @@ from gateway.services.mcp_loop import (
     ToolBackend,
 )
 from gateway.services.tool_format import openai_to_responses_tools
-from gateway.services.web_search_backend import WEB_SEARCH_TOOL_NAME
+from gateway.services.web_retrieval_backend import WEB_SEARCH_TOOL_NAME
 from gateway.services.web_search_budget import MAX_USES_EXCEEDED_ERROR, WebSearchBudget, is_capped_search
 
 if TYPE_CHECKING:
@@ -113,6 +113,8 @@ async def _execute_function_calls(
             continue
         try:
             text = await pool.call_tool(item.name, args)
+        except MaxToolIterationsExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 — see docstring
             logger.warning("MCP tool %s execution failed: %s", item.name, exc)
             text = f"[tool error] {exc}"
@@ -286,6 +288,8 @@ async def _execute_stream_owned(
             continue
         try:
             text = await pool.call_tool(spec["name"], args)
+        except MaxToolIterationsExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 (same tool-error-as-message idiom as the non-stream loop)
             logger.warning("MCP tool %s execution failed: %s", spec["name"], exc)
             text = f"[tool error] {exc}"

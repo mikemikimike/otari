@@ -15,10 +15,10 @@ of them a list written here:
   render a configuration form without importing a model backend (any-guardrail
   #206). Nothing here constructs a guardrail; only the registry is read.
 
-Only ``validate``-stage parameters are published. The ``create`` stage is the
-guardrails service's constructor, fixed by the operator's YAML at boot, so an organization
-that could set one would be storing a value nothing sends: ``POST /validate``
-takes ``validate_kwargs`` and nothing else. That is the same reason
+Of those profiles only ``validate``-stage parameters are published. The ``create``
+stage is the guardrails service's constructor, fixed by the operator's YAML at boot,
+so an organization that could set one would be storing a value nothing sends:
+``POST /validate`` takes ``validate_kwargs`` and nothing else. That is the same reason
 ``extra_kwargs_for_creation`` has no column on an organization guardrail (see
 `services/tenancy/organization_guardrail_service.py`).
 
@@ -27,17 +27,40 @@ A deployment whose service is down, unconfigured, or too old to publish
 error. The form falls back to naming a profile by hand, which is the whole of
 what it could do before this existed, so a guardrails outage must not also take
 away the page that configures guardrails.
+
+The built-in catalog
+--------------------
+
+Beside that sits a second, local catalog: the guardrails this gateway can run
+itself, read straight from ``any_guardrail``'s import-free registry. Nothing is
+joined and nothing is fetched, so there is no unavailable state to report. It
+carries **both** stages, because a guardrail this gateway constructs itself has no
+operator YAML fixing its constructor, and the create stage is where a vendor API
+key lives. It carries the one-of requirement groups beside them, because a
+constraint satisfied by any of several parameters is one no parameter's own
+``required`` flag can state.
+
+It is not every guardrail the library ships. A guardrail that works by holding
+model weights in the process running it is not one this gateway builds, so it is
+not one this catalog may offer; those belong in the guardrails service above, and
+the two catalogs divide on exactly that line. The rule is upstream's own backend
+taxonomy rather than a list kept here, and it reads ``alternate_backends`` beside
+``backend`` so a guardrail with a hosted path alongside a local default is
+reachable by the path that is a call rather than a download.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import httpx
 from any_guardrail.base import GuardrailName
-from any_guardrail.parameter_registry import get_parameter_schema
-from pydantic import BaseModel, Field
+from any_guardrail.parameter_registry import get_parameter_schema, get_requirement_groups
+from any_guardrail.parameters import RequirementGroup
+from any_guardrail.registry import GUARDRAIL_METADATA
+from any_guardrail.taxonomy import BackendType, GuardrailMetadata
+from pydantic import BaseModel, ConfigDict, Field
 
 from gateway.log_config import logger
 from gateway.services.url_safety import redact_url_secrets
@@ -57,12 +80,13 @@ _MAX_PROFILES = 500
 
 ParameterType = Literal["string", "integer", "number", "boolean", "enum", "json"]
 
-# Declared here rather than reused from `any_guardrail.parameters.ParameterType`,
-# so the published contract is this API's own and a new upstream member cannot
-# silently widen it. An unrecognized type degrades to "json", which is already
-# upstream's "not flat-form-able, use a raw editor" signal, so the parameter
-# stays configurable instead of vanishing from the form.
-_KNOWN_TYPES: frozenset[str] = frozenset({"string", "integer", "number", "boolean", "enum", "json"})
+# The one taxonomy this module does declare rather than import from
+# any-guardrail, because a type it has never seen has somewhere sensible to go:
+# "json" is already upstream's "not flat-form-able, use a raw editor" signal, so
+# an unrecognized type still renders a working field. It also types the sidecar
+# catalog, whose guardrails service may run a newer any-guardrail than this
+# gateway, which is a source the enum import below cannot speak for.
+_KNOWN_TYPES: frozenset[str] = frozenset(get_args(ParameterType))
 
 
 class GuardrailParameterSpec(BaseModel):
@@ -82,6 +106,24 @@ class GuardrailParameterSpec(BaseModel):
     secret: bool = Field(
         default=False,
         description="Whether the value is a credential, so a form masks it and never echoes it back",
+    )
+    storable: bool = Field(
+        default=True,
+        description=(
+            "Whether a saved value can stand in for this parameter. False for a secret whose type is "
+            "json, which upstream uses for a live object (an authenticated SDK client or session) that "
+            "cannot be written down. A form offers no field for one"
+        ),
+    )
+    # The variable's name only. Whether it is set on this host is deliberately not
+    # answered: the catalog is readable by any dashboard session, and that is the
+    # kind of infrastructure detail this module withholds elsewhere.
+    env_var: str | None = Field(
+        default=None,
+        description=(
+            "The environment variable that supplies this parameter when no value is stored, so a form "
+            "can offer that instead of demanding a credential the deployment already has"
+        ),
     )
     description: str | None = Field(default=None, description="One-line help text from the guardrail's docstring")
 
@@ -107,9 +149,7 @@ class GuardrailCatalog(BaseModel):
     """The profiles a guardrail entry may name, or why they could not be listed."""
 
     available: bool = Field(description="Whether the guardrails service answered with its profiles")
-    reason: str | None = Field(
-        default=None, description="Why the catalog is unavailable, in terms a tenant can act on"
-    )
+    reason: str | None = Field(default=None, description="Why the catalog is unavailable, in terms a tenant can act on")
     profiles: list[GuardrailProfileSpec] = Field(default_factory=list)
 
 
@@ -128,6 +168,29 @@ class _CatalogTooLargeError(Exception):
     """The answer went past a size this gateway is willing to hold."""
 
 
+def _specs_for_stage(name: GuardrailName, stage: str) -> list[GuardrailParameterSpec]:
+    """The parameters one any-guardrail class takes at ``stage``, typed for a form."""
+    return [
+        GuardrailParameterSpec(
+            name=spec.name,
+            type=spec.type.value if spec.type.value in _KNOWN_TYPES else "json",
+            # `required` alone is a property of the signature, not of what the
+            # guardrail needs, so a parameter that reads its value from an
+            # environment variable would render optional and then fail at
+            # validate time. Upstream carries that distinction; fold it in here.
+            required=spec.required or spec.effectively_required,
+            default=spec.default,
+            choices=list(spec.choices) if spec.choices is not None else None,
+            secret=spec.secret,
+            storable=not (spec.secret and spec.type.value == "json"),
+            env_var=spec.env_var,
+            description=spec.description,
+        )
+        for spec in get_parameter_schema(name)
+        if spec.stage.value == stage
+    ]
+
+
 def _parameter_specs(guardrail: str) -> tuple[list[GuardrailParameterSpec], bool]:
     """The validate-stage parameters of one any-guardrail class, and whether they are known.
 
@@ -142,24 +205,7 @@ def _parameter_specs(guardrail: str) -> tuple[list[GuardrailParameterSpec], bool
         logger.info("Guardrail class %r is not in this gateway's any-guardrail registry", guardrail)
         return [], False
 
-    specs = [
-        GuardrailParameterSpec(
-            name=spec.name,
-            type=spec.type.value if spec.type.value in _KNOWN_TYPES else "json",
-            # `required` alone is a property of the signature, not of what the
-            # guardrail needs, so a parameter that reads its value from an
-            # environment variable would render optional and then fail at
-            # validate time. Upstream carries that distinction; fold it in here.
-            required=spec.required or spec.effectively_required,
-            default=spec.default,
-            choices=list(spec.choices) if spec.choices is not None else None,
-            secret=spec.secret,
-            description=spec.description,
-        )
-        for spec in get_parameter_schema(name)
-        if spec.stage.value == "validate"
-    ]
-    return specs, True
+    return _specs_for_stage(name, "validate"), True
 
 
 def _profile_spec(entry: object) -> GuardrailProfileSpec | None:
@@ -253,3 +299,102 @@ async def fetch_guardrail_catalog(base_url: str | None) -> GuardrailCatalog:
             "Guardrail catalog from %s held %d rows this gateway could not read", shown, len(body) - len(profiles)
         )
     return GuardrailCatalog(available=True, profiles=sorted(profiles, key=lambda spec: spec.profile))
+
+
+# ---------------------------------------------------------------------------
+# The built-in catalog: the guardrails a hosted API can reach.
+# ---------------------------------------------------------------------------
+
+# The taxonomy a guardrail is described by is upstream's own enum, imported rather
+# than re-spelled. `any_guardrail.taxonomy` is a stdlib+pydantic leaf that loads no
+# model backend, and every value published here is read from `GUARDRAIL_METADATA`,
+# so a list written out again in this file could only ever drift from the one set of
+# values it exists to accept. A member upstream adds therefore reaches this contract
+# instead of degrading to a fallback, and the drift checks over the generated
+# artifacts are what report it; see AGENTS.md, "Generated Artifacts".
+
+
+class BuiltInGuardrailSpec(GuardrailMetadata):
+    """One guardrail this gateway can construct and run itself.
+
+    Upstream's own metadata model, extended rather than copied, so a field it adds
+    is carried instead of waiting on an edit here. The four taxonomy enums document
+    themselves in the published schema, which is why almost nothing below restates
+    what a field name and its type already say; the descriptions that remain are on
+    the answers only this gateway can give.
+
+    Inheriting also takes upstream's field serializers, which sort every set-valued
+    field on the way out, so the JSON is stable across calls without sorting anything
+    here.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    guardrail_name: str = Field(description="The any-guardrail class, and the name a stored guardrail selects")
+    # Redeclared for its description alone: the name reads as "accepts a list",
+    # and upstream spends a paragraph warning that it does not mean that.
+    supports_batch: bool = Field(
+        default=False, description="Whether several inputs run as one real batched call, not a per-item loop"
+    )
+    create_parameters: list[GuardrailParameterSpec] = Field(
+        default_factory=list,
+        description="Constructor arguments, which is where a vendor API key and an endpoint live",
+    )
+    validate_parameters: list[GuardrailParameterSpec] = Field(
+        default_factory=list, description="Per-call arguments, sent with the text on every check"
+    )
+    requirement_groups: list[RequirementGroup] = Field(
+        default_factory=list,
+        description=(
+            "One-of constraints that no single parameter's required flag can express. At least one "
+            "member of each group must be supplied, or one of the environment variables that satisfies it"
+        ),
+    )
+
+
+class BuiltInGuardrailCatalog(BaseModel):
+    """The guardrails this gateway can build and call itself."""
+
+    guardrails: list[BuiltInGuardrailSpec] = Field(default_factory=list)
+
+
+def _reachable_over_a_hosted_api(name: GuardrailName) -> bool:
+    """Whether ``name`` runs as a call to a service rather than as a local model.
+
+    ``alternate_backends`` counts beside ``backend``: SusFactor defaults to a local
+    encoder and also answers over 0DIN's hosted API, and it is the hosted path this
+    gateway would take.
+    """
+    metadata = GUARDRAIL_METADATA[name]
+    return BackendType.HOSTED_API in ({metadata.backend} | metadata.alternate_backends)
+
+
+def _builtin_spec(name: GuardrailName) -> BuiltInGuardrailSpec:
+    """One guardrail's row, built from the import-free registry alone."""
+    return BuiltInGuardrailSpec(
+        **GUARDRAIL_METADATA[name].model_dump(),
+        guardrail_name=name.value,
+        create_parameters=_specs_for_stage(name, "create"),
+        validate_parameters=_specs_for_stage(name, "validate"),
+        requirement_groups=get_requirement_groups(name),
+    )
+
+
+def build_builtin_guardrail_catalog() -> BuiltInGuardrailCatalog:
+    """Every guardrail any-guardrail reaches over a hosted API, typed for the form that defines one.
+
+    Does no I/O and reaches no service, so unlike `fetch_guardrail_catalog` it has
+    no unavailable state: the answer is a property of the installed library. Both
+    parameter stages are published, because a guardrail this gateway constructs
+    has no operator YAML fixing its constructor.
+
+    The filter belongs here and not in `_specs_for_stage`, which the sidecar half
+    shares: an operator's own guardrails service may well run a local model, and
+    typing its parameters is what `fetch_guardrail_catalog` exists to do.
+    """
+    return BuiltInGuardrailCatalog(
+        guardrails=sorted(
+            (_builtin_spec(name) for name in GuardrailName if _reachable_over_a_hosted_api(name)),
+            key=lambda spec: spec.display_name.casefold(),
+        )
+    )

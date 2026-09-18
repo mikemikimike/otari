@@ -9,6 +9,11 @@ import { API_ROOT } from "@/shared/api/client"
 // Matches web/e2e/otari.yml. The login step needs a known key.
 export const MASTER_KEY = "e2e-master-key"
 
+// Independent of the UI helper so these assertions can catch its regressions.
+export function expectedKeyFingerprint(key: string): string {
+  return `${key.slice(0, 8)}${"•".repeat(8)}${key.slice(-4)}`
+}
+
 // Scope link lookups to the sidebar navigation landmark. The Overview landing
 // page has tile-links whose names substring-collide with sidebar items
 // ("Providers healthy", "No budgets configured"), so an unscoped
@@ -56,6 +61,23 @@ export async function openOrganization(page: Page): Promise<void> {
   await expect(
     nav(page).getByRole("link", { name: "Members & roles" }),
   ).toBeVisible()
+}
+
+/**
+ * Open the account menu at the foot of the sidebar.
+ *
+ * The one way to the deployment's own pages: they are registry entries like any
+ * other, but the shell draws them here rather than as rail rows, so a spec that
+ * only walks the rails never reaches them.
+ *
+ * The trigger's accessible name carries whoever is signed in, so it is matched
+ * on the prefix it always starts with rather than in full.
+ */
+export async function openAccountMenu(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: /^Account:/ }).click()
+  const menu = page.getByRole("dialog", { name: "Account" })
+  await expect(menu).toBeVisible()
+  return menu
 }
 
 /**

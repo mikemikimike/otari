@@ -149,6 +149,11 @@ def key_is_usable(key: OrgProviderKey) -> bool:
     return True
 
 
+def has_credential(key: OrgProviderKey) -> bool:
+    """Whether this key holds an API key or a base URL, and its secret decrypts."""
+    return (key.encrypted_api_key is not None or key.api_base is not None) and key_is_usable(key)
+
+
 def cached_org_provider_kwargs(workspace_id: uuid.UUID, provider: str) -> dict[str, Any] | None:
     """The decrypted overlay entry this worker last loaded for this workspace+provider, if any."""
     entry = _org_cache.get((workspace_id, provider))
@@ -377,7 +382,8 @@ class OrgProviderKeyService:
         self.keys = OrgProviderKeyRepository(db)
         self.overrides = WorkspaceProviderKeyOverrideRepository(db)
         self.restrictions = WorkspaceProviderModelRestrictionRepository(db)
-        self.organizations = OrganizationService(db)
+        self.workspaces = WorkspaceRepository(db)
+        self.organizations = OrganizationService(db, membership_listener=None)
 
     # ------------------------------------------------------------------
     # Organization-scoped keys
@@ -406,7 +412,7 @@ class OrgProviderKeyService:
         rows, count = await self.keys.list_for_organization(
             organization.id, include_archived=include_archived, skip=skip, limit=limit
         )
-        return OrgProviderKeysPublic(data=[row.to_public() for row in rows], count=count)
+        return OrgProviderKeysPublic(data=[row.to_public(usable=key_is_usable(row)) for row in rows], count=count)
 
     async def create_key_for_user(
         self,
@@ -447,7 +453,7 @@ class OrgProviderKeyService:
             raise OrgProviderKeyAlreadyExistsError(provider, name) from None
 
         await refresh_org_provider_cache(self.db)
-        return key.to_public()
+        return key.to_public(usable=key_is_usable(key))
 
     async def update_key_for_user(
         self,
@@ -498,7 +504,7 @@ class OrgProviderKeyService:
             raise OrgProviderKeyAlreadyExistsError(key.provider, str(update_data.get("name", key.name))) from None
 
         await refresh_org_provider_cache(self.db)
-        return updated.to_public()
+        return updated.to_public(usable=key_is_usable(updated))
 
     async def archive_key_for_user(self, *, user: User, key_id: uuid.UUID) -> OrgProviderKeyPublic:
         """Archive a key. Organization owners and admins only.
@@ -517,7 +523,7 @@ class OrgProviderKeyService:
         updated = await self.keys.update_key(key, {"archived_at": datetime.now(UTC), "is_org_default": False})
         await self.db.commit()
         await refresh_org_provider_cache(self.db)
-        return updated.to_public()
+        return updated.to_public(usable=key_is_usable(updated))
 
     async def restore_key_for_user(self, *, user: User, key_id: uuid.UUID) -> OrgProviderKeyPublic:
         """Restore an archived key. Organization owners and admins only."""
@@ -531,7 +537,7 @@ class OrgProviderKeyService:
         updated = await self.keys.update_key(key, {"archived_at": None})
         await self.db.commit()
         await refresh_org_provider_cache(self.db)
-        return updated.to_public()
+        return updated.to_public(usable=key_is_usable(updated))
 
     async def delete_key_for_user(self, *, user: User, key_id: uuid.UUID) -> None:
         """Permanently delete an archived key. Organization owners and admins only.
@@ -570,7 +576,7 @@ class OrgProviderKeyService:
             raise OrgDefaultProviderKeyConflictError(key.provider) from None
 
         await refresh_org_provider_cache(self.db)
-        return updated.to_public()
+        return updated.to_public(usable=key_is_usable(updated))
 
     # ------------------------------------------------------------------
     # Workspace overrides
@@ -596,6 +602,12 @@ class OrgProviderKeyService:
         effective_ids = {
             active.id for group in by_provider.values() if (active := resolve_active_key(group)) is not None
         }
+        # One query for every key's allow-list rather than one per key: the
+        # response carries the narrowing beside the flags, so a caller reading
+        # a workspace's departures reads them all at once.
+        restrictions = await self.restrictions.list_for_workspace_keys(
+            [(workspace.id, key.id) for key, _ in candidates]
+        )
 
         return WorkspaceProviderKeyOverridesPublic(
             data=[
@@ -606,6 +618,14 @@ class OrgProviderKeyService:
                     disabled=override.disabled if override else False,
                     is_effective_default=key.id in effective_ids,
                     is_effective_enabled=not (override.disabled if override else False),
+                    # The override flags say what this workspace chose; they say
+                    # nothing about whether the credential behind the key can be
+                    # read. Without this a key the deployment cannot decrypt
+                    # reads here as enabled and in use while the catalog withholds
+                    # its provider, so the two surfaces disagree with no way to
+                    # tell from this one.
+                    usable=key_is_usable(key),
+                    allowed_models=restrictions.get((workspace.id, key.id), []),
                 )
                 for key, override in candidates
             ]
@@ -698,6 +718,12 @@ class OrgProviderKeyService:
             workspace_id=workspace.id,
         )
         active = resolve_active_key(candidates)
+        # Read back rather than derived from the flags: disabling deletes the
+        # allow-list and pinning keeps it, and the row this returns is what the
+        # dashboard renders, so it has to say which happened.
+        allowed_models = await self.restrictions.list_for_workspace_key(
+            workspace_id=workspace.id, org_provider_key_id=key.id
+        )
         return WorkspaceProviderKeyOverridePublic(
             workspace_id=workspace.id,
             org_provider_key_id=key.id,
@@ -705,6 +731,8 @@ class OrgProviderKeyService:
             disabled=result_disabled,
             is_effective_default=active is not None and active.id == key.id,
             is_effective_enabled=not result_disabled,
+            usable=key_is_usable(key),
+            allowed_models=allowed_models,
         )
 
     async def reset_workspace_override_for_user(
@@ -810,12 +838,58 @@ class OrgProviderKeyService:
             await self.db.commit()
             await refresh_org_provider_cache(self.db)
 
+    async def get_active_keys(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        workspace_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, dict[str, OrgProviderKey]]:
+        """Returns each workspace's active key for each provider.
+
+        NOTE: an active key may not decrypt, so check it before relying on it.
+        """
+        candidates = await self.overrides.candidates_for_workspaces(
+            organization_id=organization_id, workspace_ids=workspace_ids
+        )
+        active: dict[uuid.UUID, dict[str, OrgProviderKey]] = {}
+        for workspace_id, rows in candidates.items():
+            by_provider: dict[str, list[Candidate]] = defaultdict(list)
+            for key, override in rows:
+                by_provider[key.provider].append((key, override))
+            active[workspace_id] = {
+                provider: chosen
+                for provider, group in by_provider.items()
+                if (chosen := resolve_active_key(group)) is not None
+            }
+        return active
+
+    async def get_byo_providers(self, *, organization_id: uuid.UUID) -> frozenset[str]:
+        """Returns the providers that every workspace in the organization calls with its own key.
+
+        An organization with no workspaces counts every provider it holds a key with a credential for.
+        """
+        keys = await self.keys.list_live_keys(organization_id)
+        credentialed = {key.id: key.provider for key in keys if has_credential(key)}
+        workspace_ids = await self.workspaces.get_ids_by_organization(organization_id)
+        if not workspace_ids:
+            return frozenset(credentialed.values())
+        active = await self.get_active_keys(organization_id=organization_id, workspace_ids=workspace_ids)
+        return frozenset(
+            provider
+            for provider in set(credentialed.values())
+            if all(
+                (chosen := active[workspace_id].get(provider)) is not None and chosen.id in credentialed
+                for workspace_id in workspace_ids
+            )
+        )
+
 
 __all__ = [
     "ORG_PROVIDER_CACHE_TTL_SECONDS",
     "OrgProviderKeyService",
     "cached_org_model_restriction",
     "cached_org_provider_kwargs",
+    "has_credential",
     "load_org_provider_keys_at_startup",
     "org_cache_is_stale",
     "refresh_org_provider_cache",

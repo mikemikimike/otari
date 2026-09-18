@@ -10,6 +10,7 @@ import {
   FiHome,
   FiKey,
   FiLayers,
+  FiMessageSquare,
   FiRepeat,
   FiServer,
   FiShield,
@@ -22,6 +23,7 @@ import {
 import { OVERLAY_NAV_LABEL_OVERRIDES } from "@/app/nav/overlayLabelOverrides"
 import { OVERLAY_NAV_ITEMS } from "@/app/nav/overlayNavItems"
 import {
+  OVERLAY_DEPLOYMENT_NAV_SECTIONS,
   OVERLAY_NAV_SECTIONS,
   OVERLAY_ORG_NAV_SECTIONS,
 } from "@/app/nav/overlaySections"
@@ -388,6 +390,13 @@ const ORGANIZATION_NAV_SECTIONS = [
   },
   {
     id: "org-general",
+    // Keeps its heading with one row in it, where the index section at the top
+    // of the workspace rail has none. That is the same rule read in different
+    // surroundings rather than an exception to it: the index is first, with
+    // nothing above it to be absorbed into, and General is last under two
+    // labelled siblings, so a row with no heading here reads as the tail of
+    // Cost & billing. A heading earns its place when the section has labelled
+    // siblings, which is also why the deployment rail's one section has none.
     label: "General",
     items: [
       {
@@ -396,10 +405,32 @@ const ORGANIZATION_NAV_SECTIONS = [
         surface: "organizations",
         icon: FiSliders,
       },
-      // No slot in the design, which has no gateway of its own to configure: this
-      // is the process's runtime settings (the master key, the safety toggles,
-      // the defaults), and it is the tenant's in the only sense that matters here,
-      // because the tenant is the deployment.
+    ],
+  },
+] as const satisfies readonly NavSection[]
+
+/**
+ * The deployment's own rail: what the gateway process is, rather than what any
+ * tenant on it has.
+ *
+ * A third context rather than a section in either rail, because that is the
+ * distinction these two pages were always making and neither other rail could
+ * hold. `/settings` is the running process (its master key, its safety toggles,
+ * its defaults) and `/admin/accounts` reaches an account in any organization on
+ * it, or in none that still admits it, which is a wider scope than the
+ * organization rail's own roster.
+ *
+ * Headingless on purpose. One section with no siblings needs nothing to
+ * separate it from, and a heading inside a context already named Deployment
+ * would read as "Deployment, Deployment, Settings".
+ *
+ * Both rows keep the refusal they declare, which is the axis the server
+ * enforces and not a property of which rail draws them.
+ */
+const DEPLOYMENT_SECTIONS = [
+  {
+    id: "deployment-general",
+    items: [
       {
         to: "/settings",
         label: "Settings",
@@ -407,12 +438,6 @@ const ORGANIZATION_NAV_SECTIONS = [
         icon: FiSliders,
         operatorOnly: "refused",
       },
-      // Every account on the deployment, which is not the Members & roles row
-      // above: that one is this organization's roster and stops at its
-      // boundary, while this reaches an account in any organization, or in none
-      // that still admits it. The only row in either rail that declares
-      // `operatorOnly`, and it sits beside Settings because both are the
-      // deployment talking about itself rather than the tenant.
       {
         to: "/admin/accounts",
         label: "Accounts",
@@ -564,15 +589,45 @@ export const ORG_NAV_SECTIONS: readonly NavSection[] = composeNavSections(
 )
 
 /**
- * Every registered entry, across both contexts.
+ * The composed deployment sidebar.
  *
- * Flattened over both because this is what answers "which entry is this
- * pathname", and a route is gated the same way whichever sidebar links to it.
+ * Composed through the same three seams as the other two rails, because the
+ * distinction this rail draws is one an overlay can land on: a hosted edition
+ * administers the process every tenant is served by, and those destinations
+ * belong here rather than beside a tenant's own settings. Reached through the
+ * row seam, since the rail declares one headingless section and a contributed
+ * section would put a heading above rows that have none.
+ *
+ * Label overrides and row contributions come from the lists both other rails
+ * read. A section id is unique across all three (`registry.test.ts` pins that),
+ * so one list still addresses every rail and an overlay has one module to
+ * replace rather than three. This build appends nothing.
  */
+export const DEPLOYMENT_NAV_SECTIONS: readonly NavSection[] =
+  composeNavSections(
+    composeNavItems(
+      applyNavLabelOverrides(DEPLOYMENT_SECTIONS, OVERLAY_NAV_LABEL_OVERRIDES),
+      OVERLAY_NAV_ITEMS,
+    ),
+    OVERLAY_DEPLOYMENT_NAV_SECTIONS,
+  )
+
+// Kept in route lookup for surface gating, outside the sidebar sections.
+// Availability follows the gateway's inference surface, not a paid capability.
+export const PLAYGROUND_NAV_ITEM = {
+  to: "/playground",
+  label: "Playground",
+  surface: "playground",
+  icon: FiMessageSquare,
+} as const satisfies NavItem
+
+/** Route lookup includes chrome destinations as well as all three sidebar scopes. */
 export const NAV_ITEMS: readonly NavItem[] = [
-  ...NAV_SECTIONS,
-  ...ORG_NAV_SECTIONS,
-].flatMap((section) => section.items)
+  PLAYGROUND_NAV_ITEM,
+  ...[...NAV_SECTIONS, ...ORG_NAV_SECTIONS, ...DEPLOYMENT_NAV_SECTIONS].flatMap(
+    (section) => section.items,
+  ),
+]
 
 /**
  * Every nested destination, paired with the entry it is gated by.
@@ -595,11 +650,21 @@ const NAV_CHILD_PARENTS: ReadonlyMap<string, NavItem> = new Map(
   ),
 )
 
-/** Where a destination lives: the workspace sidebar, or the organization one. */
-export type NavContext = "workspace" | "organization"
+/**
+ * Which sidebar a destination lives under.
+ *
+ * Three rather than two since the deployment's own pages stopped being a
+ * section inside the organization's: they describe the process every tenant
+ * shares, so neither tenant-shaped rail could hold them truthfully.
+ */
+export type NavContext = "workspace" | "organization" | "deployment"
 
 const ORG_PATHS: readonly string[] = ORG_NAV_SECTIONS.flatMap((section) =>
   section.items.map((item) => item.to),
+)
+
+const DEPLOYMENT_PATHS: readonly string[] = DEPLOYMENT_NAV_SECTIONS.flatMap(
+  (section) => section.items.map((item) => item.to),
 )
 
 /**
@@ -619,16 +684,18 @@ export function navLabelForPath(pathname: string): string | undefined {
 /**
  * Which sidebar a pathname belongs under.
  *
- * Derived from the registry rather than from a path prefix, because the two
- * contexts do not split cleanly by URL: `/workspaces` and `/settings` are
- * organization destinations whose paths look like anything else, and
- * `/members` is a workspace one that sits directly under the root. Anything
+ * Derived from the registry rather than from a path prefix, because the three
+ * contexts do not split cleanly by URL: `/workspaces` is an organization
+ * destination and `/settings` a deployment one, both of which look like
+ * anything else, and `/members` is a workspace one that sits directly under the
+ * root. Anything
  * unregistered (the guide, the 404 splat) belongs to the workspace context,
  * which is the one the shell opens in.
  */
 export function navContextForPath(pathname: string): NavContext {
   const item = navItemForPath(pathname)
   if (!item) return "workspace"
+  if (DEPLOYMENT_PATHS.includes(item.to)) return "deployment"
   return ORG_PATHS.includes(item.to) ? "organization" : "workspace"
 }
 

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { AccountMenu } from "@/app/nav/AccountMenu"
-import type { DeploymentBootstrap, OrganizationContext } from "@/client"
+import type { CallerIdentity, DeploymentBootstrap } from "@/client"
 import { useOrganizationContext } from "@/shared/api/organizations"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
@@ -19,15 +19,22 @@ import { renderWithRouter } from "@/tests/router"
 // case installs one, including the ones about the menu's rows: the component
 // makes that request either way, and an unstubbed `fetch` would leave it
 // failing in the background of a test that is not about it.
-function mockCaller(caller: OrganizationContext["caller"]) {
-  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-    Response.json(organizationContext({ caller })),
-  )
-}
-
 // The identity a standalone first boot leaves behind, which the fixture already
 // describes: a name and no address.
-const OPERATOR = organizationContext().caller
+const OPERATOR = organizationContext().caller as CallerIdentity
+
+// The argument is merged onto that identity rather than replacing it, so a case
+// about a name or an address spells only the field it is about. `null` is the
+// other thing the context can report, which is no identity at all.
+function mockCaller(caller: Partial<CallerIdentity> | null = {}) {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+    Response.json(
+      organizationContext({
+        caller: caller === null ? undefined : { ...OPERATOR, ...caller },
+      }),
+    ),
+  )
+}
 
 // The other thing that read can do. The trigger names nobody rather than
 // guessing, for the same reason it does before the answer lands.
@@ -48,11 +55,24 @@ function CallerProbe() {
 
 // The menu holds a router Link, so it needs a real router; `renderWithRouter`
 // mounts it at "/" and resolves the first location before the assertions run.
-async function renderMenu(overrides: Partial<DeploymentBootstrap> = {}) {
+type MenuOptions = Partial<DeploymentBootstrap> & {
+  deploymentLanding?: string
+  onOpenDeploymentLevel?: () => void
+}
+
+async function renderMenu({
+  deploymentLanding,
+  onOpenDeploymentLevel,
+  ...overrides
+}: MenuOptions = {}) {
   await renderWithRouter(
     <AppProviders>
       <DeploymentProvider value={bootstrap(overrides)}>
-        <AccountMenu collapsed={false} />
+        <AccountMenu
+          collapsed={false}
+          deploymentLanding={deploymentLanding as never}
+          onOpenDeploymentLevel={onOpenDeploymentLevel}
+        />
         <CallerProbe />
       </DeploymentProvider>
     </AppProviders>,
@@ -64,7 +84,7 @@ function settled(): Promise<HTMLElement> {
   return screen.findByText("standing settled")
 }
 
-async function openMenu(overrides: Partial<DeploymentBootstrap> = {}) {
+async function openMenu(overrides: MenuOptions = {}) {
   await renderMenu(overrides)
   // The trigger's accessible name carries who is signed in, so it is matched on
   // its prefix rather than in full.
@@ -78,6 +98,25 @@ afterEach(() => {
 })
 
 describe("AccountMenu", () => {
+  it("keeps Playground reachable on mobile before Documentation", async () => {
+    mockCaller(OPERATOR)
+    await openMenu()
+    const link = screen.getByRole("link", { name: "Playground" })
+    expect(link).toHaveAttribute("href", "/playground")
+    expect(link).toHaveClass("md:hidden")
+    expect(link.nextElementSibling).toBe(
+      screen.getByRole("link", { name: "Documentation" }),
+    )
+  })
+
+  it("omits Playground from the mobile menu when unavailable", async () => {
+    mockCaller(OPERATOR)
+    await openMenu({ surfaces: [] })
+    expect(
+      screen.queryByRole("link", { name: "Playground" }),
+    ).not.toBeInTheDocument()
+  })
+
   it("opens the account page, rather than naming a destination it cannot reach", async () => {
     mockCaller(OPERATOR)
     await openMenu()
@@ -260,10 +299,57 @@ describe("AccountMenu", () => {
   })
 
   it("names nobody when the deployment reports no identity at all", async () => {
-    mockCaller(undefined)
+    mockCaller(null)
     await renderMenu()
     await settled()
 
     expect(screen.getByText("Signed in")).toBeInTheDocument()
+  })
+  describe("the Deployment row", () => {
+    it("offers one row that opens the deployment rail, with the mark it opens", async () => {
+      mockCaller(OPERATOR)
+      await openMenu({ deploymentLanding: "/settings" })
+      await settled()
+
+      const row = screen.getByRole("link", { name: "Deployment" })
+      expect(row).toHaveAttribute("href", "/settings")
+      // Not the pages themselves: the row changes which rail is showing, the
+      // way the Organization row in the footer does.
+      expect(screen.queryByRole("link", { name: "Accounts" })).toBeNull()
+    })
+
+    it("shows no row when that rail has nothing for this caller", async () => {
+      // The shell resolves the landing through the same predicate the rail runs,
+      // so a caller who operates nothing there gets no control into a rail with
+      // no rows. Absent, not disabled: a disabled row would tell them a place
+      // exists that the deployment declines to admit exists.
+      mockCaller(OPERATOR)
+      await openMenu()
+      await settled()
+
+      expect(screen.queryByRole("link", { name: "Deployment" })).toBeNull()
+      expect(
+        screen.getByRole("link", { name: "Account settings" }),
+      ).toBeInTheDocument()
+    })
+
+    it("opens a level instead of navigating when the shell asks it to", async () => {
+      // Below `md` the rail opens it as a level inside the drawer, so the row is
+      // a button: the page behind the drawer has not moved and a link would
+      // claim it had.
+      const onOpen = vi.fn()
+      mockCaller(OPERATOR)
+      await openMenu({
+        deploymentLanding: "/settings",
+        onOpenDeploymentLevel: onOpen,
+      })
+      await settled()
+
+      expect(screen.queryByRole("link", { name: "Deployment" })).toBeNull()
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Deployment" }))
+      expect(onOpen).toHaveBeenCalledTimes(1)
+    })
   })
 })

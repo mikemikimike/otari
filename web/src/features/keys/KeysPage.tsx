@@ -1,7 +1,6 @@
-import { Button } from "@heroui/react"
+import { Spinner } from "@heroui/react"
 import { Link } from "@tanstack/react-router"
 import {
-  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -9,7 +8,6 @@ import {
   useRef,
   useState,
 } from "react"
-import { FiEdit2, FiPause, FiPlay, FiRefreshCw, FiTrash2 } from "react-icons/fi"
 import type {
   ApiKey,
   CreateKeyRequest,
@@ -19,11 +17,16 @@ import type {
   UpdateOwnKeyRequest,
   User,
 } from "@/client"
-import { CONCEALED_SECRET, CopyField } from "@/design-system/actions/CopyField"
-import { RowAction, RowActionRow } from "@/design-system/actions/RowAction"
+import { Button } from "@/design-system/actions/Button"
+import { CopyButton } from "@/design-system/actions/CopyButton"
+import {
+  CopyField,
+  concealedFingerprint,
+} from "@/design-system/actions/CopyField"
 import { BulkActionBar } from "@/design-system/data/BulkActionBar"
 import { DataTable, type DataTableColumn } from "@/design-system/data/DataTable"
 import { ConfirmDialog } from "@/design-system/feedback/ConfirmDialog"
+import { EmptyMessage } from "@/design-system/feedback/EmptyMessage"
 import { EmptyState } from "@/design-system/feedback/EmptyState"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { FormDialog } from "@/design-system/feedback/FormDialog"
@@ -40,6 +43,7 @@ import {
   ModelScopeControl,
 } from "@/features/models/ModelScopeControl"
 import { useMemberAttributionLabels } from "@/features/organization/attribution"
+import { organizationUsers } from "@/features/users/organizationUsers"
 import { UserComboBox } from "@/features/users/UserComboBox"
 import {
   useCreateKey,
@@ -64,7 +68,8 @@ import {
 } from "@/shared/helpers/tableSelection"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useDeployment } from "@/shared/hooks/useDeployment"
-import { isVirtualUser, secretCaption } from "./secretCaption"
+import { KeyActionsMenu } from "./KeyActionsMenu"
+import { isVirtualUser, keyFingerprint, secretCaption } from "./secretCaption"
 
 // ---------- helpers ----------
 
@@ -84,6 +89,16 @@ function relative(iso: string | null): string | null {
     if (abs >= sec) return rtf.format(Math.round(diffSec / sec), unit)
   }
   return rtf.format(diffSec, "second")
+}
+
+type Layout = "wide" | "compact" | "mobile"
+
+// `md` and below is the list; between that and 1100 the lowest-priority lanes
+// fold into the row. The region's own width decides, except that a viewport
+// under `md` is the list whatever the region measures.
+function layoutFor(viewport: number, region = viewport): Layout {
+  if (viewport < 768 || region < 600) return "mobile"
+  return region < 1100 ? "compact" : "wide"
 }
 
 function isExpired(key: ApiKey): boolean {
@@ -108,23 +123,7 @@ const getKeyRowKey = (k: ApiKey): string => k.id
 
 // ---------- the one-time secret ----------
 
-/**
- * The plaintext key, shown once, and everything that has to travel with it.
- *
- * This was a strip between the page header and the table, and its docstring
- * argued against exactly the modal it now lives in: a focus trap, a swallowed
- * Esc and a backdrop that ignored clicks were a dialog fighting its own
- * conventions. The objection was to those behaviors rather than to the surface,
- * and `FormDialog` has none of them, except where this content needs one:
- * `isDismissable={false}` is the strip's "there is one control and it is the
- * acknowledgement", kept because a stray backdrop click here loses the key
- * forever.
- *
- * The snippets come with it. An operator creating their first key arrives from
- * the empty state, and "make your first call" is the next thing they need, so
- * leaving it behind on the page would have made this dialog the one place the
- * flow got worse.
- */
+/** One-time key handoff with copyable request examples. */
 function KeySecretStep({
   announce,
   result,
@@ -142,12 +141,11 @@ function KeySecretStep({
   // the API. Undefined when it has not said where its gateway is (otari#823).
   const baseUrl = resolveSnippetBaseUrl(useDeployment())
   const secret = result.key
-  // One reveal for the key and both snippets, because the snippets carry the
-  // same secret: revealing the key while a snippet still printed bullets, or
-  // the reverse, would be one credential in two states on one screen. Open,
-  // because this screen exists to hand the key over and there is no second
-  // chance to read it; the toggle conceals all three.
-  const [isSecretRevealed, setIsSecretRevealed] = useState(true)
+  // The key and both snippets show one stand-in, so the credential on this
+  // screen reads as one thing rather than three.
+  const concealedSecret = concealedFingerprint(secret)
+  // The snippets carry the same credential, so all three fields share visibility.
+  const [isSecretRevealed, setIsSecretRevealed] = useState(false)
 
   // The same two calls the setup guide hands out with its own key; the builders
   // are shared so an operator cannot be shown two dialects of one request.
@@ -161,10 +159,10 @@ function KeySecretStep({
         // snippets show whenever the key is concealed. Without them concealing
         // the key would leave it in plain sight twice over, in the requests
         // that explain it.
-        concealedCurl: buildCurlSnippet({ baseUrl, apiKey: CONCEALED_SECRET }),
+        concealedCurl: buildCurlSnippet({ baseUrl, apiKey: concealedSecret }),
         concealedPython: buildPythonSnippet({
           baseUrl,
-          apiKey: CONCEALED_SECRET,
+          apiKey: concealedSecret,
         }),
       }
     : undefined
@@ -186,7 +184,7 @@ function KeySecretStep({
         <CopyField
           label="Secret key"
           value={secret}
-          concealed={CONCEALED_SECRET}
+          concealed={concealedSecret}
           isRevealed={isSecretRevealed}
           onRevealChange={setIsSecretRevealed}
           fieldRef={secretRef}
@@ -216,7 +214,7 @@ function KeySecretStep({
               multiline
             />
             <CopyField
-              label="Python (OpenAI SDK)"
+              label="Python (Otari SDK)"
               value={snippets.python}
               concealed={snippets.concealedPython}
               isRevealed={isSecretRevealed}
@@ -225,66 +223,6 @@ function KeySecretStep({
             />
           </>
         ) : null}
-      </div>
-    </div>
-  )
-}
-
-// ---------- row actions and the armed strip ----------
-
-/**
- * The confirmation, as a strip spanning the whole table directly under the row
- * it is about, rather than as a panel inside one cell.
- *
- * It reads as part of that row: the row's own bottom rule is suppressed in CSS
- * so the two are one unit, and the strip carries its own rules top and bottom.
- * The message keeps its `<strong>` on the key's name, which is the one thing
- * that must not be misread when the next click is irreversible.
- */
-function ArmedStrip({
-  message,
-  confirmLabel,
-  isPending,
-  onConfirm,
-  onCancel,
-  confirmRef,
-}: {
-  message: ReactNode
-  confirmLabel: string
-  isPending?: boolean
-  onConfirm: () => void
-  onCancel: () => void
-  /**
-   * The page's `useConfirmationFocus` Confirm ref. Handed down rather than held
-   * here, because the page owns the armed state and the same hook has to see
-   * both ends of the swap.
-   *
-   * Focus does not actually land here on arm, and that is measured rather than
-   * assumed: arming unmounts nothing, so
-   * the row's trigger stays mounted and keeps the caret, and there is no moment
-   * where it falls to the body on the way in. What the hook does earn is the way
-   * back out, since cancelling unmounts this strip from under the focused
-   * Confirm.
-   */
-  confirmRef?: RefObject<HTMLButtonElement | null>
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-4 bg-background px-8 py-3.5">
-      <Dot className="bg-danger" />
-      <span className="min-w-0 flex-1 text-sm text-foreground">{message}</span>
-      <div className="flex shrink-0 items-center gap-4">
-        <RowAction onPress={onCancel} isDisabled={isPending}>
-          Cancel
-        </RowAction>
-        <Button
-          ref={confirmRef}
-          size="sm"
-          variant="danger"
-          isDisabled={isPending}
-          onPress={onConfirm}
-        >
-          {confirmLabel}
-        </Button>
       </div>
     </div>
   )
@@ -439,6 +377,20 @@ function CreateKeyDialog({
   // on the deployment alone it ran that walk on every visit to the page. The
   // query's own `staleTime` makes a reopen free.
   const users = useUsers(isDeploymentWide && isOpen)
+  // Every key in the caller's organization, workspace filter deliberately unset:
+  // it is one half of what says a user belongs here (see `organizationUsers`),
+  // and the owner offered is the organization's rather than this workspace's,
+  // because that is the scope the key is billed in. Gated like the users read
+  // above, and it shares `useKeys`'s cache with the page's own workspace-scoped
+  // list rather than replacing it.
+  const organizationKeys = useKeys(undefined, isDeploymentWide && isOpen)
+  // What the picker may offer: the deployment's user list narrowed to this
+  // organization. An unfiltered one named every tenant's people (otari-ai#2108).
+  const ownerOptions = organizationUsers(
+    users.data ?? [],
+    memberLabels,
+    organizationKeys.data ?? [],
+  )
   const { selected: workspace, isLoading: workspaceLoading } =
     useSelectedWorkspace()
   const [keyName, setKeyName] = useState("")
@@ -642,7 +594,7 @@ function CreateKeyDialog({
         <UserComboBox
           value={userId}
           onChange={setUserId}
-          users={users.data ?? []}
+          users={ownerOptions}
         />
       ) : (
         <p className="text-caption">
@@ -660,7 +612,7 @@ function CreateKeyDialog({
       {showAdvanced ? (
         <div className="flex flex-col gap-4 border border-control-border p-4">
           {isDeploymentWide ? (
-            <OwnerAccessNote userId={userId} users={users.data ?? []} />
+            <OwnerAccessNote userId={userId} users={ownerOptions} />
           ) : null}
           <ModelScopeControl
             title="Restrict this key's models"
@@ -723,6 +675,8 @@ function RegeneratedSecretDialog({
       isOpen
       onOpenChange={onClose}
       size="lg"
+      // A stray backdrop click here loses the key forever: this is the one
+      // message in the product that cannot be shown again.
       isDismissable={false}
       title={title}
       submitLabel="I’ve saved this key"
@@ -893,7 +847,18 @@ function StatusMark({ apiKey }: { apiKey: ApiKey }) {
  * rather than merely narrow. `Selected models` is muted like its siblings and
  * deliberately not link ink: it is a label, and nothing here is clickable.
  */
-function KeyMetaLine({ apiKey }: { apiKey: ApiKey }) {
+function KeyMetaLine({
+  apiKey,
+  face = "text-mono-overline",
+}: {
+  apiKey: ApiKey
+  /**
+   * The overline's uppercase mono is right beside a 16px name and wrong inside
+   * the folded caption line, where it would sit between two runs of sentence-case
+   * body text.
+   */
+  face?: string
+}) {
   const { text, tone } = accessLabel(apiKey.allowed_models)
   // Surface the exact entries on hover; the count would mislead (a wildcard is many).
   const title =
@@ -928,9 +893,15 @@ function KeyMetaLine({ apiKey }: { apiKey: ApiKey }) {
     })
   }
   return (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-mono-overline">
+    <span
+      className={`inline-flex max-w-full gap-3 overflow-hidden whitespace-nowrap align-bottom ${face}`}
+    >
       {facts.map((fact) => (
-        <span key={fact.key} className={fact.ink} title={fact.title}>
+        <span
+          key={fact.key}
+          className={`truncate ${fact.ink}`}
+          title={fact.title}
+        >
           {fact.text}
         </span>
       ))}
@@ -1008,8 +979,10 @@ export function KeysPage() {
   const regenerate = useCallback(
     (k: ApiKey) =>
       rotateKey.mutate(k.id, {
-        onSuccess: (result) =>
-          setRegenerated({ title: `New secret for ${label(k)}`, result }),
+        onSuccess: (result) => {
+          setPendingRegenerate(undefined)
+          setRegenerated({ title: `New secret for ${label(k)}`, result })
+        },
       }),
     [rotateKey.mutate],
   )
@@ -1034,40 +1007,131 @@ export function KeysPage() {
     }
   }
 
-  // Which row is armed to regenerate. Page state rather than per-button state,
-  // because the confirmation is a strip under the row and only one may be open
-  // at a time.
-  const [armed, setArmed] = useState<string | null>(null)
-  // Which row was armed last, kept after `armed` clears. Cancelling unmounts the
-  // strip that had focus, so the caret has to go back to the action that armed
-  // it, and `useConfirmationFocus` reads its `triggerRef` in an effect that runs
-  // *after* the commit that cleared `armed`. A ref attached on `armed === k.id`
-  // would already have been detached by then and the restore would find null, so
-  // the trigger is identified by a value that outlives the transition.
-  const [lastArmed, setLastArmed] = useState<string | null>(null)
-  const arm = useCallback((id: string) => {
-    setLastArmed(id)
-    setArmed(id)
-  }, [])
-  const { triggerRef, confirmRef } = useConfirmationFocus(armed !== null)
+  const [pendingRegenerate, setPendingRegenerate] = useState<ApiKey>()
   const [pendingDelete, setPendingDelete] = useState<ApiKey>()
+  const [lastAction, setLastAction] = useState<string>()
+  // Still load-bearing, though `confirmRef` goes unused: a menu closes on choice,
+  // so the item that was focused is unmounted before the dialog opens and
+  // react-aria's own restore has no target left. Measured, not assumed: dropping
+  // this strands focus in both the regenerate-cancel and edit-close tests.
+  const { triggerRef: actionTriggerRef } = useConfirmationFocus(
+    !!(pendingRegenerate || pendingDelete || editing || regenerated),
+  )
+  const tableRegion = useRef<HTMLDivElement>(null)
+  // Seeded from the viewport rather than defaulting to "wide": the observer only
+  // reports after the first layout, so a phone would paint the desktop table for
+  // a frame and then swap to the list.
+  const [layout, setLayout] = useState<Layout>(() =>
+    typeof window === "undefined" ? "wide" : layoutFor(window.innerWidth),
+  )
+  useEffect(() => {
+    const region = tableRegion.current
+    if (!region) return
+    const measure = (width: number) => {
+      if (width > 0) setLayout(layoutFor(window.innerWidth, width))
+    }
+    const observer = new ResizeObserver(([entry]) =>
+      measure(entry.contentRect.width),
+    )
+    observer.observe(region)
+    // The region can keep its width while the viewport crosses `md`, which the
+    // observer alone never reports.
+    const onResize = () => measure(region.getBoundingClientRect().width)
+    window.addEventListener("resize", onResize)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener("resize", onResize)
+    }
+  }, [])
 
-  // Memoized on the values the cells actually read (mutation pending flags and
-  // the stable handlers) so DataTable's per-row cache holds across selection
-  // clicks; see the DataTable docstring.
+  const ownerLabel = useCallback(
+    (k: ApiKey) =>
+      isVirtualUser(k.user_id)
+        ? "virtual"
+        : k.user_id
+          ? (memberLabels.get(k.user_id) ?? k.user_id)
+          : "—",
+    [memberLabels],
+  )
+  const renderActions = useCallback(
+    (k: ApiKey) => (
+      <KeyActionsMenu
+        apiKey={k}
+        triggerRef={lastAction === k.id ? actionTriggerRef : undefined}
+        onAction={() => setLastAction(k.id)}
+        owner={isDeploymentWide ? ownerLabel(k) : undefined}
+        // Those lanes are off the row below `wide`, so the menu is the only
+        // place left that can show them whole.
+        hasDetails={layout !== "wide"}
+        isPending={updateKey.isPending || rotateKey.isPending}
+        onToggle={() => setActive(k, !k.is_active)}
+        onEdit={() => {
+          setAddOpen(false)
+          setEditing(k.id)
+        }}
+        onRegenerate={() => setPendingRegenerate(k)}
+        onDelete={() => setPendingDelete(k)}
+      />
+    ),
+    [
+      lastAction,
+      actionTriggerRef,
+      isDeploymentWide,
+      ownerLabel,
+      layout,
+      updateKey.isPending,
+      rotateKey.isPending,
+      setActive,
+    ],
+  )
+  const renderPrefix = useCallback(
+    (k: ApiKey) => (
+      <div className="flex items-center gap-1 whitespace-nowrap">
+        <code className="text-mono-caption text-muted">
+          {keyFingerprint(k) ?? "—"}
+        </code>
+        {k.key_prefix ? (
+          <CopyButton
+            value={k.key_prefix}
+            label={`key prefix for ${label(k)}`}
+          />
+        ) : null}
+      </div>
+    ),
+    [],
+  )
+
+  // Memoized on what the cells read, so DataTable's per-row cache holds across
+  // selection clicks; see its docstring.
   const columns = useMemo<DataTableColumn<ApiKey>[]>(
     () => [
       {
         id: "name",
         header: "Name",
         isRowHeader: true,
-        // Two lines: the name at 16px, then the metadata line 5px under it.
         cell: (k) => (
-          <div className="flex flex-col gap-[5px]">
-            <span className="text-base text-foreground">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="truncate text-base text-foreground">
               {k.key_name ?? <span className="text-muted">(unnamed)</span>}
             </span>
-            <KeyMetaLine apiKey={k} />
+            {/* Folded, the line joins the owner and the last use to the meta
+              facts, so it takes one face throughout rather than setting an
+              uppercase mono run between two runs of body text. */}
+            <div className="truncate text-caption">
+              {layout === "compact" && isDeploymentWide ? (
+                <>
+                  <span>{ownerLabel(k)}</span>
+                  {" · "}
+                </>
+              ) : null}
+              <KeyMetaLine
+                apiKey={k}
+                face={layout === "compact" ? "text-caption" : undefined}
+              />
+              {layout === "compact"
+                ? ` · used ${relative(k.last_used_at) ?? "never"}`
+                : null}
+            </div>
           </div>
         ),
       },
@@ -1083,29 +1147,21 @@ export function KeysPage() {
             {
               id: "owner",
               header: "Owner",
-              // A member is named; anything else keeps the raw id, which for a
-              // hand-made owner like `ci-bot` is already the readable form. The
-              // id stays in the title so the value actually sent on a request is
-              // still recoverable from this column.
+              // One column, two faces, deliberately: a member is a person and
+              // takes the body face, while a raw id like `ci-bot` is an
+              // identifier and takes the mono one. The face is what tells the two
+              // apart, so neither needs a chip to say which it is. The id stays
+              // in the title, so the value actually sent on a request is
+              // recoverable from a truncated cell.
               cell: (k: ApiKey) => {
-                // One column, two faces, deliberately: a member is a person and
-                // takes the body face, while a raw id like `ci-bot` is an
-                // identifier and takes the mono one. The face is what tells the
-                // two apart, so neither needs a chip to say which it is.
-                if (isVirtualUser(k.user_id)) {
-                  return (
-                    <span className="text-mono-caption text-subtle">
-                      virtual
-                    </span>
-                  )
-                }
-                const member = k.user_id
-                  ? memberLabels.get(k.user_id)
-                  : undefined
+                const member =
+                  !isVirtualUser(k.user_id) && k.user_id
+                    ? memberLabels.get(k.user_id)
+                    : undefined
                 if (member) {
                   return (
                     <span
-                      className="text-sm text-foreground"
+                      className="block truncate text-sm text-foreground"
                       title={k.user_id ?? ""}
                     >
                       {member}
@@ -1113,8 +1169,13 @@ export function KeysPage() {
                   )
                 }
                 return (
-                  <span className="text-mono-caption text-muted">
-                    {k.user_id ?? "—"}
+                  <span
+                    className={`block truncate text-mono-caption ${
+                      isVirtualUser(k.user_id) ? "text-subtle" : "text-muted"
+                    }`}
+                    title={k.user_id ?? ""}
+                  >
+                    {ownerLabel(k)}
                   </span>
                 )
               },
@@ -1124,11 +1185,7 @@ export function KeysPage() {
       {
         id: "key",
         header: "Key",
-        cell: (k) => (
-          <code className="text-mono-caption text-muted">
-            {k.key_prefix ? `${k.key_prefix}…` : "—"}
-          </code>
-        ),
+        cell: renderPrefix,
       },
       {
         id: "created",
@@ -1166,87 +1223,27 @@ export function KeysPage() {
         id: "actions",
         header: "Actions",
         align: "end",
-        cell: (k) => (
-          <RowActionRow>
-            <RowAction
-              icon={k.is_active ? FiPause : FiPlay}
-              label={k.is_active ? "Disable" : "Enable"}
-              isDisabled={updateKey.isPending}
-              onPress={() => setActive(k, !k.is_active)}
-            />
-            <RowAction
-              icon={FiEdit2}
-              label="Edit"
-              onPress={() => {
-                setAddOpen(false)
-                setEditing(k.id)
-              }}
-            />
-            <RowAction
-              ref={lastArmed === k.id ? triggerRef : undefined}
-              icon={FiRefreshCw}
-              label="Regenerate"
-              isDanger={armed === k.id}
-              onPress={() => arm(k.id)}
-            />
-            {/* Permanent delete is only offered once a key is disabled, so a live
-              caller can't be broken (and its audit trail erased) in one click. */}
-            {k.is_active ? null : (
-              <RowAction
-                icon={FiTrash2}
-                label="Delete"
-                onPress={() => setPendingDelete(k)}
-              />
-            )}
-          </RowActionRow>
-        ),
+        cell: renderActions,
       },
     ],
-    // `arm`, `triggerRef` and `lastArmed` are listed for correctness, not because
-    // they invalidate: the first two are stable for the component's life, and
-    // `setLastArmed` has a single call site, immediately beside the matching
-    // `setArmed`, so `lastArmed` cannot change on a render where `armed` did not. Naming them
-    // anyway means the cache no longer depends on that invariant holding, which is
-    // the kind of coupling that survives until someone sets one without the other.
     [
-      updateKey.isPending,
-      setActive,
-      memberLabels,
-      armed,
+      layout,
       isDeploymentWide,
-      arm,
-      triggerRef,
-      lastArmed,
+      memberLabels,
+      ownerLabel,
+      renderPrefix,
+      renderActions,
     ],
   )
-
-  // The armed confirmation, rendered as a strip under its own row rather than
-  // inside the actions cell. Referentially stable per the DataTable docstring.
-  const renderArmed = useCallback(
-    (k: ApiKey) => {
-      if (armed !== k.id) return null
-      return (
-        <ArmedStrip
-          confirmRef={confirmRef}
-          confirmLabel="Regenerate"
-          isPending={rotateKey.isPending}
-          message={
-            <>
-              Regenerate the secret for <strong>{label(k)}</strong>? The current
-              secret stops working immediately, with no grace period.
-            </>
-          }
-          onConfirm={() => {
-            setArmed(null)
-            regenerate(k)
-          }}
-          onCancel={() => setArmed(null)}
-        />
-      )
-    },
-    // Neither memberLabels nor isDeploymentWide is read here any more: the
-    // strip's copy names the key, not its owner.
-    [armed, rotateKey.isPending, regenerate, confirmRef],
+  const visibleColumns = useMemo(
+    () =>
+      layout === "compact"
+        ? columns.filter(
+            (column) =>
+              !["owner", "created", "last_used", "expires"].includes(column.id),
+          )
+        : columns,
+    [columns, layout],
   )
 
   // Bulk delete targets only already-disabled keys, mirroring the per-row rule
@@ -1254,7 +1251,7 @@ export function KeysPage() {
   const deletableSelected = selectedKeys.filter((k) => !k.is_active)
 
   return (
-    <div className="flex flex-col">
+    <div ref={tableRegion} className="flex min-w-0 flex-col">
       <PageIntro
         title="API keys"
         action={
@@ -1278,7 +1275,7 @@ export function KeysPage() {
       </PageIntro>
 
       {/* Not the deletes: each reports inside its own confirm dialog. */}
-      <ErrorBanner error={keys.error ?? updateKey.error ?? rotateKey.error} />
+      <ErrorBanner error={keys.error ?? updateKey.error} />
 
       {/* A key's owner and its spending limit are both set elsewhere now, on the
           organization rail. This page is where an operator arrives looking for
@@ -1410,11 +1407,89 @@ export function KeysPage() {
       {/* Suppress the table (and its own empty message) while the onboarding
           panel owns the empty state, so a fresh gateway shows one call to action,
           not a panel stacked over a redundant "no rows" table. */}
-      {showOnboarding ? null : (
+      {showOnboarding ? null : layout === "mobile" ? (
+        <section
+          aria-label="API keys"
+          className="otari-keys-list flex flex-col"
+        >
+          <div className="flex min-h-11 items-center gap-2 border-b border-border-subtle">
+            <Checkbox
+              hasTouchTarget
+              ariaLabel="Select all keys"
+              isSelected={rows.length > 0 && selectedIds.length === rows.length}
+              onChange={(checked) =>
+                selection.onSelectionChange(
+                  checked ? new Set(selectableKeys) : new Set(),
+                )
+              }
+            >
+              <span className="sr-only">Select all keys</span>
+            </Checkbox>
+            <span className="flex-1 text-caption">
+              {rows.length} {rows.length === 1 ? "key" : "keys"}
+            </span>
+            <span className="text-overline">Actions</span>
+          </div>
+          {/* The list owns loading too: falling through to the table here painted
+              a seven-column skeleton on a phone and then swapped it for this. */}
+          {loading ? (
+            <EmptyMessage>
+              <span className="inline-flex items-center gap-2">
+                <Spinner size="sm" aria-hidden="true" /> Loading…
+              </span>
+            </EmptyMessage>
+          ) : null}
+          <ul className="flex flex-col">
+            {rows.map((k) => (
+              <li
+                key={k.id}
+                className={`flex items-start gap-2 border-b border-border-subtle py-3 ${selectedIds.includes(k.id) ? "bg-primary-subtle" : ""}`}
+              >
+                <div className="flex min-h-11 shrink-0 items-center">
+                  <Checkbox
+                    hasTouchTarget
+                    ariaLabel={`Select ${label(k)}`}
+                    isSelected={selectedIds.includes(k.id)}
+                    onChange={(checked) => {
+                      const next = new Set(selectedIds)
+                      if (checked) next.add(k.id)
+                      else next.delete(k.id)
+                      selection.onSelectionChange(next)
+                    }}
+                  >
+                    <span className="sr-only">Select {label(k)}</span>
+                  </Checkbox>
+                </div>
+                <div className="flex min-w-0 flex-1 flex-col gap-1 pt-2">
+                  <span className="truncate text-base text-foreground">
+                    {k.key_name ?? "(unnamed)"}
+                  </span>
+                  {renderPrefix(k)}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="shrink-0">
+                      <StatusMark apiKey={k} />
+                    </span>
+                    {isDeploymentWide ? (
+                      <span className="truncate text-caption">
+                        {ownerLabel(k)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="truncate text-caption">
+                    <KeyMetaLine apiKey={k} face="text-caption" /> · used{" "}
+                    {relative(k.last_used_at) ?? "never"}
+                  </div>
+                </div>
+                {renderActions(k)}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : (
         <TableScrollFrame className="otari-keys-table">
           <DataTable
             ariaLabel="API keys"
-            columns={columns}
+            columns={visibleColumns}
             rows={rows}
             getRowKey={getKeyRowKey}
             isLoading={loading}
@@ -1422,11 +1497,35 @@ export function KeysPage() {
             selectionMode="multiple"
             selectedKeys={selection.selectedKeys}
             onSelectionChange={selection.onSelectionChange}
-            detailKey={armed}
-            renderDetail={renderArmed}
           />
         </TableScrollFrame>
       )}
+
+      <ConfirmDialog
+        isOpen={pendingRegenerate !== undefined}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingRegenerate(undefined)
+            rotateKey.reset()
+          }
+        }}
+        heading="Regenerate API key"
+        body={
+          pendingRegenerate ? (
+            <>
+              Regenerate the secret for{" "}
+              <strong>{label(pendingRegenerate)}</strong>? The current secret
+              stops working immediately, with no grace period.
+            </>
+          ) : null
+        }
+        confirmLabel="Regenerate"
+        isPending={rotateKey.isPending}
+        error={rotateKey.error}
+        onConfirm={() => {
+          if (pendingRegenerate) regenerate(pendingRegenerate)
+        }}
+      />
 
       <ConfirmDialog
         isOpen={pendingDelete !== undefined}

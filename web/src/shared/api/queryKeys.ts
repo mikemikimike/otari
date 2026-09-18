@@ -13,7 +13,18 @@
  */
 
 export const MODELS = "models"
+// The same selectors as MODELS, folded by model and priced for the viewer. Its
+// own key so the two reads can be cached apart, and every pricing mutation
+// invalidates both: a rate change moves a row in each.
+export const CATALOG = "catalog"
 export const PRICING = "pricing"
+// The three operator reads beside the price list: an update the scheduled
+// refresh left waiting, the accepted-snapshot history, and each stored rate
+// against today's default. Children of PRICING, so a confirm or a price write
+// refetches them with the list.
+export const PRICING_PENDING = [PRICING, "pending"] as const
+export const PRICING_SNAPSHOTS = [PRICING, "snapshots"] as const
+export const PRICING_DRIFT = [PRICING, "drift"] as const
 export const SETTINGS = "settings"
 export const MAIL_SETTINGS = "mail-settings"
 export const MAINTENANCE_MODE = "maintenance-mode"
@@ -28,13 +39,11 @@ export const SEARCH_PROVIDERS = "search-providers"
 // remote service's answer, so a settings save that changes that URL invalidates
 // it, while every other tool-settings write must not re-dial the sidecar.
 export const GUARDRAIL_PROFILES = "guardrail-profiles"
+// Both carry the surface they were read from and the workspace they were scoped
+// to as trailing key segments, so the deployment-wide list and its tenant-scoped
+// sibling share a head that one invalidation covers. See `useRoutingScope`.
 export const ALIASES = "aliases"
 export const ROUTING_POLICIES = "routing-policies"
-// The tenant-scoped sibling of ROUTING_POLICIES. Its own key: the two lists
-// answer different endpoints for different callers, and an operator's policy
-// write invalidates the deployment-wide one it changed.
-export const ORGANIZATION_ROUTING_POLICIES = "organization-routing-policies"
-export const ORGANIZATION_ALIASES = "organization-aliases"
 export const ROUTER_STATUS = "router-status"
 // Deliberately not nested under MODELS: pricing mutations invalidate that key,
 // and a price change cannot alter which models a provider serves. Sharing the
@@ -52,6 +61,12 @@ export const SCOPED_BUDGETS = "scoped-budgets"
 export const USERS = "users"
 export const USAGE = "usage"
 export const ORGANIZATIONS = "organizations"
+// The caller's standing in the organization they are acting in. Composed here
+// rather than spelled at the hook, because two things outside that hook address
+// this one read: switching organization writes the context it was answered with
+// straight into it, and the spend-ceilings read binds its role gate to whatever
+// object is cached under it.
+export const ORGANIZATION_CONTEXT = [ORGANIZATIONS, "context"] as const
 // Deliberately its own key rather than a child of ORGANIZATIONS: switching
 // organizations invalidates both, but a role change invalidates only the roster,
 // and nesting would re-read the context (and every page gated on it) as well.
@@ -81,6 +96,20 @@ export const WORKSPACES = "workspaces"
 // every one of those ticks invalidate (or be invalidated by) the workspace list
 // and its rosters.
 export const ACTIVATION = "workspace-activation"
+// The Playground's own reads, all four of them under one key because they are
+// one page's state and nothing outside that page reads or writes them: the
+// caller's retention consent, their saved transcripts, their rated comparisons,
+// their pinned models, and the tools menu's availability. Scoped per workspace
+// below the root where the answer is per workspace (consent is not: it is about
+// what this deployment stores about a person, so it is asked once).
+//
+// Deliberately not nested under WORKSPACES, which the workspace tool-policy
+// reads are: those are the same rows the Tools pages edit, so a save there has
+// to invalidate them, while nothing an operator edits changes a transcript
+// somebody saved. Nesting would make every workspace write refetch the page's
+// whole history.
+export const PLAYGROUND = "playground"
+
 // The signed-in identity's own passkeys. Its own key and not a child of any
 // organization key: a passkey belongs to a person, not to the organization they
 // happen to be acting in, and switching organizations does not change the list.

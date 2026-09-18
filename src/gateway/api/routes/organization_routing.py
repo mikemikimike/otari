@@ -14,7 +14,7 @@ member, Edit for an admin (otari-ai#1942, otari-ai#1969).
   which refuses a pointer with no live membership behind it. No request here
   names an organization.
 * **How much of it a read covers** follows the rule the workspace list uses: an
-  owner, an admin or a superuser reads every workspace in the organization, and
+  owner or an admin reads every workspace in the organization, and
   a member or viewer reads the ones they actively belong to. A member who
   belongs to no workspace still gets the config-file entries, which are
   deployment-wide and in force in every workspace they could ever join.
@@ -61,7 +61,7 @@ from sqlalchemy import Select, false, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
-from gateway.api.deps import CurrentIdentity, get_config, get_db, verify_master_key
+from gateway.api.deps import CurrentIdentity, ModelProviderPortDep, get_config, get_db, verify_master_key
 from gateway.api.routes.aliases import (
     AliasRequest,
     AliasResponse,
@@ -77,10 +77,11 @@ from gateway.api.routes.routing import (
 )
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
-from gateway.models.entities import ModelAlias, RoutingPolicy
-from gateway.models.routing import PolicySpec
+from gateway.models.providers import ModelAlias
+from gateway.models.routing import PolicySpec, RoutingPolicy
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
+from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.services.alias_service import all_alias_names
 from gateway.services.model_access import is_model_allowed
 from gateway.services.policy_store import all_policy_names
@@ -122,6 +123,7 @@ async def _writable_workspace_id(
     user: TenancyUser,
     workspace_id: uuid.UUID | None,
     targets: list[str],
+    model_provider: ModelProviderPort | None,
 ) -> uuid.UUID:
     """Resolve the workspace a tenant write lands in, refusing what it may not do.
 
@@ -131,7 +133,7 @@ async def _writable_workspace_id(
     caller's own organization, so another tenant's id is a 404 rather than a 403.
     Then the targets, against the organization's own reach.
     """
-    organizations = OrganizationService(db)
+    organizations = OrganizationService(db, membership_listener=None)
     organization = await organizations.get_active_organization_for_user(user)
     await organizations.require_active_organization_management_access(user=user, organization=organization)
     if workspace_id is None:
@@ -146,7 +148,7 @@ async def _writable_workspace_id(
         organization=organization,
         organizations=organizations,
     )
-    await _require_reachable_targets(db, config, user=user, targets=targets)
+    await _require_reachable_targets(db, config, user=user, targets=targets, model_provider=model_provider)
     return workspace.id
 
 
@@ -156,14 +158,14 @@ async def _require_reachable_targets(
     *,
     user: TenancyUser,
     targets: list[str],
+    model_provider: ModelProviderPort | None,
 ) -> None:
     """Refuse a target the caller's organization cannot already reach.
 
     Without this, writing a policy would be a way to reach a provider the
     organization holds no key for: the name is the tenant's to choose, and
     resolution follows the name. Answered as a 400 naming the target, because it
-    is a statement about the body rather than about the caller's role, and the
-    catalog the dashboard offers already excludes these.
+    is a statement about the body rather than about the caller's role.
 
     A target that names another alias or policy is left alone, because the write
     helpers refuse chaining a step later and say so precisely. Checking it here
@@ -173,7 +175,7 @@ async def _require_reachable_targets(
     if not targets:
         return
     indirections = all_alias_names(config) | all_policy_names(config)
-    allowlist = await resolve_session_model_allowlist(db, config, user=user)
+    allowlist = await resolve_session_model_allowlist(db, config, user=user, model_provider=model_provider)
     unreachable = [
         target
         for target in targets
@@ -226,6 +228,13 @@ def _visible_workspace_ids(scope: VisibleWorkspaceScope) -> Select[tuple[uuid.UU
 
 _LIMIT = Query(ge=1, le=_MAX_ROWS, description="Maximum entries to return, stored and config-file together.")
 
+_WORKSPACE_FILTER = Query(
+    description=(
+        "Only stored entries in this workspace. Config-file entries are always included, being "
+        "deployment-wide. Omit for every workspace this caller may see."
+    )
+)
+
 
 @policies_router.get("")
 async def list_visible_routing_policies(
@@ -233,21 +242,27 @@ async def list_visible_routing_policies(
     config: Annotated[GatewayConfig, Depends(get_config)],
     current_identity: CurrentIdentity,
     limit: Annotated[int, _LIMIT] = _MAX_ROWS,
+    workspace_id: Annotated[uuid.UUID | None, _WORKSPACE_FILTER] = None,
 ) -> list[PolicyResponse]:
     """List the routing policies in force in the workspaces this caller may see.
 
     Stored policies from the caller's visible workspaces plus the config-file
     policies, which are deployment-wide and resolve in every workspace. The
     response is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the
-    caller's own organization.
+    caller's own organization, and narrowed again to one workspace when
+    ``workspace_id`` names one.
     """
-    scope = await resolve_visible_workspace_scope(db, user=current_identity, organizations=OrganizationService(db))
+    scope = await resolve_visible_workspace_scope(
+        db, user=current_identity, organizations=OrganizationService(db, membership_listener=None)
+    )
     statement = select(RoutingPolicy).where(
         col(RoutingPolicy.workspace_id).in_(_visible_workspace_ids(scope)),
         # Workspace-wide only; see the module docstring for why a user-scoped row
         # is neither this surface's to show nor its to act on.
         col(RoutingPolicy.user_id).is_(None),
     )
+    if workspace_id is not None:
+        statement = statement.where(col(RoutingPolicy.workspace_id) == workspace_id)
     rows = (await db.execute(statement.order_by(RoutingPolicy.name).limit(limit))).scalars().all()
     policies = []
     for row in rows:
@@ -283,6 +298,7 @@ async def set_organization_routing_policy(
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     current_identity: CurrentIdentity,
+    model_provider: ModelProviderPortDep,
 ) -> PolicyResponse:
     """Create or update a stored policy in one of the organization's workspaces.
 
@@ -297,6 +313,7 @@ async def set_organization_routing_policy(
         user=current_identity,
         workspace_id=request.workspace_id,
         targets=validated_spec(request.name, request.spec).static_selectors(),
+        model_provider=model_provider,
     )
     return await upsert_policy_in_workspace(request, db, config, workspace_id=workspace_id)
 
@@ -319,6 +336,7 @@ async def delete_organization_routing_policy(
         user=current_identity,
         workspace_id=workspace_id,
         targets=[],
+        model_provider=None,
     )
     await delete_policy_in_workspace(name, db, config, workspace_id=resolved, user_id=None)
 
@@ -329,18 +347,24 @@ async def list_visible_aliases(
     config: Annotated[GatewayConfig, Depends(get_config)],
     current_identity: CurrentIdentity,
     limit: Annotated[int, _LIMIT] = _MAX_ROWS,
+    workspace_id: Annotated[uuid.UUID | None, _WORKSPACE_FILTER] = None,
 ) -> list[AliasResponse]:
     """List the aliases in force in the workspaces this caller may see.
 
     The policies list's sibling, over ``model_aliases``, and scoped the same way:
     stored rows from the caller's visible workspaces, plus the config-file
-    aliases, which are deployment-wide.
+    aliases, which are deployment-wide, and narrowed to one workspace when
+    ``workspace_id`` names one.
     """
-    scope = await resolve_visible_workspace_scope(db, user=current_identity, organizations=OrganizationService(db))
+    scope = await resolve_visible_workspace_scope(
+        db, user=current_identity, organizations=OrganizationService(db, membership_listener=None)
+    )
     statement = select(ModelAlias).where(
         col(ModelAlias.workspace_id).in_(_visible_workspace_ids(scope)),
         col(ModelAlias.user_id).is_(None),
     )
+    if workspace_id is not None:
+        statement = statement.where(col(ModelAlias.workspace_id) == workspace_id)
     rows = (await db.execute(statement.order_by(ModelAlias.name).limit(limit))).scalars().all()
     aliases = [AliasResponse.from_model(row) for row in rows]
     for name, target in config.aliases.items():
@@ -356,6 +380,7 @@ async def set_organization_alias(
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     current_identity: CurrentIdentity,
+    model_provider: ModelProviderPortDep,
 ) -> AliasResponse:
     """Create or update a stored alias in one of the organization's workspaces.
 
@@ -370,6 +395,7 @@ async def set_organization_alias(
         user=current_identity,
         workspace_id=request.workspace_id,
         targets=[request.target],
+        model_provider=model_provider,
     )
     return await upsert_alias_in_workspace(request, db, config, workspace_id=workspace_id)
 
@@ -392,5 +418,6 @@ async def delete_organization_alias(
         user=current_identity,
         workspace_id=workspace_id,
         targets=[],
+        model_provider=None,
     )
     await delete_alias_in_workspace(name, db, config, workspace_id=resolved, user_id=None)

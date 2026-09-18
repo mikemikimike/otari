@@ -33,6 +33,37 @@
         "title": "AcceptInvitationResultPublic",
         "type": "object"
       },
+      "AcceptedSnapshotResponse": {
+        "description": "One accepted genai-prices snapshot in the history.",
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "title": "Accepted At",
+            "type": "string"
+          },
+          "accepted_by": {
+            "description": "`operator` for a dashboard confirm, `schedule` for the auto policy.",
+            "title": "Accepted By",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_count": {
+            "title": "Model Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "accepted_at",
+          "accepted_by",
+          "model_count"
+        ],
+        "title": "AcceptedSnapshotResponse",
+        "type": "object"
+      },
       "ActivationApiKeyPublic": {
         "description": "The API key the guide hands out, with its plaintext.\n\nReturned once per call and never stored in plaintext, like every other key\nthis gateway mints: a page reload issues a new one and rotates the same row,\nwhich is what makes the guide able to show a working key without keeping a\nreadable secret anywhere.",
         "properties": {
@@ -65,12 +96,24 @@
               }
             ],
             "title": "Key Prefix"
+          },
+          "key_suffix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Suffix"
           }
         },
         "required": [
           "key",
           "key_id",
           "key_prefix",
+          "key_suffix",
           "key_name"
         ],
         "title": "ActivationApiKeyPublic",
@@ -1382,6 +1425,17 @@
         "title": "AuthorizeResponse",
         "type": "object"
       },
+      "BackendType": {
+        "description": "How a guardrail executes.",
+        "enum": [
+          "local_encoder",
+          "local_decoder",
+          "hosted_api",
+          "library_wrapped"
+        ],
+        "title": "BackendType",
+        "type": "string"
+      },
       "BatchRequestItem": {
         "properties": {
           "body": {
@@ -1742,6 +1796,163 @@
         "title": "BudgetResponse",
         "type": "object"
       },
+      "BuiltInGuardrailCatalog": {
+        "description": "The guardrails this gateway can build and call itself.",
+        "properties": {
+          "guardrails": {
+            "items": {
+              "$ref": "#/components/schemas/BuiltInGuardrailSpec"
+            },
+            "title": "Guardrails",
+            "type": "array"
+          }
+        },
+        "title": "BuiltInGuardrailCatalog",
+        "type": "object"
+      },
+      "BuiltInGuardrailSpec": {
+        "description": "One guardrail this gateway can construct and run itself.\n\nUpstream's own metadata model, extended rather than copied, so a field it adds\nis carried instead of waiting on an edit here. The four taxonomy enums document\nthemselves in the published schema, which is why almost nothing below restates\nwhat a field name and its type already say; the descriptions that remain are on\nthe answers only this gateway can give.\n\nInheriting also takes upstream's field serializers, which sort every set-valued\nfield on the way out, so the JSON is stable across calls without sorting anything\nhere.",
+        "properties": {
+          "alternate_backends": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Alternate Backends",
+            "type": "array"
+          },
+          "backend": {
+            "$ref": "#/components/schemas/BackendType"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "create_parameters": {
+            "description": "Constructor arguments, which is where a vendor API key and an endpoint live",
+            "items": {
+              "$ref": "#/components/schemas/GuardrailParameterSpec"
+            },
+            "title": "Create Parameters",
+            "type": "array"
+          },
+          "default_license": {
+            "title": "Default License",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "guardrail_name": {
+            "description": "The any-guardrail class, and the name a stored guardrail selects",
+            "title": "Guardrail Name",
+            "type": "string"
+          },
+          "multilingual": {
+            "default": false,
+            "title": "Multilingual",
+            "type": "boolean"
+          },
+          "multimodal": {
+            "default": false,
+            "title": "Multimodal",
+            "type": "boolean"
+          },
+          "optional_validate_kwargs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Optional Validate Kwargs",
+            "type": "array"
+          },
+          "output_shapes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Shapes",
+            "type": "array"
+          },
+          "primary_category": {
+            "$ref": "#/components/schemas/GuardrailCategory"
+          },
+          "required_validate_kwargs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Validate Kwargs",
+            "type": "array"
+          },
+          "requirement_groups": {
+            "description": "One-of constraints that no single parameter's required flag can express. At least one member of each group must be supplied, or one of the environment variables that satisfies it",
+            "items": {
+              "$ref": "#/components/schemas/RequirementGroup"
+            },
+            "title": "Requirement Groups",
+            "type": "array"
+          },
+          "requires_api_key": {
+            "default": false,
+            "title": "Requires Api Key",
+            "type": "boolean"
+          },
+          "stages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "supports_batch": {
+            "default": false,
+            "description": "Whether several inputs run as one real batched call, not a per-item loop",
+            "title": "Supports Batch",
+            "type": "boolean"
+          },
+          "validate_parameters": {
+            "description": "Per-call arguments, sent with the text on every check",
+            "items": {
+              "$ref": "#/components/schemas/GuardrailParameterSpec"
+            },
+            "title": "Validate Parameters",
+            "type": "array"
+          },
+          "variant_licenses": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Variant Licenses",
+            "type": "array"
+          },
+          "vendor": {
+            "title": "Vendor",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "display_name",
+          "categories",
+          "primary_category",
+          "stages",
+          "output_shapes",
+          "backend",
+          "vendor",
+          "default_license",
+          "guardrail_name"
+        ],
+        "title": "BuiltInGuardrailSpec",
+        "type": "object"
+      },
       "CallToolResult": {
         "additionalProperties": true,
         "description": "The server's response to a tool call.",
@@ -1806,8 +2017,13 @@
         "type": "object"
       },
       "CallerIdentityPublic": {
-        "description": "Who the caller is, as against what they may do.\n\nThe account control at the foot of the dashboard's sidebar draws a person,\nand no authenticated route reported the caller's own name or address, so it\ndrew a role for everybody who could reach it: \"Operator\", which is not a\nname and on a multi-tenant deployment was not even true\n(mozilla-ai/otari#832).\n\nCarried on the membership context for the reason ``deployment_operator`` is:\nthe shell reads that context before it paints, so an identity taken from it\nneeds no request of its own and cannot arrive a beat after the chrome it\nnames. Publishing it costs nothing either, since it is the caller's own\nidentity and they are holding the credential that resolved to it.\n\nBoth fields are nullable, and for opposite reasons. A local operator\nidentity has no address, because first boot provisions it with a name and\nnothing to sign in with but the master key; a member added to the roster by\naddress has no name until they claim the identity and supply one. So a shell\nhas to be ready to draw either one alone.",
+        "description": "Who the caller is, as against what they may do.\n\nThe account control at the foot of the dashboard's sidebar draws a person,\nand no authenticated route reported the caller's own name or address, so it\ndrew a role for everybody who could reach it: \"Operator\", which is not a\nname and on a multi-tenant deployment was not even true\n(mozilla-ai/otari#832).\n\nCarried on the membership context for the reason ``deployment_operator`` is:\nthe shell reads that context before it paints, so an identity taken from it\nneeds no request of its own and cannot arrive a beat after the chrome it\nnames. Publishing it costs nothing either, since it is the caller's own\nidentity and they are holding the credential that resolved to it.\n\n``email`` and ``full_name`` are nullable for opposite reasons. A local\noperator identity has no address, because first boot provisions it with a\nname and nothing to sign in with but the master key; a member added by\naddress has no name until they claim the identity and supply one. So a shell\nhas to be ready to draw either one alone.",
         "properties": {
+          "claims_deployment": {
+            "description": "Whether setting this identity's password claims the deployment, which stops the master key signing in to the dashboard. True for the deployment's operator until it holds a password, whether or not it already has an address; false for everybody else.",
+            "title": "Claims Deployment",
+            "type": "boolean"
+          },
           "email": {
             "anyOf": [
               {
@@ -1830,6 +2046,11 @@
             ],
             "title": "Full Name"
           },
+          "has_password": {
+            "description": "Whether this identity holds a dashboard password. False for one that signs in only through an OAuth provider or a passkey, and for a roster entry nobody has claimed yet. PUT /api/v1/auth/password requires current_password from a cookie-authenticated caller exactly while this is true.",
+            "title": "Has Password",
+            "type": "boolean"
+          },
           "user_id": {
             "format": "uuid",
             "title": "User Id",
@@ -1837,7 +2058,9 @@
           }
         },
         "required": [
-          "user_id"
+          "user_id",
+          "has_password",
+          "claims_deployment"
         ],
         "title": "CallerIdentityPublic",
         "type": "object"
@@ -1954,6 +2177,754 @@
           "dispatch_model"
         ],
         "title": "CandidateResponse",
+        "type": "object"
+      },
+      "CatalogCapabilities": {
+        "description": "What a model can do, as models.dev reports it. Any offering's yes is the model's.",
+        "properties": {
+          "attachment": {
+            "default": false,
+            "title": "Attachment",
+            "type": "boolean"
+          },
+          "reasoning": {
+            "default": false,
+            "title": "Reasoning",
+            "type": "boolean"
+          },
+          "structured_output": {
+            "default": false,
+            "title": "Structured Output",
+            "type": "boolean"
+          },
+          "temperature": {
+            "default": false,
+            "title": "Temperature",
+            "type": "boolean"
+          },
+          "tool_call": {
+            "default": false,
+            "title": "Tool Call",
+            "type": "boolean"
+          }
+        },
+        "title": "CatalogCapabilities",
+        "type": "object"
+      },
+      "CatalogCredential": {
+        "description": "Who may price a catalog offering.",
+        "enum": [
+          "deployment",
+          "organization",
+          "hosted"
+        ],
+        "title": "CatalogCredential",
+        "type": "string"
+      },
+      "CatalogElsewhere": {
+        "description": "A provider models.dev lists for this model that this deployment has not configured.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider_type": {
+            "title": "Provider Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider_type",
+          "name"
+        ],
+        "title": "CatalogElsewhere",
+        "type": "object"
+      },
+      "CatalogModelDetail": {
+        "description": "One model with everything the detail page shows.",
+        "properties": {
+          "also_available_from": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogElsewhere"
+            },
+            "title": "Also Available From",
+            "type": "array"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/CatalogCapabilities"
+          },
+          "context_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The largest any offering serves.",
+            "title": "Context Window"
+          },
+          "default_pricing": {
+            "description": "Whether an unpriced model is metered at the genai-prices default.",
+            "title": "Default Pricing",
+            "type": "boolean"
+          },
+          "deprecated": {
+            "default": false,
+            "description": "True only when every offering with metadata says so.",
+            "title": "Deprecated",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "models.dev's, from the offering that named the model.",
+            "title": "Description"
+          },
+          "discovered": {
+            "description": "Whether any offering was discovered from its provider.",
+            "title": "Discovered",
+            "type": "boolean"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family"
+          },
+          "id": {
+            "description": "The catalog id, vendor-qualified where the vendor is known: `z-ai/glm-5.3`, else the bare slug.",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
+          "knowledge_cutoff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Cutoff"
+          },
+          "max_output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The largest any offering serves.",
+            "title": "Max Output Tokens"
+          },
+          "min_input_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The cheapest offering's, at the comparison context where one was asked for.",
+            "title": "Min Input Price Per Million"
+          },
+          "min_output_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Output Price Per Million"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "offering_count": {
+            "title": "Offering Count",
+            "type": "integer"
+          },
+          "offerings": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOffering"
+            },
+            "title": "Offerings",
+            "type": "array"
+          },
+          "open_weights": {
+            "default": false,
+            "title": "Open Weights",
+            "type": "boolean"
+          },
+          "output_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Modalities",
+            "type": "array"
+          },
+          "price_sources": {
+            "description": "Which price lists the priced offerings came from, distinct and sorted.",
+            "items": {
+              "enum": [
+                "organization",
+                "deployment",
+                "defaults"
+              ],
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "provider_count": {
+            "title": "Provider Count",
+            "type": "integer"
+          },
+          "providers": {
+            "description": "The provider instances offering it, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "release_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Date"
+          },
+          "resolves_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The offering `selector` resolves to.",
+            "title": "Resolves To"
+          },
+          "selector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id as a selector: send it as `model` and the model's cheapest offering answers. Null until the gateway has indexed the catalog.",
+            "title": "Selector"
+          },
+          "selectors": {
+            "description": "Every offering's selector, so the list can be searched by one.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Selectors",
+            "type": "array"
+          },
+          "unpriced_count": {
+            "description": "How many offerings carry no price for this caller.",
+            "title": "Unpriced Count",
+            "type": "integer"
+          },
+          "vendor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vendor"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "vendor",
+          "capabilities",
+          "input_modalities",
+          "output_modalities",
+          "offering_count",
+          "provider_count",
+          "providers",
+          "selectors",
+          "price_sources",
+          "unpriced_count",
+          "discovered",
+          "default_pricing",
+          "offerings",
+          "also_available_from"
+        ],
+        "title": "CatalogModelDetail",
+        "type": "object"
+      },
+      "CatalogModelSummary": {
+        "description": "One model, as the list shows it.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/CatalogCapabilities"
+          },
+          "context_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The largest any offering serves.",
+            "title": "Context Window"
+          },
+          "deprecated": {
+            "default": false,
+            "description": "True only when every offering with metadata says so.",
+            "title": "Deprecated",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "models.dev's, from the offering that named the model.",
+            "title": "Description"
+          },
+          "discovered": {
+            "description": "Whether any offering was discovered from its provider.",
+            "title": "Discovered",
+            "type": "boolean"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family"
+          },
+          "id": {
+            "description": "The catalog id, vendor-qualified where the vendor is known: `z-ai/glm-5.3`, else the bare slug.",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
+          "knowledge_cutoff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Cutoff"
+          },
+          "max_output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The largest any offering serves.",
+            "title": "Max Output Tokens"
+          },
+          "min_input_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The cheapest offering's, at the comparison context where one was asked for.",
+            "title": "Min Input Price Per Million"
+          },
+          "min_output_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Output Price Per Million"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "offering_count": {
+            "title": "Offering Count",
+            "type": "integer"
+          },
+          "open_weights": {
+            "default": false,
+            "title": "Open Weights",
+            "type": "boolean"
+          },
+          "output_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Modalities",
+            "type": "array"
+          },
+          "price_sources": {
+            "description": "Which price lists the priced offerings came from, distinct and sorted.",
+            "items": {
+              "enum": [
+                "organization",
+                "deployment",
+                "defaults"
+              ],
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "provider_count": {
+            "title": "Provider Count",
+            "type": "integer"
+          },
+          "providers": {
+            "description": "The provider instances offering it, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "release_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Date"
+          },
+          "resolves_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The offering `selector` resolves to.",
+            "title": "Resolves To"
+          },
+          "selector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id as a selector: send it as `model` and the model's cheapest offering answers. Null until the gateway has indexed the catalog.",
+            "title": "Selector"
+          },
+          "selectors": {
+            "description": "Every offering's selector, so the list can be searched by one.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Selectors",
+            "type": "array"
+          },
+          "unpriced_count": {
+            "description": "How many offerings carry no price for this caller.",
+            "title": "Unpriced Count",
+            "type": "integer"
+          },
+          "vendor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vendor"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "vendor",
+          "capabilities",
+          "input_modalities",
+          "output_modalities",
+          "offering_count",
+          "provider_count",
+          "providers",
+          "selectors",
+          "price_sources",
+          "unpriced_count",
+          "discovered"
+        ],
+        "title": "CatalogModelSummary",
+        "type": "object"
+      },
+      "CatalogOffering": {
+        "description": "One way this deployment can call a model: a selector on a provider.",
+        "properties": {
+          "context_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window"
+          },
+          "credential": {
+            "$ref": "#/components/schemas/CatalogCredential",
+            "description": "Who may price it: `deployment` for a `providers:` instance the operator configured, `hosted` for a provider the deployment pays for in any workspace of the viewer's organization, `organization` for one the viewer's organization may set its own rate for. A workspace can still call a `hosted` provider with the organization's own key."
+          },
+          "discovered": {
+            "description": "Whether the provider itself reported this model.",
+            "title": "Discovered",
+            "type": "boolean"
+          },
+          "max_output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Output Tokens"
+          },
+          "metadata_input_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What models.dev lists this provider charging, for a cross-check. Not billed from: two independent datasets disagreeing is the cheapest stale-price detector there is.",
+            "title": "Metadata Input Price Per Million"
+          },
+          "metadata_output_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Output Price Per Million"
+          },
+          "price_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a default, the genai-prices `provider:model` entry that matched; the selector otherwise.",
+            "title": "Price Reference"
+          },
+          "price_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "organization",
+                  "deployment",
+                  "defaults"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which price list `pricing` came from, for this viewer: the organization's own override, the deployment's stored row, or the genai-prices defaults. Null when nothing prices it.",
+            "title": "Price Source"
+          },
+          "pricing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelPricingInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "description": "The provider instance the selector names.",
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_type": {
+            "description": "The any-llm implementation behind the instance.",
+            "title": "Provider Type",
+            "type": "string"
+          },
+          "quantization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From the provider's id, when it names one.",
+            "title": "Quantization"
+          },
+          "selector": {
+            "description": "What to send as `model`, in `instance:model` form.",
+            "title": "Selector",
+            "type": "string"
+          },
+          "short_selector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A shorter spelling the gateway also accepts: the instance with the model's cleaned id (`fireworks:gpt-oss-120b`). Null where two offerings on the instance would share it, or until the gateway has indexed the catalog.",
+            "title": "Short Selector"
+          },
+          "usage_30d": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfferingUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "provider",
+          "provider_type",
+          "credential",
+          "discovered"
+        ],
+        "title": "CatalogOffering",
+        "type": "object"
+      },
+      "CatalogResponse": {
+        "description": "The grouped catalog, and the facts a reader needs to interpret its prices.",
+        "properties": {
+          "default_pricing": {
+            "description": "Whether an unpriced model is metered at the genai-prices default.",
+            "title": "Default Pricing",
+            "type": "boolean"
+          },
+          "defaults_as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the accepted genai-prices snapshot was taken. Null while the bundled dataset serves.",
+            "title": "Defaults As Of"
+          },
+          "metadata_available": {
+            "description": "False when models.dev could not be read; descriptions are then absent.",
+            "title": "Metadata Available",
+            "type": "boolean"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogModelSummary"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "default_pricing",
+          "defaults_as_of",
+          "metadata_available",
+          "models"
+        ],
+        "title": "CatalogResponse",
         "type": "object"
       },
       "CeremonyOptions": {
@@ -2973,6 +3944,17 @@
             ],
             "title": "Key Prefix"
           },
+          "key_suffix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Suffix"
+          },
           "metadata": {
             "additionalProperties": true,
             "title": "Metadata",
@@ -3005,6 +3987,7 @@
           "id",
           "key",
           "key_prefix",
+          "key_suffix",
           "key_name",
           "user_id",
           "created_at",
@@ -3533,6 +4516,12 @@
             ],
             "description": "Where this deployment's privacy notice lives. Set, the account menu's Data & Privacy row links to it; null, no address is configured and that row stays disabled, carrying the standing note that there is nothing to configure there yet. A link target an operator configured, validated at startup as an absolute http(s) URL carrying no credential, since this response is unauthenticated.",
             "title": "Privacy Url"
+          },
+          "public_catalog": {
+            "default": false,
+            "description": "Whether the model catalog is served to a visitor with no session: GET /api/v1/catalog/models answers anonymously and the dashboard renders Models ahead of sign-in. False for a hybrid gateway, which serves no catalog of its own.",
+            "title": "Public Catalog",
+            "type": "boolean"
           },
           "session_type": {
             "description": "The kind of session this deployment issues, not whether the caller holds one. 'local_operator' is the standalone operator sign-in (see sign_in_methods for which credential it currently accepts), 'hosted_user' an otari.ai account, and 'none' a deployment that issues no management session at all.",
@@ -4418,6 +5407,45 @@
         "title": "ExternalUsageEvent",
         "type": "object"
       },
+      "GateResultResponse": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "enforcement": {
+            "title": "Enforcement",
+            "type": "string"
+          },
+          "gate_id": {
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate_id",
+          "enforcement",
+          "outcome",
+          "message"
+        ],
+        "title": "GateResultResponse",
+        "type": "object"
+      },
       "GatewaySettings": {
         "description": "Operator-facing runtime settings surfaced to the dashboard.\n\nThe top-level flags are kept for the callers that read them directly\n(pricing warnings, the models/providers pages); ``config`` is the full\nread-only view with the settable/startup-only marking.",
         "properties": {
@@ -4509,6 +5537,22 @@
         ],
         "title": "GuardrailCatalog",
         "type": "object"
+      },
+      "GuardrailCategory": {
+        "description": "What a guardrail is designed to detect (a guardrail may span several).",
+        "enum": [
+          "prompt_injection",
+          "content_safety",
+          "toxicity",
+          "pii",
+          "hallucination",
+          "off_topic",
+          "bias",
+          "tool_use",
+          "general_judge"
+        ],
+        "title": "GuardrailCategory",
+        "type": "string"
       },
       "GuardrailConfig": {
         "description": "A single guardrail check the caller wants the gateway to enforce.\n\nURL safety: when ``url`` is supplied it is validated by\n:func:`gateway.services.guardrails.run_input_guardrails` (not here at parse\ntime \u2014 the check does a DNS lookup that must be awaited) with the same\nSSRF guard used for MCP server URLs (loopback allowed by default for\nsame-host sidecars; gated by ``OTARI_MCP_ALLOW_LOOPBACK`` /\n``OTARI_MCP_ALLOW_PRIVATE_HOSTS``). Most deployments omit ``url`` and rely\non the operator-set ``OTARI_GUARDRAILS_URL`` instead.",
@@ -4606,6 +5650,18 @@
             "description": "One-line help text from the guardrail's docstring",
             "title": "Description"
           },
+          "env_var": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The environment variable that supplies this parameter when no value is stored, so a form can offer that instead of demanding a credential the deployment already has",
+            "title": "Env Var"
+          },
           "name": {
             "description": "The keyword argument's name, as it is sent in validate_kwargs",
             "title": "Name",
@@ -4620,6 +5676,12 @@
             "default": false,
             "description": "Whether the value is a credential, so a form masks it and never echoes it back",
             "title": "Secret",
+            "type": "boolean"
+          },
+          "storable": {
+            "default": true,
+            "description": "Whether a saved value can stand in for this parameter. False for a secret whose type is json, which upstream uses for a live object (an authenticated SDK client or session) that cannot be written down. A form offers no field for one",
+            "title": "Storable",
             "type": "boolean"
           },
           "type": {
@@ -4690,6 +5752,16 @@
         ],
         "title": "GuardrailProfileSpec",
         "type": "object"
+      },
+      "GuardrailStage": {
+        "description": "Where in a request/response flow a guardrail runs.\n\nA guardrail that screens both the prompt and the response has ``stages ==\n{INPUT, OUTPUT}`` (there is no separate ``EITHER`` value). ``RAG_CONTEXT``\nmarks guardrails that additionally consume retrieved documents/context.",
+        "enum": [
+          "input",
+          "output",
+          "rag_context"
+        ],
+        "title": "GuardrailStage",
+        "type": "string"
       },
       "HTTPValidationError": {
         "properties": {
@@ -5191,6 +6263,17 @@
             ],
             "title": "Key Prefix"
           },
+          "key_suffix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Suffix"
+          },
           "last_used_at": {
             "anyOf": [
               {
@@ -5238,6 +6321,7 @@
         "required": [
           "id",
           "key_prefix",
+          "key_suffix",
           "key_name",
           "user_id",
           "created_at",
@@ -5406,7 +6490,7 @@
                 "type": "null"
               }
             ],
-            "description": "This deployment's own externally-reachable URL, used to build links in outgoing mail.",
+            "description": "This deployment's own externally-reachable URL, which mail needs before it can send. The links themselves are built from ui_base_url, or from this when that is unset.",
             "title": "Public Base Url"
           },
           "ready": {
@@ -5459,7 +6543,7 @@
             "type": "array"
           },
           "available": {
-            "description": "Whether this deployment has a backend configured for the tool. A request declaring an unavailable tool is rejected with 400.",
+            "description": "Whether this deployment has enabled and configured the tool. A request declaring an unavailable tool is rejected with 400.",
             "title": "Available",
             "type": "boolean"
           },
@@ -6302,6 +7386,11 @@
             "title": "Created",
             "type": "integer"
           },
+          "deployment_managed": {
+            "default": false,
+            "title": "Deployment Managed",
+            "type": "boolean"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -6406,6 +7495,11 @@
             },
             "title": "Pricing Tiers",
             "type": "array"
+          },
+          "unit": {
+            "default": "tokens",
+            "title": "Unit",
+            "type": "string"
           }
         },
         "required": [
@@ -6736,7 +7830,7 @@
         "type": "object"
       },
       "OrgProviderKeyCreateRequest": {
-        "description": "What a caller sends to create a key.\n\nThe plaintext key is never stored as sent: the service encrypts it\n(`services/secret_box.py`) and keeps only the ciphertext and ``last4``,\nthe same convention `entities.ProviderCredential` already uses.",
+        "description": "What a caller sends to create a key.\n\nThe plaintext key is never stored as sent: the service encrypts it\n(`services/secret_box.py`) and keeps only the ciphertext and ``last4``,\nthe same convention `providers.ProviderCredential` already uses.",
         "properties": {
           "api_base": {
             "anyOf": [
@@ -6878,6 +7972,11 @@
               }
             ],
             "title": "Updated At"
+          },
+          "usable": {
+            "description": "False when the stored credential cannot be decrypted on this deployment, so the key supplies nothing at dispatch and the catalog withholds its provider. A row this deployment cannot read is still listed, because deleting or replacing it is what fixes it.",
+            "title": "Usable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -6886,6 +7985,7 @@
           "provider",
           "name",
           "is_org_default",
+          "usable",
           "created_at"
         ],
         "title": "OrgProviderKeyPublic",
@@ -7462,7 +8562,7 @@
         "type": "object"
       },
       "OrganizationGuardrailCreate": {
-        "description": "Request body for mandating a guardrail across an organization.\n\n``credential`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`entities.WorkspaceMcpServer` and `entities.ProviderCredential` use. It is\nsent to the endpoint as ``Authorization: Bearer`` when the guardrail runs,\nso it authenticates this gateway to the guardrails service the entry names.\nA guardrail *vendor's* own key is not this: the guardrails service builds\nits guardrails from the operator's YAML and holds those itself.\n\nA credential therefore requires ``url``. The deployment's ``guardrails_url``\nis not necessarily encrypted (the shipped compose file makes it a same-host\n``http://`` sidecar) and this row cannot see what it is set to, so an entry\nthat fell back to it could not promise the bearer was sent over https. See\n`_require_url_for_credential`.\n\n``on`` is not offered. This plane mandates input-direction checks, which is\nthe only direction the request path enforces\n(`services.guardrails.run_input_guardrails`); an organization that could\nstore an output-direction mandate would be storing one nothing runs.",
+        "description": "Request body for mandating a guardrail across an organization.\n\n``credential`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`tools.WorkspaceMcpServer` and `providers.ProviderCredential` use. It is\nsent to the endpoint as ``Authorization: Bearer`` when the guardrail runs,\nso it authenticates this gateway to the guardrails service the entry names.\nA guardrail *vendor's* own key is not this: the guardrails service builds\nits guardrails from the operator's YAML and holds those itself.\n\nA credential therefore requires ``url``. The deployment's ``guardrails_url``\nis not necessarily encrypted (the shipped compose file makes it a same-host\n``http://`` sidecar) and this row cannot see what it is set to, so an entry\nthat fell back to it could not promise the bearer was sent over https. See\n`_require_url_for_credential`.\n\n``on`` is not offered. This plane mandates input-direction checks, which is\nthe only direction the request path enforces\n(`services.guardrails.run_input_guardrails`); an organization that could\nstore an output-direction mandate would be storing one nothing runs.",
         "example": {
           "applies_to_all_workspaces": true,
           "credential": "sk-guardrails-...",
@@ -7941,6 +9041,17 @@
             ],
             "description": "Whole-request context thresholds. Fields omitted by a tier inherit the base rate.",
             "title": "Pricing Tiers"
+          },
+          "unit": {
+            "default": "tokens",
+            "description": "What the rates are per: tokens for a model, requests or images for a non-token endpoint.",
+            "enum": [
+              "tokens",
+              "requests",
+              "images"
+            ],
+            "title": "Unit",
+            "type": "string"
           }
         },
         "required": [
@@ -8038,6 +9149,10 @@
             "title": "Pricing Tiers",
             "type": "array"
           },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -8054,6 +9169,7 @@
           "cache_write_price_per_million",
           "cache_write_1h_price_per_million",
           "pricing_tiers",
+          "unit",
           "effective_from",
           "effective_to",
           "created_at",
@@ -8149,6 +9265,17 @@
             ],
             "description": "Whole-request context thresholds. Fields omitted by a tier inherit the base rate.",
             "title": "Pricing Tiers"
+          },
+          "unit": {
+            "default": "tokens",
+            "description": "What the rates are per: tokens for a model, requests or images for a non-token endpoint.",
+            "enum": [
+              "tokens",
+              "requests",
+              "images"
+            ],
+            "title": "Unit",
+            "type": "string"
           }
         },
         "required": [
@@ -8538,6 +9665,19 @@
         "title": "OrganizationScopedBudgetsPublic",
         "type": "object"
       },
+      "OutputShape": {
+        "description": "The decision form a guardrail produces (aligns with the populated ``GuardrailOutput`` fields).\n\n``SCORE`` and ``RUBRIC`` are also the queryable signal for whether\n``GuardrailOutput.score`` can ever be populated: a guardrail declaring\n**neither** always leaves ``score`` as ``None`` (it only emits a\ncategorical/binary verdict, not a calibrated risk value). A guardrail\ndeclaring **either** populates ``score`` in the common, successfully-parsed\ncase, but individual guardrails may still leave it ``None`` in specific\nedge cases (e.g. a fail-closed parse-failure path, or a guardrail that\nflags something but has nothing to score) \u2014 consult the guardrail's own\ndocstring for those exceptions.",
+        "enum": [
+          "binary",
+          "multi_label",
+          "categorical",
+          "score",
+          "rubric",
+          "span"
+        ],
+        "title": "OutputShape",
+        "type": "string"
+      },
       "PasskeySessionResponse": {
         "description": "A dashboard session minted by a passkey (the token travels only in the cookie).\n\nThe same three fields ``POST /api/v1/auth/session`` answers, deliberately: the\ndashboard's sign-in path does not care which credential got it here.",
         "properties": {
@@ -8662,6 +9802,574 @@
           "count"
         ],
         "title": "PendingOrganizationInvitationsPublic",
+        "type": "object"
+      },
+      "PlaygroundComparisonCreate": {
+        "description": "One rated A/B exchange.\n\nBoth answers in full, which is the disclosure the comparison consent flag\ncovers: a preference with no answers attached is a datum nobody can later\ncheck, and the page's own history list shows the question and the two model\nids from these columns.",
+        "properties": {
+          "model_a": {
+            "maxLength": 512,
+            "title": "Model A",
+            "type": "string"
+          },
+          "model_a_answer": {
+            "maxLength": 200000,
+            "title": "Model A Answer",
+            "type": "string"
+          },
+          "model_b": {
+            "maxLength": 512,
+            "title": "Model B",
+            "type": "string"
+          },
+          "model_b_answer": {
+            "maxLength": 200000,
+            "title": "Model B Answer",
+            "type": "string"
+          },
+          "preference": {
+            "enum": [
+              "model_a",
+              "model_b",
+              "tie"
+            ],
+            "title": "Preference",
+            "type": "string"
+          },
+          "user_question": {
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "User Question",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "user_question",
+          "model_a",
+          "model_b",
+          "model_a_answer",
+          "model_b_answer",
+          "preference"
+        ],
+        "title": "PlaygroundComparisonCreate",
+        "type": "object"
+      },
+      "PlaygroundComparisonSummary": {
+        "description": "A row in the comparison history: the question, the pair, the verdict.\n\nDeliberately without the two answers. The list shows a dozen rows at once\nand none of them renders an answer body, so sending them would move\nmegabytes to draw a few lines of text. There is no detail endpoint either,\nbecause the page has no screen that reads one back: a comparison is a\njudgment that was recorded, not a transcript to resume.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "model_a": {
+            "title": "Model A",
+            "type": "string"
+          },
+          "model_b": {
+            "title": "Model B",
+            "type": "string"
+          },
+          "preference": {
+            "title": "Preference",
+            "type": "string"
+          },
+          "user_question": {
+            "title": "User Question",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "user_question",
+          "model_a",
+          "model_b",
+          "preference",
+          "created_at"
+        ],
+        "title": "PlaygroundComparisonSummary",
+        "type": "object"
+      },
+      "PlaygroundComparisonsPublic": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundComparisonSummary"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "PlaygroundComparisonsPublic",
+        "type": "object"
+      },
+      "PlaygroundConsentPublic": {
+        "description": "What this identity has agreed the Playground may store.\n\nTwo flags rather than one, matching what the page asks for at the moment it\nasks: saving a transcript and recording a model preference are different\ndisclosures (the second stores *both* models' full answers), and the old\npage asked about each separately at the point of use. An identity with no\nstored row reads back as both false.",
+        "properties": {
+          "store_comparisons": {
+            "default": false,
+            "title": "Store Comparisons",
+            "type": "boolean"
+          },
+          "store_conversations": {
+            "default": false,
+            "title": "Store Conversations",
+            "type": "boolean"
+          }
+        },
+        "title": "PlaygroundConsentPublic",
+        "type": "object"
+      },
+      "PlaygroundConsentUpdate": {
+        "description": "A partial update: an omitted flag is left as it was.\n\nTri-state on purpose. The page grants one flag at a time, just in time, so a\nrequest that carried both would silently re-assert the other, which is the\nwrong direction for a consent record to move on its own.",
+        "properties": {
+          "store_comparisons": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Store Comparisons"
+          },
+          "store_conversations": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Store Conversations"
+          }
+        },
+        "title": "PlaygroundConsentUpdate",
+        "type": "object"
+      },
+      "PlaygroundConversationCreate": {
+        "description": "A transcript to save, whole: there is no append-a-turn endpoint.\n\nThe page saves on an explicit click, with the conversation it currently\nshows, so the write is one row plus its turns and a resave is a new\nconversation rather than a mutation of the old one. That is also what keeps\nthe ordering column honest: ``position`` is assigned here, from the list's\nown order, and never negotiated with a client over several requests.",
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundMessageCreate"
+            },
+            "maxItems": 400,
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "model": {
+            "maxLength": 512,
+            "title": "Model",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "model",
+          "title",
+          "messages"
+        ],
+        "title": "PlaygroundConversationCreate",
+        "type": "object"
+      },
+      "PlaygroundConversationSummary": {
+        "description": "A row in the history list: enough to recognize, not the transcript.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "message_count": {
+            "title": "Message Count",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "title",
+          "model",
+          "message_count",
+          "created_at"
+        ],
+        "title": "PlaygroundConversationSummary",
+        "type": "object"
+      },
+      "PlaygroundConversationsPublic": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundConversationSummary"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "PlaygroundConversationsPublic",
+        "type": "object"
+      },
+      "PlaygroundFavoriteModelsPublic": {
+        "description": "The pin list, most recently pinned first.",
+        "properties": {
+          "model_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Model Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model_keys"
+        ],
+        "title": "PlaygroundFavoriteModelsPublic",
+        "type": "object"
+      },
+      "PlaygroundFavoriteModelsUpdate": {
+        "description": "The whole pin list, replacing whatever was stored.\n\nA replace rather than a toggle endpoint, because the client already holds\nthe list it is rendering and the order is part of it (a newly pinned model\nleads). Two tabs racing therefore resolve to one of the two lists rather\nthan to an interleaving neither of them showed.",
+        "properties": {
+          "model_keys": {
+            "items": {
+              "maxLength": 512,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Model Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model_keys"
+        ],
+        "title": "PlaygroundFavoriteModelsUpdate",
+        "type": "object"
+      },
+      "PlaygroundMcpServer": {
+        "description": "One of the workspace's MCP servers, as the tools menu lists it.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "purpose_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose Hint"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "enabled"
+        ],
+        "title": "PlaygroundMcpServer",
+        "type": "object"
+      },
+      "PlaygroundMessageCreate": {
+        "description": "One turn in a transcript being saved.",
+        "properties": {
+          "content": {
+            "maxLength": 200000,
+            "title": "Content",
+            "type": "string"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "maxLength": 200000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "PlaygroundMessageCreate",
+        "type": "object"
+      },
+      "PlaygroundMessagePublic": {
+        "description": "One stored turn, in the order it was saved.\n\nNo usage figures, matching what the save accepts: tokens, cost and timing\ndescribe the request that ran rather than the conversation, and a resumed\ntranscript reporting an old request's latency as this session's would be\nlying. The billing record for that request is its ``usage_logs`` row.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "PlaygroundMessagePublic",
+        "type": "object"
+      },
+      "PlaygroundMessagesPublic": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundMessagePublic"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "PlaygroundMessagesPublic",
+        "type": "object"
+      },
+      "PlaygroundToolStatus": {
+        "description": "Whether one gateway-run tool can be attached right now, and why not.\n\nThree states from two fields, which is what the composer's menu draws: a\ntool the deployment never configured is not offered, one the deployment\nconfigured and this workspace turned off is shown disabled with the reason,\nand an available one is a plain checkbox. A single boolean would collapse\nthe first two, which is how a checkbox comes to look attachable and then\nfail at request time (otari-ai#1419).",
+        "properties": {
+          "configured": {
+            "description": "Whether this deployment has a backend for the tool at all.",
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "enabled": {
+            "description": "Whether the caller's workspace may attach it.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it cannot be attached. Null when it can.",
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "configured",
+          "enabled"
+        ],
+        "title": "PlaygroundToolStatus",
+        "type": "object"
+      },
+      "PlaygroundToolsResponse": {
+        "description": "What the caller's workspace may attach to a Playground message.",
+        "properties": {
+          "code_execution": {
+            "$ref": "#/components/schemas/PlaygroundToolStatus"
+          },
+          "mcp_servers": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundMcpServer"
+            },
+            "title": "Mcp Servers",
+            "type": "array"
+          },
+          "web_search": {
+            "$ref": "#/components/schemas/PlaygroundToolStatus"
+          }
+        },
+        "required": [
+          "web_search",
+          "code_execution",
+          "mcp_servers"
+        ],
+        "title": "PlaygroundToolsResponse",
+        "type": "object"
+      },
+      "PolicyCheckRequest": {
+        "additionalProperties": false,
+        "description": "A policy body plus the evidence to check it against, both caller-supplied.",
+        "properties": {
+          "changed_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repo-relative paths the caller observed changed (e.g. `git status --porcelain`).",
+            "title": "Changed Paths"
+          },
+          "command_scope": {
+            "default": "call",
+            "description": "What `commands` covers: `call` for the single tool call about to run, `session` for every command the session has run so far.",
+            "enum": [
+              "call",
+              "session"
+            ],
+            "title": "Command Scope",
+            "type": "string"
+          },
+          "commands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Shell commands the caller observed run or is about to run.",
+            "title": "Commands"
+          },
+          "policy_yaml": {
+            "maxLength": 262144,
+            "minLength": 1,
+            "title": "Policy Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_yaml"
+        ],
+        "title": "PolicyCheckRequest",
+        "type": "object"
+      },
+      "PolicyCheckResponse": {
+        "properties": {
+          "blocked": {
+            "title": "Blocked",
+            "type": "boolean"
+          },
+          "policy_id": {
+            "title": "Policy Id",
+            "type": "string"
+          },
+          "provenance": {
+            "default": "client_reported",
+            "title": "Provenance",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/GateResultResponse"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id",
+          "schema_version",
+          "results",
+          "blocked"
+        ],
+        "title": "PolicyCheckResponse",
         "type": "object"
       },
       "PolicyRequest": {
@@ -8816,6 +10524,115 @@
         "title": "PoolStatus",
         "type": "object"
       },
+      "PricingDriftRow": {
+        "description": "A stored deployment rate beside the default it shadows.",
+        "properties": {
+          "default_input_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What genai-prices would meter this key at today. Null when the dataset does not know it.",
+            "title": "Default Input Price Per Million"
+          },
+          "default_output_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Output Price Per Million"
+          },
+          "default_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The genai-prices entry the default came from.",
+            "title": "Default Reference"
+          },
+          "effective_at": {
+            "title": "Effective At",
+            "type": "string"
+          },
+          "input_delta_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "(stored - default) / default, as a percentage.",
+            "title": "Input Delta Percent"
+          },
+          "input_price_per_million": {
+            "title": "Input Price Per Million",
+            "type": "number"
+          },
+          "model_key": {
+            "title": "Model Key",
+            "type": "string"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "output_delta_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Delta Percent"
+          },
+          "output_price_per_million": {
+            "title": "Output Price Per Million",
+            "type": "number"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_key",
+          "unit",
+          "origin",
+          "effective_at",
+          "input_price_per_million",
+          "output_price_per_million",
+          "default_input_price_per_million",
+          "default_output_price_per_million",
+          "default_reference",
+          "input_delta_percent",
+          "output_delta_percent"
+        ],
+        "title": "PricingDriftRow",
+        "type": "object"
+      },
       "PricingRefreshChangeResponse": {
         "description": "One default model price changed by a pending refresh.",
         "properties": {
@@ -8947,6 +10764,18 @@
             "title": "Model Key",
             "type": "string"
           },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which writer set this row: config, api, or migration. Null when recorded before origins were.",
+            "title": "Origin"
+          },
           "output_price_per_million": {
             "title": "Output Price Per Million",
             "type": "number"
@@ -8957,6 +10786,11 @@
             },
             "title": "Pricing Tiers",
             "type": "array"
+          },
+          "unit": {
+            "description": "What the rates are per: tokens, requests, or images.",
+            "title": "Unit",
+            "type": "string"
           },
           "updated_at": {
             "title": "Updated At",
@@ -8972,6 +10806,8 @@
           "cache_write_price_per_million",
           "cache_write_1h_price_per_million",
           "pricing_tiers",
+          "unit",
+          "origin",
           "created_at",
           "updated_at"
         ],
@@ -9503,6 +11339,36 @@
           "message"
         ],
         "title": "RequestPasswordResetResponse",
+        "type": "object"
+      },
+      "RequirementGroup": {
+        "description": "A guardrail-level \"at least one of these must be provided\" constraint.\n\nSome guardrails require *a value* that no single parameter's :attr:`ParameterSpec.required`\nor :attr:`ParameterSpec.effectively_required` can express, because it can be satisfied by any\nof several parameters \u2014 e.g. watsonx needs a ``project_id`` *or* a ``space_id``. Each group\nnames the interchangeable parameters (and any environment variables that also satisfy it); a\nconfig UI should require the user to supply at least one member.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "env_vars": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Env Vars",
+            "type": "array"
+          },
+          "parameters": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parameters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "description",
+          "parameters"
+        ],
+        "title": "RequirementGroup",
         "type": "object"
       },
       "RerankRequest": {
@@ -10720,6 +12586,33 @@
         "title": "SearchToolsResponse",
         "type": "object"
       },
+      "SelectorIndexResponse": {
+        "description": "What the rebuilt index knows.",
+        "properties": {
+          "models": {
+            "description": "Slugs that resolve to an offering.",
+            "title": "Models",
+            "type": "integer"
+          },
+          "offerings": {
+            "description": "Selectors the deployment serves.",
+            "title": "Offerings",
+            "type": "integer"
+          },
+          "short_selectors": {
+            "description": "Offerings with an unambiguous short spelling.",
+            "title": "Short Selectors",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "offerings",
+          "short_selectors",
+          "models"
+        ],
+        "title": "SelectorIndexResponse",
+        "type": "object"
+      },
       "SendTestMailRequest": {
         "description": "Where to send the test message.",
         "properties": {
@@ -10930,6 +12823,17 @@
             ],
             "description": "Whole-request context thresholds. Fields omitted by a tier inherit the base rate.",
             "title": "Pricing Tiers"
+          },
+          "unit": {
+            "default": "tokens",
+            "description": "What the rates are per: 'tokens' for a model, 'requests' for a gateway-run tool or a moderation call (USD per million requests), 'images' for image generation.",
+            "enum": [
+              "tokens",
+              "requests",
+              "images"
+            ],
+            "title": "Unit",
+            "type": "string"
           }
         },
         "required": [
@@ -11929,6 +13833,32 @@
         "title": "UpdateOwnKeyRequest",
         "type": "object"
       },
+      "UpdateProfileRequest": {
+        "description": "The caller's own display name, or ``null`` to go back to having none.",
+        "example": {
+          "full_name": "Ada Lovelace"
+        },
+        "properties": {
+          "full_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The name to be known by on this deployment, or null to have none. Whitespace is collapsed, and a value with nothing else in it is stored as null, which leaves every surface naming this identity by its address again.",
+            "title": "Full Name"
+          }
+        },
+        "required": [
+          "full_name"
+        ],
+        "title": "UpdateProfileRequest",
+        "type": "object"
+      },
       "UpdateScopedBudgetRequest": {
         "description": "Request model for updating a scoped budget.",
         "properties": {
@@ -12144,6 +14074,33 @@
               }
             ],
             "title": "Models Dev Metadata"
+          },
+          "pricing_refresh": {
+            "anyOf": [
+              {
+                "enum": [
+                  "manual",
+                  "review",
+                  "auto"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pricing Refresh"
+          },
+          "public_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Catalog"
           },
           "reject_user_mismatch": {
             "anyOf": [
@@ -14086,6 +16043,25 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VariantLicense": {
+        "description": "License governing a single model variant of a guardrail.\n\nUsed where a guardrail's ``SUPPORTED_MODELS`` span several base models with\ndifferent governing licenses (e.g. Llama Guard's 3.2 / 3.1 / 4 variants, or\nPolyGuard's non-commercial Ministral vs Apache Qwen variants), so a single\n``default_license`` string cannot capture per-variant redistribution terms.\nInstances are frozen, so a ``tuple`` of them keeps :class:`GuardrailMetadata`\nhashable.",
+        "properties": {
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "license"
+        ],
+        "title": "VariantLicense",
+        "type": "object"
+      },
       "VerifyEmailRequest": {
         "properties": {
           "token": {
@@ -14608,7 +16584,7 @@
         "type": "object"
       },
       "WorkspaceMcpServerCreate": {
-        "description": "Request body for registering a server.\n\n``authorization_token`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`entities.ProviderCredential` and `OrgProviderKey` already use.",
+        "description": "Request body for registering a server.\n\n``authorization_token`` is never stored as sent: it is encrypted with\n``OTARI_SECRET_KEY`` and only the ciphertext is kept, the same convention\n`providers.ProviderCredential` and `OrgProviderKey` already use.",
         "properties": {
           "allowed_tools": {
             "anyOf": [
@@ -15111,6 +17087,13 @@
       "WorkspaceProviderKeyOverridePublic": {
         "description": "The effective view for one workspace+key: raw override flags plus the resolution.",
         "properties": {
+          "allowed_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Models",
+            "type": "array"
+          },
           "disabled": {
             "title": "Disabled",
             "type": "boolean"
@@ -15132,6 +17115,10 @@
             "title": "Org Provider Key Id",
             "type": "string"
           },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          },
           "workspace_id": {
             "format": "uuid",
             "title": "Workspace Id",
@@ -15144,7 +17131,9 @@
           "is_default",
           "disabled",
           "is_effective_default",
-          "is_effective_enabled"
+          "is_effective_enabled",
+          "usable",
+          "allowed_models"
         ],
         "title": "WorkspaceProviderKeyOverridePublic",
         "type": "object"
@@ -15458,7 +17447,7 @@
                 "type": "null"
               }
             ],
-            "description": "Results are kept only from these domains; intersected with any list the request sends",
+            "description": "Filters Search results and constrains initial and redirected Fetch destinations; intersected with any list the request sends",
             "title": "Allowed Domains"
           },
           "blocked_domains": {
@@ -15473,11 +17462,11 @@
                 "type": "null"
               }
             ],
-            "description": "Results from these domains are dropped; added to any list the request sends",
+            "description": "Filters Search results and blocks initial and redirected Fetch destinations; added to any list the request sends",
             "title": "Blocked Domains"
           },
           "enabled": {
-            "description": "False refuses web search for this workspace, both the otari_web_search tool and the search endpoint. The fields below narrow the tool only.",
+            "description": "False refuses web access for this workspace through otari_web_search, otari_web_fetch, and POST /api/v1/search.",
             "title": "Enabled",
             "type": "boolean"
           },
@@ -15492,7 +17481,7 @@
                 "type": "null"
               }
             ],
-            "description": "Ceiling on results one search returns; only ever lowers the effective limit, so at most 20",
+            "description": "Search only: ceiling on results one search returns; only ever lowers the effective limit, so at most 20",
             "title": "Max Results"
           },
           "provider_options": {
@@ -15505,7 +17494,7 @@
                 "type": "null"
               }
             ],
-            "description": "Provider-specific knobs forwarded to the search backend; a request's own keys win",
+            "description": "Search only: provider-specific knobs forwarded to the backend; request keys win",
             "title": "Provider Options"
           },
           "purpose_hint": {
@@ -15518,7 +17507,7 @@
                 "type": "null"
               }
             ],
-            "description": "Hint used when a request declares otari_web_search without one of its own",
+            "description": "Search only: hint used when a request declares otari_web_search without one of its own",
             "title": "Purpose Hint"
           }
         },
@@ -16817,6 +18806,56 @@
         ]
       }
     },
+    "/api/v1/auth/profile": {
+      "patch": {
+        "description": "Change the name the caller is known by on this deployment.\n\nAlways the caller's own identity. The same shape\n``GET /api/v1/organizations/me`` carries as ``caller`` comes back, so a\nclient can seat the answer where it read the old value rather than refetch\nthe whole membership context.",
+        "operationId": "auth-update_own_profile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallerIdentityPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Own Profile",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/resend-verification": {
       "post": {
         "description": "Mail a fresh verification link, or do nothing: the response never says which.",
@@ -17953,6 +19992,148 @@
         ]
       }
     },
+    "/api/v1/catalog/models": {
+      "get": {
+        "description": "The models this caller may use, one entry each however many providers serve it.\n\nPrices are the caller's: an organization's override where one applies, else\nthe deployment's row, else the genai-prices default. Aliases and routing\npolicies are not models and are not listed; see Routing. A visitor, where\nthe catalog is public, sees the configured instances at the deployment's\nrates and nothing that belongs to a tenant.",
+        "operationId": "catalog-list_catalog",
+        "parameters": [
+          {
+            "description": "Compare prices for a request of this many input tokens: each model's minimum is taken from the pricing tier that request would settle at. Omitted, the base rates compare.",
+            "in": "query",
+            "name": "at_context",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Compare prices for a request of this many input tokens: each model's minimum is taken from the pricing tier that request would settle at. Omitted, the base rates compare.",
+              "title": "At Context"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Catalog",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/v1/catalog/models/{model_id}": {
+      "get": {
+        "description": "One model and every offering of it this caller may use.\n\nThe whole merged catalog is built and grouped to answer for one model. That\nis deliberate: the identity a model is found by is a property of the group,\nso narrowing the build to one model would need the grouping done first. The\nquery count is constant; the cost is CPU per page view, growing with the\nsize of the catalog rather than with the number of readers.\n\nA model the caller may not see answers 404, the same as one that does not\nexist, so the route cannot be used to probe the catalog behind an allow-list.\nA signed-in caller's offerings also carry their organization's own usage of\neach over the last 30 days.",
+        "operationId": "catalog-get_catalog_model",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogModelDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Catalog Model",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/v1/catalog/selectors/refresh": {
+      "post": {
+        "description": "Re-index the short spellings now, rather than on the refresher's next tick.",
+        "operationId": "catalog-refresh_selector_index",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectorIndexResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Refresh Selector Index",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
     "/api/v1/chat/completions": {
       "post": {
         "description": "OpenAI-compatible chat completions endpoint.\n\nSupports both streaming and non-streaming responses.\nHandles reasoning content from otari providers.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
@@ -18480,6 +20661,56 @@
         "summary": "Health Readiness",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/v1/hooks/check": {
+      "post": {
+        "description": "Evaluate a submitted policy against submitted evidence.\n\nAuthenticated with either an API key or the master key (the router-level\ngate), like ``POST /api/v1/usage/external-events``: this identifies who\nsent the request, not whether its evidence is true. `blocked` is set when\na required gate's outcome is not `pass`/`not_applicable` (an unresolved\ngate never counts as a pass).",
+        "operationId": "hooks-check_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Check Policy",
+        "tags": [
+          "hooks"
         ]
       }
     },
@@ -19741,7 +21972,7 @@
     },
     "/api/v1/organizations/me/aliases": {
       "get": {
-        "description": "List the aliases in force in the workspaces this caller may see.\n\nThe policies list's sibling, over ``model_aliases``, and scoped the same way:\nstored rows from the caller's visible workspaces, plus the config-file\naliases, which are deployment-wide.",
+        "description": "List the aliases in force in the workspaces this caller may see.\n\nThe policies list's sibling, over ``model_aliases``, and scoped the same way:\nstored rows from the caller's visible workspaces, plus the config-file\naliases, which are deployment-wide, and narrowed to one workspace when\n``workspace_id`` names one.",
         "operationId": "aliases-list_visible_aliases",
         "parameters": [
           {
@@ -19756,6 +21987,25 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+              "title": "Workspace Id"
             }
           }
         ],
@@ -20696,7 +22946,7 @@
         ]
       },
       "post": {
-        "description": "Create an API key owned by the caller, in a workspace they may see.\n\nThe member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the\ncaller's own attribution user, the key is always budget-enforced, and the\nworkspace must be visible to the caller (a member of it, or an organization\nowner/admin/superuser, who see every workspace). The secret is returned once.",
+        "description": "Create an API key owned by the caller, in a workspace they may see.\n\nThe member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the\ncaller's own attribution user, the key is always budget-enforced, and the\nworkspace must be visible to the caller (a member of it, or an organization\nowner/admin, who see every workspace). The secret is returned once.",
         "operationId": "organization-keys-create_own_key",
         "requestBody": {
           "content": {
@@ -21540,7 +23790,7 @@
         ]
       },
       "post": {
-        "description": "Set the organization's rate for a model over a period.\n\nRefused with a 409 when the period overlaps one already stored for that model,\nnaming the period it collides with, rather than shadowing it.\n\nThe key is normalized to its canonical ``instance:model`` form first, the same\ncall ``POST /api/v1/pricing`` makes, and that is what makes one model one row\nrather than one per spelling. Stored verbatim, ``openai:gpt-4o`` and\n``openai/gpt-4o`` are two keys: the overlap rule would not see them as\ncolliding, and both would resolve, with the canonical one preferred, leaving\nthe other dormant until the first is deleted. Normalizing on the way in is\nwhat stops that pair existing at all.",
+        "description": "Set the organization's rate for a model over a period.\n\nRefused with a 409 when the period overlaps one already stored for that model,\nnaming the period it collides with, rather than shadowing it. Refused with a\n403 when the deployment, not the caller's organization, holds the credential\nthat serves the model, whether through one of its own provider instances or a\nhosted credential the bound port supplies because no usable BYO credential of\nthe organization's own covers every one of its workspaces: either way the\ndeployment settles the upstream bill, so its rate is the deployment price\nlist's rather than a tenant's.\n\nThe key is normalized to its canonical ``instance:model`` form first, the same\ncall ``POST /api/v1/pricing`` makes, and that is what makes one model one row\nrather than one per spelling. Stored verbatim, ``openai:gpt-4o`` and\n``openai/gpt-4o`` are two keys: the overlap rule would not see them as\ncolliding, and both would resolve, with the canonical one preferred, leaving\nthe other dormant until the first is deleted. Normalizing on the way in is\nwhat stops that pair existing at all.",
         "operationId": "organization-pricing-create_organization_pricing",
         "requestBody": {
           "content": {
@@ -21633,7 +23883,7 @@
         ]
       },
       "put": {
-        "description": "Replace an override's rates and period.\n\nFuture requests in the period price at the new rate; usage already settled\nkeeps the cost it was billed, because a settled cost is stored on the usage\nrow rather than recomputed.",
+        "description": "Replace an override's rates and period.\n\nFuture requests in the period price at the new rate; usage already settled\nkeeps the cost it was billed, because a settled cost is stored on the usage\nrow rather than recomputed.\n\nRefused with a 403 on the same deployment-supplied-model rule the create path\ncarries, so a row stored before that rule existed cannot be edited into a rate\nnobody could create today.",
         "operationId": "organization-pricing-replace_organization_pricing",
         "parameters": [
           {
@@ -22092,7 +24342,7 @@
     },
     "/api/v1/organizations/me/routing-policies": {
       "get": {
-        "description": "List the routing policies in force in the workspaces this caller may see.\n\nStored policies from the caller's visible workspaces plus the config-file\npolicies, which are deployment-wide and resolve in every workspace. The\nresponse is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the\ncaller's own organization.",
+        "description": "List the routing policies in force in the workspaces this caller may see.\n\nStored policies from the caller's visible workspaces plus the config-file\npolicies, which are deployment-wide and resolve in every workspace. The\nresponse is the shape ``GET /api/v1/routing/policies`` answers, narrowed to the\ncaller's own organization, and narrowed again to one workspace when\n``workspace_id`` names one.",
         "operationId": "routing-list_visible_routing_policies",
         "parameters": [
           {
@@ -22107,6 +24357,25 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only stored entries in this workspace. Config-file entries are always included, being deployment-wide. Omit for every workspace this caller may see.",
+              "title": "Workspace Id"
             }
           }
         ],
@@ -22774,7 +25043,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -22784,6 +25053,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -22792,7 +25062,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -23155,7 +25425,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -23165,6 +25435,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -23173,7 +25444,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -23526,7 +25797,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -23536,6 +25807,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -23544,7 +25816,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -23874,7 +26146,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -23884,6 +26156,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -23892,7 +26165,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -24019,6 +26292,704 @@
         ]
       }
     },
+    "/api/v1/playground/chat/completions": {
+      "post": {
+        "description": "Run one chat completion for the signed-in caller.\n\nStreaming and non-streaming both, identically to ``POST\n/api/v1/chat/completions``: this resolves the principal and then calls the\nvery same handler. The request is billed to the caller's own attribution\nuser in the workspace they named (or their organization's default), against\nthat user's budget, and writes the ordinary usage row with no ``api_key_id``,\nbecause there was no key.\n\nThe body is ``ChatCompletionRequest`` unchanged, so the page sends the same\nrequest an SDK would and a model, tool or parameter the gateway gains is\navailable here the day it lands. The workspace rides in the query string\nrather than in the body for that reason: a field added to the body would\nalso have to be added to the pipeline's strip list, and a gateway-internal\nfield that is not stripped is forwarded to the provider as a call kwarg.\n\n``user`` in the body is the one field the pipeline will not read here: spend\nbinds to the session's own attribution user, derived and never accepted.\n\nOn a hosted control plane there is no local pipeline to call, so the same\nprincipal is forwarded to the data-plane gateway instead\n(:func:`_dispatch_to_data_plane`). The request and the response are the same\neither way.",
+        "operationId": "playground-playground_chat_completions",
+        "parameters": [
+          {
+            "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Playground Chat Completions",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
+    "/api/v1/playground/comparisons": {
+      "get": {
+        "description": "The caller's own rated comparisons in one workspace, newest first.\n\nWithout the two answer bodies: the list shows a dozen rows and renders\nneither, and there is no detail endpoint because the page has no screen that\nreads one back. A comparison is a judgment that was recorded, not a\ntranscript to resume.",
+        "operationId": "playground-list_playground_comparisons",
+        "parameters": [
+          {
+            "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundComparisonsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Playground Comparisons",
+        "tags": [
+          "playground"
+        ]
+      },
+      "post": {
+        "description": "Record which of two models answered a question better.\n\n403 when comparison retention has not been granted; this is the flag with\nthe wider disclosure, because the row keeps both models' full answers.",
+        "operationId": "playground-save_playground_comparison",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundComparisonCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundComparisonSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Save Playground Comparison",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
+    "/api/v1/playground/comparisons/{comparison_id}": {
+      "delete": {
+        "description": "Delete one of the caller's saved comparisons.",
+        "operationId": "playground-delete_playground_comparison",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "comparison_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Comparison Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Delete Playground Comparison",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
+    "/api/v1/playground/consent": {
+      "get": {
+        "description": "What the caller has agreed the Playground may store.\n\nBoth flags false for a caller who has never answered, and nothing is\nwritten: the page asks at the moment it needs the grant, so recording an\nanswer on a page load would record one nobody gave.",
+        "operationId": "playground-read_playground_consent",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundConsentPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Read Playground Consent",
+        "tags": [
+          "playground"
+        ]
+      },
+      "put": {
+        "description": "Grant or withdraw content retention, one flag at a time.\n\nAn omitted flag is left as it was. Withdrawing blocks new saves and deletes\nnothing: what was stored with consent stays until its owner deletes it, which\nis what keeps a withdrawal from being a destructive action nobody asked for.",
+        "operationId": "playground-update_playground_consent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundConsentUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundConsentPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Update Playground Consent",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
+    "/api/v1/playground/conversations": {
+      "get": {
+        "description": "The caller's own saved transcripts in one workspace, newest first.\n\nNot gated on consent: withdrawing it stops new saves, so a transcript saved\nwhile it was granted has to stay listable and deletable by its owner.",
+        "operationId": "playground-list_playground_conversations",
+        "parameters": [
+          {
+            "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundConversationsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Playground Conversations",
+        "tags": [
+          "playground"
+        ]
+      },
+      "post": {
+        "description": "Save one transcript whole, for the caller, in a workspace they belong to.\n\n403 when content retention has not been granted. The page asks first, so\nreaching that is a client that skipped the prompt: a consent gate enforced\nonly in the browser is not a consent gate.",
+        "operationId": "playground-save_playground_conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundConversationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundConversationSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Save Playground Conversation",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
+    "/api/v1/playground/conversations/{conversation_id}": {
+      "delete": {
+        "description": "Delete one of the caller's saved transcripts, and its turns with it.",
+        "operationId": "playground-delete_playground_conversation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Delete Playground Conversation",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
+    "/api/v1/playground/conversations/{conversation_id}/messages": {
+      "get": {
+        "description": "One saved transcript's turns, in order.\n\n404 for a transcript belonging to somebody else, the same answer an\nunknown id gets: the owner predicate is in the query, so the two are\nindistinguishable from here. An empty transcript is not a state a save can\nproduce (the request requires at least one turn), so no rows means no row\nfor this caller.",
+        "operationId": "playground-read_playground_conversation_messages",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundMessagesPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Read Playground Conversation Messages",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
+    "/api/v1/playground/favorite-models": {
+      "get": {
+        "description": "The caller's pinned model keys in one workspace, in pinned order.\n\nStored rather than kept in the browser, so a pin follows the person to their\nother devices; that is what the hosted original did and what makes the\nFavorites group in every picker worth having.",
+        "operationId": "playground-read_playground_favorite_models",
+        "parameters": [
+          {
+            "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundFavoriteModelsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Read Playground Favorite Models",
+        "tags": [
+          "playground"
+        ]
+      },
+      "put": {
+        "description": "Replace the caller's pin list for one workspace.\n\nA replace rather than a toggle, because the order is part of the value and\nthe client already holds the list it is rendering. Two tabs racing therefore\nresolve to one of the two lists rather than to an interleaving neither of\nthem showed. Model keys are not validated against the catalog: a pinned model\nthat leaves the catalog simply stops appearing in the picker, and refusing\nthe write would make a stale pin unremovable.",
+        "operationId": "playground-replace_playground_favorite_models",
+        "parameters": [
+          {
+            "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundFavoriteModelsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundFavoriteModelsPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Replace Playground Favorite Models",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
+    "/api/v1/playground/tools": {
+      "get": {
+        "description": "The gateway-run tools the caller's workspace may attach to a message.\n\nOne read rather than the three the dashboard would otherwise make (the\ndeployment's tool settings, the workspace's web-search row, its\ncode-execution row), because the answer is a composition of them in a fixed\ndirection: the deployment decides whether a tool exists and the workspace may\nonly narrow that. Composing it here is what keeps the menu from offering\nsomething the request path would refuse.",
+        "operationId": "playground-read_playground_tools",
+        "parameters": [
+          {
+            "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Workspace to act in. Defaults to the caller's organization's default workspace. A workspace the caller is not a member of answers 404, as a nonexistent one does.",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundToolsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Read Playground Tools",
+        "tags": [
+          "playground"
+        ]
+      }
+    },
     "/api/v1/pricing": {
       "get": {
         "description": "List all model pricing.",
@@ -24136,6 +27107,64 @@
         ]
       }
     },
+    "/api/v1/pricing/drift": {
+      "get": {
+        "description": "Every stored deployment rate in force today, beside today's default for it.\n\nA stored row shadows the genai-prices default silently and forever, whether\nit was a deliberate override or a copy of a then-current default. This is\nwhat makes the difference visible: a row that matches the default is a row\nthat could be deleted, and a row far from it is one worth a second look.\nTool rows (``otari:``) are per request and have no default to drift from,\nso they are left out.",
+        "operationId": "pricing-list_pricing_drift",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PricingDriftRow"
+                  },
+                  "title": "Response Pricing-List Pricing Drift",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Pricing Drift",
+        "tags": [
+          "pricing"
+        ]
+      }
+    },
     "/api/v1/pricing/refresh": {
       "post": {
         "description": "Fetch the latest defaults and hold them for operator review.",
@@ -24196,6 +27225,36 @@
         ]
       }
     },
+    "/api/v1/pricing/refresh/pending": {
+      "get": {
+        "description": "The update the scheduled refresh has left waiting for review, if any.\n\nWhat the dashboard's notice reads. 404 when nothing is pending, so a page can\nask on load without treating the common case as an error banner.",
+        "operationId": "pricing-get_pending_pricing_refresh",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingRefreshPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Pending Pricing Refresh",
+        "tags": [
+          "pricing"
+        ]
+      }
+    },
     "/api/v1/pricing/refresh/reject": {
       "post": {
         "description": "Discard a reviewed default-price snapshot without applying it.",
@@ -24214,6 +27273,64 @@
           }
         ],
         "summary": "Reject Pricing Refresh",
+        "tags": [
+          "pricing"
+        ]
+      }
+    },
+    "/api/v1/pricing/snapshots": {
+      "get": {
+        "description": "The accepted default-price snapshots, newest first.",
+        "operationId": "pricing-list_pricing_snapshots",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AcceptedSnapshotResponse"
+                  },
+                  "title": "Response Pricing-List Pricing Snapshots",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Pricing Snapshots",
         "tags": [
           "pricing"
         ]
@@ -26361,6 +29478,36 @@
         ]
       }
     },
+    "/api/v1/tool-settings/guardrails/catalog": {
+      "get": {
+        "description": "List the guardrails this gateway can run itself, for the form that defines one.\n\nEvery guardrail ``any_guardrail`` reaches over a hosted API, with the\nconstructor and per-call arguments each one takes, so a guardrail is\nconfigured by picking it and filling typed fields. It is not the whole\nlibrary: a guardrail that works by holding model weights in the process\nrunning it belongs in the guardrails service the profiles read beside this one\ndescribes, not here. A parameter names the environment variable that fills it\nwhere one exists, and ``requirement_groups`` carries the constraints satisfied\nby any of several parameters, which no single required flag can state. This is\nthe counterpart of\n``GET /api/v1/providers/catalog``: the same picker, for a guardrail rather\nthan a provider, and on the same gate that one takes.\n\nReaches no service, so there is no unavailable state to report: the answer is\na property of the installed ``any_guardrail``, not of any deployment's state.\n\nOn the operator router rather than the reader beside it, because it is the\ninput to a write that stores a vendor credential deployment-wide. The rows\ncarry secret constructor arguments and name the environment variables this\ndeployment would otherwise read them from, so this describes how the\ndeployment is credentialed rather than what a request will have done to it. A\nprofile *name* is the one thing a caller needs, and the profiles read next\ndoor is where the set of those is published.\n\nNot on ``verify_catalog_reader`` either: that plane is a closed set of three\ndeployment-describing reads a data-plane key may make, and this is a\nmanagement read, not one of them.",
+        "operationId": "tool-settings-list_builtin_guardrails",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuiltInGuardrailCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "List Builtin Guardrails",
+        "tags": [
+          "tool-settings"
+        ]
+      }
+    },
     "/api/v1/tool-settings/guardrails/profiles": {
       "get": {
         "description": "List the guardrail profiles this deployment's guardrails service has built.\n\nWhat an organization guardrail's ``profile`` may name, with the\n``validate_kwargs`` each one accepts, so the dashboard offers a picker and\ntyped fields instead of a free-text box beside an unrendered dict. The\nprofiles come from the service itself and the parameter schemas from the\n``any_guardrail`` registry; neither is a list kept in this repository. See\n`gateway.services.guardrail_catalog`.\n\nReports ``available: false`` with a reason rather than an error when the\nservice is unconfigured, unreachable, or older than its ``/profiles``\nendpoint, because a guardrails outage must not also break the page that\nconfigures guardrails.\n\nRead against ``guardrails_url``, which is the deployment's own service. An\nentry that carries an endpoint of its own is not probed: that URL is\ncaller-supplied and fetching it here would make this a way to have the\ngateway request an address of the caller's choosing.\n\nNot on ``verify_catalog_reader``, despite being a catalog read: that plane is\nthe three deployment-describing reads a data-plane key may also make, and\nadmitting a key here would let any workspace credential dial the deployment's\nguardrails service. This is a management read, so it takes the router's own gate.",
@@ -26766,7 +29913,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -26776,6 +29923,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -26784,7 +29932,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -27147,7 +30295,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -27157,6 +30305,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -27165,7 +30314,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -27598,7 +30747,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -27608,6 +30757,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -27616,7 +30766,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -27996,7 +31146,7 @@
             }
           },
           {
-            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+            "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
             "in": "query",
             "name": "tool",
             "required": false,
@@ -28006,6 +31156,7 @@
                   "enum": [
                     "any",
                     "web_search",
+                    "web_fetch",
                     "code_execution"
                   ],
                   "type": "string"
@@ -28014,7 +31165,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, code_execution) matches that tool specifically.",
+              "description": "Filter to requests that ran a gateway-run tool. 'any' matches any tool; a tool name (web_search, web_fetch, code_execution) matches that tool specifically.",
               "title": "Tool"
             }
           },
@@ -28143,7 +31294,7 @@
     },
     "/api/v1/users": {
       "get": {
-        "description": "List all users with pagination.",
+        "description": "List the users the caller's organization can name, with pagination.\n\n``users`` is deployment-global and has no organization column, so which of\nthem this organization can name is derived: a key, usage, or a roster row\nputs one in reach, and one reached from nowhere at all (the shared\n``default`` owner, or a user just created) is shared rather than hidden.\nSee ``repositories.users_repository.in_organization``.",
         "operationId": "users-list_users",
         "parameters": [
           {
@@ -28260,7 +31411,7 @@
     },
     "/api/v1/users/{user_id}": {
       "delete": {
-        "description": "Delete a user, and erase the telemetry captured under their name.",
+        "description": "Delete a user in the caller's organization, and erase their telemetry.",
         "operationId": "users-delete_user",
         "parameters": [
           {
@@ -28302,7 +31453,7 @@
         ]
       },
       "get": {
-        "description": "Get details of a specific user.",
+        "description": "Get details of a user in the caller's organization.",
         "operationId": "users-get_user",
         "parameters": [
           {
@@ -28351,7 +31502,7 @@
         ]
       },
       "patch": {
-        "description": "Update a user.",
+        "description": "Update a user in the caller's organization.",
         "operationId": "users-update_user",
         "parameters": [
           {
@@ -28412,7 +31563,7 @@
     },
     "/api/v1/users/{user_id}/usage": {
       "get": {
-        "description": "Get usage history for a specific user.",
+        "description": "Get usage history for a user in the caller's organization.",
         "operationId": "users-get_user_usage",
         "parameters": [
           {
@@ -30512,7 +33663,7 @@
         ]
       },
       "get": {
-        "description": "Read a workspace's web-search configuration.\n\nTakes the same role as setting it (an organization owner/admin, or an\nowner/admin of this workspace), because the row describes the workspace's\nposture rather than one member's allowance. A workspace with no row answers\nwith the unconfigured shape (``configured: false``), which is the\ndeployment's own behavior described in the same shape rather than a 404.",
+        "description": "Read a workspace's web-access configuration.\n\nTakes the same role as setting it (an organization owner/admin, or an\nowner/admin of this workspace), because the row describes the workspace's\nposture rather than one member's allowance. A workspace with no row answers\nwith the unconfigured shape (``configured: false``), which is the\ndeployment's own behavior described in the same shape rather than a 404.",
         "operationId": "workspace-web-search-get_workspace_web_search_config",
         "parameters": [
           {
@@ -30562,7 +33713,7 @@
         ]
       },
       "put": {
-        "description": "Set a workspace's web-search configuration, replacing any existing one.\n\nAn organization owner/admin, or an owner/admin of this workspace, may write\nit. The configuration can only narrow what the deployment permits: turning\nweb search off for the workspace, lowering the result ceiling, and adding to\nthe domains a search may not reach. It never turns on a backend the\ndeployment has not configured, and it carries no credential.",
+        "description": "Set a workspace's web-access configuration, replacing any existing one.\n\nAn organization owner/admin, or an owner/admin of this workspace, may write\nit. The configuration can only narrow what the deployment permits: turning\nweb access off for the workspace, lowering the Search result ceiling, and\nconstraining domains for Search and Fetch. It never turns on a backend the\ndeployment has not configured, and it carries no credential.",
         "operationId": "workspace-web-search-set_workspace_web_search_config",
         "parameters": [
           {

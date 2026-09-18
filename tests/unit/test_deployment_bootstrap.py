@@ -20,7 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from gateway.api.deps import reset_config
 from gateway.api.routes import bootstrap as bootstrap_route
-from gateway.api.routes.bootstrap import HOSTED_SURFACES, STANDALONE_SURFACES
+from gateway.api.routes.bootstrap import HOSTED_SURFACES, STANDALONE_SURFACES, published_surfaces
 from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.core.database import reset_db
 from gateway.main import create_app
@@ -111,6 +111,7 @@ def test_standalone_reports_a_local_operator_and_the_full_surface_set(tmp_path: 
         "passkeys_ready": False,
         "oauth_providers": [],
         "mail_ready": False,
+        "public_catalog": False,
         "open_signup": False,
     }
 
@@ -271,10 +272,13 @@ def test_every_surface_names_a_route_the_gateway_mounts(
     than in a browser. Hosted's data plane is the half that does differ, and
     ``test_hosted_mode_surface`` is where that is asserted.
     """
-    app = create_app(build(tmp_path))
+    config = build(tmp_path)
+    app = create_app(config)
     mounted = {getattr(route, "path", "") for route in app.routes}
 
-    for surface in surfaces:
+    # The fixed tuple and what the endpoint publishes, which adds each enabled
+    # registry feature's surface: a feature whose route is not mounted fails here.
+    for surface in {*surfaces, *published_surfaces(config, app.state.enabled_features)}:
         prefix = SURFACE_ROUTE_PREFIXES.get(surface, f"{API_ROOT}/{surface}")
         assert any(path.startswith(prefix) for path in mounted), f"surface {surface!r} names no mounted /api/v1/ route"
 
@@ -290,6 +294,12 @@ def test_hosted_swaps_the_process_wide_provider_page_for_the_per_organization_on
     organization-scoped one is the other way around. ``organization_usage`` is
     the row that exists only where tenants do: standalone's organization is the
     deployment, so ``/usage`` already answers it whole (otari-ai#1963).
+
+    ``playground`` is the one row withheld for a reason that is not about
+    credentials or scope at all, and not about the topology either: the page
+    dispatches a completion, a control plane serves no inference (otari#822), and
+    this one was given no ``data_plane_url`` to forward to. Configure one and it
+    appears; the test below is that pair.
     """
     app = create_app(_hosted(tmp_path))
 
@@ -303,15 +313,40 @@ def test_hosted_swaps_the_process_wide_provider_page_for_the_per_organization_on
     assert "organization_providers" in answered["surfaces"]
     assert "organization_usage" in answered["surfaces"]
     assert "providers" not in answered["surfaces"]
+    assert "playground" not in answered["surfaces"]
     # Everything else is standalone's set, so a surface added there is not
     # silently withheld from a control plane.
     assert set(answered["surfaces"]) ^ set(STANDALONE_SURFACES) == {
         "organization_providers",
         "organization_usage",
+        "playground",
         "providers",
     }
 
 
+
+def test_hosted_publishes_the_playground_once_it_knows_its_data_plane(tmp_path: Path) -> None:
+    """The other half of the row above, and the only surface configuration decides.
+
+    A control plane runs no completion itself, so the Playground page is served
+    by forwarding that one request to the data-plane gateway
+    (``services/playground_dispatch``). Told where that gateway is, the
+    deployment can serve the page and says so; told nothing, it withholds the
+    surface rather than publishing a page whose composer could only fail.
+    """
+    app = create_app(_hosted(tmp_path, data_plane_url="https://gateway.example.com"))
+
+    with TestClient(app) as client:
+        answered = client.get(f"{API_ROOT}/bootstrap").json()
+
+    assert "playground" in answered["surfaces"]
+    # The rest of the hosted set is unchanged by the address: this is one row's
+    # availability, not a different edition.
+    assert set(answered["surfaces"]) ^ set(STANDALONE_SURFACES) == {
+        "organization_providers",
+        "organization_usage",
+        "providers",
+    }
 
 def test_hosted_answers_everything_below_the_edition_the_way_standalone_does(tmp_path: Path) -> None:
     """Hosted mode is standalone's multi-tenant sibling, not a third data plane.
@@ -373,6 +408,7 @@ def test_hybrid_reports_no_session_no_surfaces_and_the_hosted_url(monkeypatch: p
         "passkeys_ready": False,
         "oauth_providers": [],
         "mail_ready": False,
+        "public_catalog": False,
         "open_signup": False,
     }
 

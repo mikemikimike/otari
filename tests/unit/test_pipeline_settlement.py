@@ -58,6 +58,8 @@ from gateway.models.mcp import McpServerConfig
 from gateway.rate_limit import RateLimitInfo
 from gateway.services.budget_service import ReservationHandle
 from gateway.services.tenancy.errors import WorkspaceMcpServerNotFoundError
+from gateway.services.tenancy.workspace_web_search_service import ResolvedWebSearchConfig
+from gateway.services.tool_usage import ToolUsageTally
 
 ADAPTERS = [
     pytest.param(chat._ADAPTER, id="chat"),
@@ -103,14 +105,16 @@ def _ctx(
     rate_limit_info: RateLimitInfo | None = None,
     workspace_id: uuid.UUID | None = None,
     organization_id: uuid.UUID | None = _ORGANIZATION_ID,
+    hybrid_mode: bool = False,
+    user_token: str | None = None,
 ) -> RequestContext:
     return RequestContext(
         config=config,
         db=db,
         log_writer=log_writer,
-        hybrid_mode=False,
+        hybrid_mode=hybrid_mode,
         route=None,
-        user_token=None,
+        user_token=user_token,
         api_key_id="key-1",
         user_id="user-1",
         rate_limit_info=rate_limit_info,
@@ -135,8 +139,8 @@ def test_all_settlement_callbacks_wired_for_every_format_and_path(
 ) -> None:
     """Every streaming response, regardless of format and of single-attempt vs
     platform-fallback path, must wire on_complete / on_error / on_no_usage /
-    on_incomplete. Both paths build through ``build_streaming_response``, so
-    asserting here covers them uniformly.
+    on_incomplete / on_first_chunk. Both paths build through
+    ``build_streaming_response``, so asserting here covers them uniformly.
     """
     captured: dict[str, Any] = {}
 
@@ -170,7 +174,7 @@ def test_all_settlement_callbacks_wired_for_every_format_and_path(
         platform_request_id="req-1" if hybrid_path else None,
     )
 
-    for callback_name in ("on_complete", "on_error", "on_no_usage", "on_incomplete"):
+    for callback_name in ("on_complete", "on_error", "on_no_usage", "on_incomplete", "on_first_chunk"):
         assert callable(captured.get(callback_name)), f"{callback_name} not wired"
     assert captured["fmt"] is adapter.stream_format
     if hybrid_path:
@@ -395,6 +399,8 @@ def _build(
     config: GatewayConfig,
     *,
     workspace_id: uuid.UUID | None = None,
+    started_at: float | None = None,
+    tool_tally: ToolUsageTally | None = None,
 ) -> Any:
     return build_streaming_response(
         adapter=chat._ADAPTER,
@@ -409,6 +415,8 @@ def _build(
         rate_limit_info=None,
         reservation=_reservation(),
         workspace_id=workspace_id,
+        started_at=started_at,
+        tool_tally=tool_tally,
     )
 
 
@@ -493,6 +501,41 @@ async def test_client_disconnect_refunds(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert settlement.refunded == 1
     assert settlement.reconciled == []
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_with_tool_work_records_ttft(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_on_incomplete only reaches log_usage when there is tool work to bill
+    for (a non-empty tool_tally). That is also the one settlement path this
+    PR's own coverage missed: it should still record ttft_ms from the same
+    on_first_chunk mark every other path uses.
+    """
+    settlement = _Settlement()
+    settlement.install(monkeypatch)
+
+    tally = ToolUsageTally()
+    tally.record_result("search", "ok")
+
+    async def stream() -> AsyncIterator[ChatCompletionChunk]:
+        yield _chunk()
+        yield _chunk()
+
+    response = _build(
+        stream(),
+        GatewayConfig(),
+        started_at=time.monotonic(),
+        tool_tally=tally,
+    )
+    iterator = response.body_iterator
+    await iterator.__anext__()
+    # Closing the generator mid-stream simulates a client disconnect.
+    await iterator.aclose()
+
+    assert len(settlement.logged) == 1
+    logged = settlement.logged[0]
+    assert logged["ttft_ms"] is not None
+    assert logged["ttft_ms"] >= 0
+    assert logged["ttft_ms"] <= logged["latency_ms"]
 
 
 class _FakeLogWriter:
@@ -1198,6 +1241,353 @@ async def test_tool_misconfiguration_400_releases_reservation(monkeypatch: pytes
 
     assert exc_info.value.status_code == 400
     assert settlement.refunded == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_only_admission_needs_no_search_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipeline, "resolve_workspace_web_search_config", AsyncMock(return_value=None))
+    db = AsyncMock()
+    ctx = _ctx(
+        GatewayConfig(require_pricing=False, web_fetch_enabled=True),
+        db=cast(Any, db),
+        workspace_id=uuid.uuid4(),
+    )
+
+    tool_ctx = await _call_prepare_gateway_tools(ctx, tools=[{"type": "otari_web_fetch"}])
+
+    assert tool_ctx.use_web_fetch is True
+    assert tool_ctx.use_web_search is False
+    assert tool_ctx.remaining_user_tools is None
+
+
+@pytest.mark.asyncio
+async def test_disabled_fetch_releases_reservation_before_workspace_policy_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settlement = _Settlement()
+    settlement.install(monkeypatch)
+    resolve = AsyncMock(return_value=None)
+    monkeypatch.setattr(pipeline, "resolve_workspace_web_search_config", resolve)
+    ctx = _ctx(
+        GatewayConfig(require_pricing=False),
+        db=cast(Any, AsyncMock()),
+        reservation=_reservation(),
+        workspace_id=uuid.uuid4(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_prepare_gateway_tools(ctx, tools=[{"type": "otari_web_fetch"}])
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == pipeline.WEB_FETCH_NOT_ENABLED_DETAIL
+    assert settlement.refunded == 1
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [{"type": "otari_web_fetch", "headers": {}}],
+        [{"type": "otari_web_fetch"}, {"type": "otari_web_fetch"}],
+        [
+            {"type": "otari_web_fetch"},
+            {"type": "function", "function": {"name": "web_fetch", "parameters": {}}},
+        ],
+        [
+            {"type": "otari_web_fetch"},
+            {"name": "web_fetch", "input_schema": {"type": "object"}},
+        ],
+        [{"type": "otari_web_search", "unknown": True}],
+        [{"type": "otari_web_search"}, {"type": "otari_web_search"}],
+        [
+            {"type": "otari_web_search"},
+            {"type": "function", "function": {"name": "web_search", "parameters": {}}},
+        ],
+    ],
+)
+async def test_invalid_managed_web_declarations_release_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+    tools: list[dict[str, Any]],
+) -> None:
+    settlement = _Settlement()
+    settlement.install(monkeypatch)
+    ctx = _ctx(
+        GatewayConfig(require_pricing=False, web_fetch_enabled=True),
+        db=cast(Any, AsyncMock()),
+        reservation=_reservation(),
+        workspace_id=uuid.uuid4(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_prepare_gateway_tools(ctx, tools=tools)
+
+    assert exc_info.value.status_code == 400
+    assert settlement.refunded == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [{"type": "otari_web_search"}, {"type": "web_search_20250305"}],
+        [{"type": "web_search"}, {"type": "web_search_20250305"}],
+    ],
+)
+async def test_intercepted_search_declarations_must_be_unique(
+    monkeypatch: pytest.MonkeyPatch,
+    tools: list[dict[str, Any]],
+) -> None:
+    monkeypatch.setattr(pipeline, "resolve_workspace_web_search_config", AsyncMock(return_value=None))
+    ctx = _ctx(
+        GatewayConfig(
+            require_pricing=False,
+            web_search_url="https://search.example",
+            web_search_intercept=True,
+        ),
+        db=cast(Any, AsyncMock()),
+        workspace_id=uuid.uuid4(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_prepare_gateway_tools(ctx, tools=tools)
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_invalid_web_declaration_is_rejected_before_policy_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    organization_resolve = AsyncMock(return_value=[])
+    mcp_resolve = AsyncMock(return_value=[])
+    monkeypatch.setattr(pipeline, "_resolve_organization_guardrails", organization_resolve)
+    monkeypatch.setattr(pipeline, "_resolve_mcp_server_ids", mcp_resolve)
+    ctx = _ctx(
+        GatewayConfig(require_pricing=False, web_fetch_enabled=True),
+        db=cast(Any, AsyncMock()),
+        workspace_id=uuid.uuid4(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_prepare_gateway_tools(
+            ctx,
+            tools=[{"type": "otari_web_fetch", "headers": {}}],
+            mcp_server_ids=[uuid.uuid4()],
+        )
+
+    assert exc_info.value.status_code == 400
+    organization_resolve.assert_not_awaited()
+    mcp_resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_combined_standalone_request_domains_narrow_fetch_without_workspace_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_workspace_web_search_config",
+        AsyncMock(return_value=None),
+    )
+    ctx = _ctx(
+        GatewayConfig(
+            require_pricing=False,
+            web_fetch_enabled=True,
+            web_search_url="https://search.example",
+        ),
+        db=cast(Any, AsyncMock()),
+        workspace_id=uuid.uuid4(),
+    )
+
+    tool_ctx = await _call_prepare_gateway_tools(
+        ctx,
+        tools=[
+            {
+                "type": "otari_web_search",
+                "allowed_domains": ["docs.example.com"],
+                "blocked_domains": ["private.docs.example.com"],
+            },
+            {"type": "otari_web_fetch"},
+        ],
+    )
+
+    assert [rule.value for rule in tool_ctx.web_fetch_policy.allowed] == ["docs.example.com"]
+    assert [rule.value for rule in tool_ctx.web_fetch_policy.blocked] == ["private.docs.example.com"]
+
+
+@pytest.mark.asyncio
+async def test_combined_standalone_policy_narrows_fetch_domains(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = ResolvedWebSearchConfig(
+        enabled=True,
+        max_results=None,
+        purpose_hint=None,
+        allowed_domains=("example.com",),
+        blocked_domains=("blocked.example.com",),
+        provider_options=None,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_workspace_web_search_config",
+        AsyncMock(return_value=workspace),
+    )
+    ctx = _ctx(
+        GatewayConfig(
+            require_pricing=False,
+            web_fetch_enabled=True,
+            web_search_url="https://search.example",
+        ),
+        db=cast(Any, AsyncMock()),
+        workspace_id=uuid.uuid4(),
+    )
+
+    tool_ctx = await _call_prepare_gateway_tools(
+        ctx,
+        tools=[
+            {"type": "otari_web_search", "allowed_domains": ["docs.example.com"]},
+            {"type": "otari_web_fetch"},
+        ],
+    )
+
+    assert [rule.value for rule in tool_ctx.web_fetch_policy.allowed] == ["docs.example.com"]
+    assert [rule.value for rule in tool_ctx.web_fetch_policy.blocked] == ["blocked.example.com"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_hybrid_legacy_policy_preserves_search(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    resolve = AsyncMock(return_value={"enabled": enabled, "allowed_domains": ["example.com"]})
+    monkeypatch.setattr(pipeline, "_resolve_platform_web_search", resolve)
+    ctx = _ctx(
+        GatewayConfig(
+            mode="hybrid",
+            require_pricing=False,
+            web_search_url="https://search.example",
+            platform={"base_url": "https://platform.example"},
+        ),
+        hybrid_mode=True,
+        user_token="tk_user",
+    )
+
+    if enabled:
+        tool_ctx = await _call_prepare_gateway_tools(ctx, tools=[{"type": "otari_web_search"}])
+        assert tool_ctx.use_web_search is True
+        assert tool_ctx.use_web_fetch is False
+        assert tool_ctx.web_search_tool_entry is not None
+        assert tool_ctx.web_search_tool_entry["allowed_domains"] == ["example.com"]
+    else:
+        with pytest.raises(HTTPException) as exc_info:
+            await _call_prepare_gateway_tools(ctx, tools=[{"type": "otari_web_search"}])
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == pipeline.WEB_SEARCH_NOT_ENABLED_DETAIL
+    resolve.assert_awaited_once_with(config=ctx.config, user_token="tk_user", requested_tools=["web_search"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("combined", [False, True])
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"enabled": True},
+        {"enabled": True, "authorized_tools": []},
+        {"enabled": True, "authorized_tools": ["web_search"]},
+    ],
+)
+async def test_hybrid_fetch_requires_explicit_authorization(
+    monkeypatch: pytest.MonkeyPatch, response: dict[str, Any], combined: bool
+) -> None:
+    resolve = AsyncMock(return_value=response)
+    monkeypatch.setattr(pipeline, "_resolve_platform_web_search", resolve)
+    ctx = _ctx(
+        GatewayConfig(
+            mode="hybrid",
+            require_pricing=False,
+            web_fetch_enabled=True,
+            platform={"base_url": "https://platform.example"},
+        ),
+        hybrid_mode=True,
+        user_token="tk_user",
+    )
+
+    tools = [{"type": "otari_web_fetch"}]
+    requested_tools = ["web_fetch"]
+    if combined:
+        ctx.config.web_search_url = "https://search.example"
+        tools.insert(0, {"type": "otari_web_search"})
+        requested_tools.insert(0, "web_search")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_prepare_gateway_tools(ctx, tools=tools)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == pipeline.WEB_ACCESS_TOOL_NOT_AUTHORIZED_DETAIL
+    assert resolve.await_args is not None
+    assert resolve.await_args.kwargs["requested_tools"] == requested_tools
+
+
+@pytest.mark.asyncio
+async def test_hybrid_fetch_only_needs_no_search_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolve = AsyncMock(
+        return_value={
+            "enabled": True,
+            "authorized_tools": ["web_fetch"],
+            "allowed_domains": ["example.com"],
+        }
+    )
+    monkeypatch.setattr(pipeline, "_resolve_platform_web_search", resolve)
+    ctx = _ctx(
+        GatewayConfig(
+            mode="hybrid",
+            require_pricing=False,
+            web_fetch_enabled=True,
+            platform={"base_url": "https://platform.example"},
+        ),
+        hybrid_mode=True,
+        user_token="tk_user",
+    )
+
+    tool_ctx = await _call_prepare_gateway_tools(ctx, tools=[{"type": "otari_web_fetch"}])
+
+    assert tool_ctx.use_web_fetch is True
+    assert tool_ctx.use_web_search is False
+    assert [rule.value for rule in tool_ctx.web_fetch_policy.allowed] == ["example.com"]
+    resolve.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"enabled": True, "authorized_tools": None},
+        {"enabled": True, "authorized_tools": "web_fetch"},
+        {"enabled": True, "authorized_tools": [1]},
+        {"enabled": "true", "authorized_tools": ["web_fetch"]},
+        {"enabled": True, "authorized_tools": ["web_fetch"], "allowed_domains": "example.com"},
+        {"enabled": True, "authorized_tools": ["web_fetch"], "blocked_domains": [1]},
+    ],
+)
+@pytest.mark.parametrize("tool_type", ["otari_web_search", "otari_web_fetch"])
+async def test_hybrid_web_tools_fail_closed_on_malformed_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    response: dict[str, Any],
+    tool_type: str,
+) -> None:
+    monkeypatch.setattr(pipeline, "_resolve_platform_web_search", AsyncMock(return_value=response))
+    ctx = _ctx(
+        GatewayConfig(
+            mode="hybrid",
+            require_pricing=False,
+            web_fetch_enabled=True,
+            platform={"base_url": "https://platform.example"},
+        ),
+        hybrid_mode=True,
+        user_token="tk_user",
+    )
+
+    ctx.config.web_search_url = "https://search.example"
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_prepare_gateway_tools(ctx, tools=[{"type": tool_type}])
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == pipeline.MALFORMED_WEB_ACCESS_POLICY_DETAIL
 
 
 @pytest.mark.asyncio

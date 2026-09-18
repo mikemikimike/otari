@@ -85,6 +85,7 @@ from gateway.api.routes._platform import (
     _resolve_platform_mcp_servers,
     _resolve_platform_web_search,
     is_provider_billing_error,
+    record_abandoned_attempt,
     run_platform_attempts,
     upstream_error_message,
     upstream_exception_chain,
@@ -96,9 +97,11 @@ from gateway.api.routes._platform import (
 )
 from gateway.api.routes._schema_derive import SENSITIVE_PARAM_FIELDS
 from gateway.api.routes._tools import (
-    _build_web_search_backend,
+    _build_web_retrieval_backend,
     _extract_code_execution_tool,
+    _extract_web_fetch_tool,
     _extract_web_search_tool,
+    _is_provider_web_search_tool_type,
     _resolve_sandbox_purpose_hint,
     _web_search_intercept_enabled,
     declares_native_web_search,
@@ -117,12 +120,15 @@ from gateway.core.usage import (
 )
 from gateway.inflight import track_request
 from gateway.log_config import logger
-from gateway.metrics import record_abandoned_attempt, record_cost, record_inline_cost_settlement, record_tokens
+from gateway.metrics import REGISTRY, Histogram
+from gateway.metrics import Counter as PrometheusCounter
 from gateway.model_labeling import relabel_model
-from gateway.models.entities import ModelPricing, UsageLog
+from gateway.models.api_keys import APIKey
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
 from gateway.models.money import to_usd
+from gateway.models.pricing import ModelPricing
+from gateway.models.usage import UsageLog
 from gateway.ports.model_provider_port import HostedAccessDeniedError, ModelProviderPort
 from gateway.rate_limit import RateLimitInfo, check_rate_limit
 from gateway.services.budget_service import (
@@ -169,6 +175,7 @@ from gateway.services.sandbox_backend import (
     DEFAULT_EXEC_TIMEOUT_S,
     SandboxBackend,
     SandboxNotReachableError,
+    SandboxUnavailableError,
 )
 from gateway.services.scoped_budget_service import BudgetScopeRequest
 from gateway.services.secret_box import SecretBoxUnavailableError, SecretDecryptionError
@@ -187,6 +194,8 @@ from gateway.services.tenancy.workspace_code_execution_policy_service import (
 )
 from gateway.services.tenancy.workspace_mcp_server_service import resolve_workspace_mcp_servers
 from gateway.services.tenancy.workspace_web_search_service import (
+    MAX_WEB_SEARCH_DOMAINS,
+    InvalidStoredWebSearchDomainError,
     narrow_web_search_tool_entry,
     resolve_workspace_web_search_config,
 )
@@ -198,7 +207,21 @@ from gateway.services.tool_usage import (
 )
 from gateway.services.upstream_redaction import redact_upstream_message
 from gateway.services.url_safety import UnsafeURLError, validate_mcp_url
-from gateway.services.web_search_backend import WEB_SEARCH_TOOL_NAME, WebSearchNotReachableError
+from gateway.services.web_retrieval_backend import (
+    WEB_FETCH_TOOL_NAME,
+    WEB_SEARCH_TOOL_NAME,
+    WebRetrievalBackend,
+    WebRetrievalCounter,
+    WebSearchNotReachableError,
+)
+from gateway.services.web_retrieval_policy import (
+    DisjointDomainAllowListsError,
+    DomainPolicy,
+    DomainRuleValidationError,
+    canonicalize_domain_rules,
+    intersect_domain_allow_lists,
+    union_domain_block_lists,
+)
 from gateway.services.web_search_budget import WebSearchBudget
 from gateway.services.workspace_scope import (
     organization_for_workspace_id,
@@ -212,9 +235,50 @@ from gateway.streaming import (
     streaming_generator,
 )
 from gateway.types.attempt import Attempt
+from gateway.types.session_principal import SessionPrincipal
 
 ResultT = TypeVar("ResultT")
 ChunkT = TypeVar("ChunkT")
+
+TOKENS = PrometheusCounter(
+    "gateway_tokens",
+    "Total number of tokens processed",
+    ["provider", "model", "type"],
+    registry=REGISTRY,
+)
+
+REQUEST_COST_DOLLARS = Histogram(
+    "gateway_request_cost_dollars",
+    "Request cost in USD",
+    ["provider", "model"],
+    registry=REGISTRY,
+)
+
+INLINE_COST_SETTLEMENTS = PrometheusCounter(
+    "gateway_inline_cost_settlements",
+    "Inline platform cost settlement outcomes on the hybrid response path",
+    ["outcome"],
+    registry=REGISTRY,
+)
+
+
+def record_tokens(provider: str, model: str, prompt_tokens: int, completion_tokens: int) -> None:
+    """Record token usage metrics."""
+    if prompt_tokens:
+        TOKENS.labels(provider=provider, model=model, type="input").inc(prompt_tokens)
+    if completion_tokens:
+        TOKENS.labels(provider=provider, model=model, type="output").inc(completion_tokens)
+
+
+def record_cost(provider: str, model: str, cost: float) -> None:
+    """Record request cost."""
+    REQUEST_COST_DOLLARS.labels(provider=provider, model=model).observe(cost)
+
+
+def record_inline_cost_settlement(outcome: str) -> None:
+    """Record an attached, unattached, or timed-out inline settlement."""
+    INLINE_COST_SETTLEMENTS.labels(outcome=outcome).inc()
+
 
 # ---------------------------------------------------------------------------
 # Shared wire-level detail strings. These are client-visible API contract
@@ -269,10 +333,23 @@ WEB_SEARCH_NOT_CONFIGURED_DETAIL = (
     "Set OTARI_WEB_SEARCH_URL on the gateway, or remove otari_web_search from `tools`."
 )
 WEB_SEARCH_CONFLICT_DETAIL = (
-    "otari_web_search cannot be combined with otari_code_execution or mcp_servers in the same request yet; pick one."
+    "otari_web_search and otari_web_fetch cannot be combined with otari_code_execution or "
+    "mcp_servers in the same request yet; pick one."
 )
 WEB_SEARCH_NOT_ENABLED_DETAIL = "web search is not enabled for this workspace"
 WEB_SEARCH_MAX_USES_INVALID_DETAIL = "web_search max_uses must be a non-negative integer"
+WEB_ACCESS_NOT_ENABLED_DETAIL = "web access is not enabled for this workspace"
+MALFORMED_WEB_ACCESS_POLICY_DETAIL = "Authorization service returned a malformed web-access policy"
+WEB_ACCESS_TOOL_NOT_AUTHORIZED_DETAIL = "A requested managed web tool is not authorized for this workspace"
+WEB_ACCESS_DOMAINS_EXCLUDED_DETAIL = "The request and workspace web-access domain policies do not overlap"
+WEB_FETCH_NOT_ENABLED_DETAIL = (
+    "otari_web_fetch tool requested but web fetch is disabled on this gateway. "
+    "Set OTARI_WEB_FETCH_ENABLED=true on the gateway, or remove otari_web_fetch from `tools`."
+)
+WEB_FETCH_DECLARATION_INVALID_DETAIL = "otari_web_fetch declarations may contain only the type field"
+WEB_SEARCH_DECLARATION_INVALID_DETAIL = "otari_web_search declarations contain an unsupported field"
+WEB_TOOL_DUPLICATE_DETAIL = "A managed web tool may be declared at most once"
+WEB_TOOL_RESERVED_NAME_DETAIL = "A caller-defined function uses a reserved managed web-tool name"
 SANDBOX_NOT_ENABLED_DETAIL = "code execution is not enabled for this workspace"
 SANDBOX_TOOLS_EXCLUDED_DETAIL = (
     "code execution is not available to this workspace: its policy's tool list excludes "
@@ -286,6 +363,11 @@ SANDBOX_IMAGE_NOT_ALLOWED_DETAIL = "this workspace's code-execution policy pins 
 MALFORMED_CODE_EXEC_POLICY_DETAIL = "Authorization service returned a malformed code-execution policy"
 CODE_EXEC_POLICY_UNRESOLVABLE_DETAIL = "Code execution policy could not be resolved for this request"
 WEB_SEARCH_CONFIG_UNRESOLVABLE_DETAIL = "Web search configuration could not be resolved for this request"
+WEB_SEARCH_CONFIG_INVALID_DETAIL = "Web search configuration contains an invalid domain rule"
+WEB_SEARCH_REQUEST_DOMAIN_INVALID_DETAIL = (
+    "Web search allowed_domains and blocked_domains must each contain at most "
+    f"{MAX_WEB_SEARCH_DOMAINS} bare valid hostnames"
+)
 ORGANIZATION_GUARDRAILS_UNRESOLVABLE_DETAIL = "Organization guardrails could not be resolved for this request"
 ORGANIZATION_GUARDRAIL_CREDENTIAL_UNREADABLE_DETAIL = (
     "A configured organization guardrail's credential could not be read"
@@ -299,6 +381,7 @@ SANDBOX_UNREACHABLE_DETAIL = (
     "code_execution sandbox unreachable. Check the sandbox URL in the dashboard's "
     "Tools settings, or OTARI_SANDBOX_URL, and that the container is running."
 )
+SANDBOX_UNAVAILABLE_DETAIL = "code_execution sandbox temporarily unavailable. Retry later."
 WEB_SEARCH_UNREACHABLE_DETAIL = (
     "web_search backend unreachable. Check the search URL in the dashboard's Tools "
     "settings, or OTARI_WEB_SEARCH_URL, and that the backend is running."
@@ -1494,6 +1577,73 @@ async def _compile_request_plan(
         raise adapter.error(exc.status_code, exc.caller_detail, ErrorKind.PERMISSION) from exc
 
 
+async def _resolve_keyed_user_id(
+    *,
+    adapter: FormatAdapter[Any, Any],
+    db: AsyncSession,
+    log_writer: LogWriter,
+    config: GatewayConfig,
+    raw_request: Request,
+    api_key: APIKey | None,
+    api_key_id: str | None,
+    is_master_key: bool,
+    user_id_from_request: str | None,
+    model: str,
+    master_key_user_required_detail: str,
+    user_forbidden_detail: str,
+    started_at: float,
+) -> str:
+    """The billed user for a key- or master-key-authenticated request.
+
+    :func:`resolve_user_id` with this endpoint's error shapes, plus the one
+    rejection row it owes. Split out of :func:`resolve_request_context` so the
+    two ways into that preamble read as two branches rather than one branch
+    wrapped around thirty lines of logging.
+    """
+    try:
+        return resolve_user_id(
+            user_id_from_request=user_id_from_request,
+            api_key=api_key,
+            is_master_key=is_master_key,
+            master_key_error=adapter.error(400, master_key_user_required_detail, ErrorKind.INVALID_REQUEST),
+            no_api_key_error=adapter.error(500, API_KEY_VALIDATION_FAILED_DETAIL, ErrorKind.API),
+            no_user_error=adapter.error(500, API_KEY_NO_USER_DETAIL, ErrorKind.API),
+            forbidden_user_error=adapter.error(403, user_forbidden_detail, ErrorKind.PERMISSION),
+            reject_mismatch=config.reject_user_mismatch,
+        )
+    except HTTPException as exc:
+        # Only the user/key mismatch (403) is recorded: spend always binds to
+        # the key's own user, so that rejection has a user to attribute the
+        # drop to. resolve_user_id's other refusals (a master key with no
+        # `user` field, a key with no user) name no existing user, and
+        # usage_logs.user_id is a foreign key, so they stay unlogged.
+        # This row carries the raw selector and no provider, unlike the gates
+        # after it: nothing has been resolved this early, and resolving a
+        # selector purely to shape a log row is not worth the work on a path
+        # that is refusing the request anyway.
+        # This gate is the only one that fires before check_rate_limit, so
+        # the write is charged to the key's own bucket and skipped once
+        # throttled; see throttle_early_rejection. The response stays 403.
+        if (
+            exc.status_code == status.HTTP_403_FORBIDDEN
+            and api_key is not None
+            and not throttle_early_rejection(raw_request, str(api_key.user_id))
+        ):
+            await log_gateway_rejection(
+                db=db,
+                log_writer=log_writer,
+                api_key_id=api_key_id,
+                user_id=api_key.user_id,
+                model=model,
+                provider=None,
+                endpoint=adapter.endpoint,
+                detail=user_forbidden_detail,
+                status_code=exc.status_code,
+                started_at=started_at,
+            )
+        raise
+
+
 async def resolve_request_context(
     *,
     adapter: FormatAdapter[Any, Any],
@@ -1509,6 +1659,7 @@ async def resolve_request_context(
     master_key_user_required_detail: str,
     user_forbidden_detail: str,
     estimate_cache_write_ttl: Literal["5m", "1h"] | None = None,
+    session_principal: SessionPrincipal | None = None,
     routing_signal: Callable[[], RoutingSignal] | None = None,
     normalize_messages: Callable[
         [str, LLMProvider | None, str, str | None, uuid.UUID | None],
@@ -1526,6 +1677,13 @@ async def resolve_request_context(
     before the missing-pricing gate so user/blocked/budget rejections
     (404/403) take precedence over the 402; it is refunded if the request is
     then rejected for missing pricing.
+
+    ``session_principal`` (standalone only) replaces that credential step for a
+    route that authenticated and authorized the caller itself, which today is
+    the Playground's own completions endpoint. See :class:`SessionPrincipal` for
+    what the route owes before it may build one; everything after the step it
+    substitutes, the rate limit, the plan compile, both allow-list gates,
+    pricing and the reservation, runs exactly as it does for a keyed request.
 
     ``routing_signal`` (standalone only) builds what a policy's router backend
     reads: the prompt text plus the routing headers, in a format-neutral value the
@@ -1594,67 +1752,56 @@ async def resolve_request_context(
     else:
         if db is None:
             raise adapter.error(500, DB_UNAVAILABLE_DETAIL, ErrorKind.API)
-        # No session cookie is consulted, and that is the point: this plane calls
-        # a provider with somebody's credentials and writes a usage row against
-        # somebody's budget. ``is_master_key`` below sends both through the
-        # deployment's *default* workspace, so honoring a cookie here let any
-        # signed-in member of any organization spend the default organization's
-        # BYO credential and bill it (otari-ai#1880). A completion is authorized
-        # by an API key or the deployment's own master key, nothing else.
-        api_key, is_master_key = await verify_api_key_or_master_key(raw_request, db, config)
-        api_key_id = api_key.id if api_key else None
-        # Zero I/O for a keyed request: `api_key.workspace_id` is already an
-        # in-memory attribute on the row just loaded. Only a master-key request
-        # pays a lookup, which `resolve_workspace_id` itself accepts as
-        # operator traffic (see its docstring). Used below to resolve
-        # organization-scoped provider keys for a bare provider selector; an
-        # instance-addressed one never consults it (`provider_kwargs.py`). A
-        # master-key call therefore only ever reaches the *default* workspace's
-        # organization's keys, not every organization the deployment holds
-        # (`workspace_scope.py`'s docstring).
-        workspace_id = await resolve_workspace_id(db, api_key)
-        try:
-            user_id = resolve_user_id(
-                user_id_from_request=user_id_from_request,
+        # No session cookie is consulted *here*, and that is the point: this
+        # plane calls a provider with somebody's credentials and writes a usage
+        # row against somebody's budget. ``is_master_key`` below sends both
+        # through the deployment's *default* workspace, so honoring a cookie
+        # here let any signed-in member of any organization spend the default
+        # organization's BYO credential and bill it (otari-ai#1880). A
+        # completion is authorized by an API key, the deployment's own master
+        # key, or a ``SessionPrincipal`` a route built after resolving the
+        # caller's own user and proving their membership of the workspace it
+        # names, which is the work this rule exists to force rather than a way
+        # around it.
+        api_key: APIKey | None = None
+        is_master_key = False
+        if session_principal is not None:
+            workspace_id = session_principal.workspace_id
+            user_id = session_principal.user_id
+            key_allowlist = session_principal.allowed_models
+        else:
+            api_key, is_master_key = await verify_api_key_or_master_key(raw_request, db, config)
+            api_key_id = api_key.id if api_key else None
+            # Zero I/O for a keyed request: `api_key.workspace_id` is already an
+            # in-memory attribute on the row just loaded. Only a master-key request
+            # pays a lookup, which `resolve_workspace_id` itself accepts as
+            # operator traffic (see its docstring). Used below to resolve
+            # organization-scoped provider keys for a bare provider selector; an
+            # instance-addressed one never consults it (`provider_kwargs.py`). A
+            # master-key call therefore only ever reaches the *default* workspace's
+            # organization's keys, not every organization the deployment holds
+            # (`workspace_scope.py`'s docstring).
+            workspace_id = await resolve_workspace_id(db, api_key)
+            user_id = await _resolve_keyed_user_id(
+                adapter=adapter,
+                db=db,
+                log_writer=log_writer,
+                config=config,
+                raw_request=raw_request,
                 api_key=api_key,
+                api_key_id=api_key_id,
                 is_master_key=is_master_key,
-                master_key_error=adapter.error(400, master_key_user_required_detail, ErrorKind.INVALID_REQUEST),
-                no_api_key_error=adapter.error(500, API_KEY_VALIDATION_FAILED_DETAIL, ErrorKind.API),
-                no_user_error=adapter.error(500, API_KEY_NO_USER_DETAIL, ErrorKind.API),
-                forbidden_user_error=adapter.error(403, user_forbidden_detail, ErrorKind.PERMISSION),
-                reject_mismatch=config.reject_user_mismatch,
+                user_id_from_request=user_id_from_request,
+                model=model,
+                master_key_user_required_detail=master_key_user_required_detail,
+                user_forbidden_detail=user_forbidden_detail,
+                started_at=started_at,
             )
-        except HTTPException as exc:
-            # Only the user/key mismatch (403) is recorded: spend always binds to
-            # the key's own user, so that rejection has a user to attribute the
-            # drop to. resolve_user_id's other refusals (a master key with no
-            # `user` field, a key with no user) name no existing user, and
-            # usage_logs.user_id is a foreign key, so they stay unlogged.
-            # This row carries the raw selector and no provider, unlike the gates
-            # below it: nothing has been resolved this early, and resolving a
-            # selector purely to shape a log row is not worth the work on a path
-            # that is refusing the request anyway.
-            # This gate is the only one that fires before check_rate_limit, so
-            # the write is charged to the key's own bucket and skipped once
-            # throttled; see throttle_early_rejection. The response stays 403.
-            if (
-                exc.status_code == status.HTTP_403_FORBIDDEN
-                and api_key is not None
-                and not throttle_early_rejection(raw_request, str(api_key.user_id))
-            ):
-                await log_gateway_rejection(
-                    db=db,
-                    log_writer=log_writer,
-                    api_key_id=api_key_id,
-                    user_id=api_key.user_id,
-                    model=model,
-                    provider=None,
-                    endpoint=adapter.endpoint,
-                    detail=user_forbidden_detail,
-                    status_code=exc.status_code,
-                    started_at=started_at,
-                )
-            raise
+            # Resolved before the plan rather than with the gate below, because the
+            # compiler must drop candidates this caller may not use: a chain that fell
+            # over to a forbidden model would be an access-control bypass. The gate
+            # itself stays where it was, so a plain model name is unaffected.
+            key_allowlist = await resolve_request_allowlist(db, api_key)
         rate_limit_info = check_rate_limit(raw_request, user_id)
 
         # Tolerate an unparseable / unknown-provider selector here: the budget
@@ -1664,11 +1811,6 @@ async def resolve_request_context(
         # capability detection needs the underlying implementation, so keep both.
         gate_instance: str | None
         gate_impl: LLMProvider | None
-        # Resolved before the plan rather than with the gate below, because the
-        # compiler must drop candidates this caller may not use: a chain that fell
-        # over to a forbidden model would be an access-control bypass. The gate
-        # itself stays where it was, so a plain model name is unaffected.
-        key_allowlist = await resolve_request_allowlist(db, api_key)
         # A policy name resolves to a plan rather than to one selector. The head
         # candidate is what everything below keys on (allow-list, pricing,
         # reservation), exactly as a plain model would be, so a one-candidate
@@ -1711,8 +1853,9 @@ async def resolve_request_context(
         # non-null list restricts. Fail closed: a selector we could not resolve is
         # denied under a restriction rather than dispatched unchecked. Master-key
         # callers have api_key None, so the allow-list is None and this is skipped.
-        # A key with no list of its own inherits its user's default here.
-        # (Resolved above, before the plan compile, which needs it.)
+        # A key with no list of its own inherits its user's default here, and a
+        # ``SessionPrincipal`` carries that same user default (it holds no key to
+        # narrow it with). (Resolved above, before the plan compile, which needs it.)
         if key_allowlist is not None and not (
             gate_instance is not None and is_model_allowed(key_allowlist, f"{gate_instance}:{gate_model}")
         ):
@@ -2031,6 +2174,9 @@ class ToolContext:
         max_tool_iterations: int,
         tools_header: str | None,
         config: GatewayConfig,
+        use_web_fetch: bool = False,
+        web_fetch_tool_entry: dict[str, Any] | None = None,
+        web_fetch_policy: DomainPolicy | None = None,
     ) -> None:
         self.config = config
         self.mcp_server_configs = mcp_server_configs
@@ -2052,6 +2198,9 @@ class ToolContext:
         self.web_search_tool_entry = web_search_tool_entry
         self.web_search_url = web_search_url
         self.web_search_auth_token = web_search_auth_token
+        self.use_web_fetch = use_web_fetch
+        self.web_fetch_tool_entry = web_fetch_tool_entry
+        self.web_fetch_policy = web_fetch_policy or DomainPolicy()
         self.remaining_user_tools = remaining_user_tools
         self.max_tool_iterations = max_tool_iterations
         self.tools_header = tools_header
@@ -2063,12 +2212,11 @@ class ToolContext:
         # request shares one tally across attempts: every executed call was paid
         # for, whether or not its attempt won.
         self.tally = ToolUsageTally()
-        # One budget per request, for the reason the tally is: a multi-attempt
-        # request re-runs its searches on the attempt that serves, and every one of
-        # them is billed, so the cap has to be spent by the request rather than
-        # refilled per attempt.
+        # Successful Search calls spend the caller's cap across all routing attempts.
         cap = self.max_web_search_uses
         self.web_search_budget = WebSearchBudget(cap) if cap is not None else None
+        # Search and Fetch share a separate attempted-call cap across routing attempts.
+        self.web_retrieval_counter = WebRetrievalCounter()
 
     def build_sandbox_backend(self) -> SandboxBackend:
         """The one place a ``SandboxBackend`` is constructed for this request.
@@ -2092,7 +2240,11 @@ class ToolContext:
 
     @property
     def tools_extracted(self) -> bool:
-        return self.sandbox_tool_entry is not None or self.web_search_tool_entry is not None
+        return (
+            self.sandbox_tool_entry is not None
+            or self.web_search_tool_entry is not None
+            or self.web_fetch_tool_entry is not None
+        )
 
     @property
     def web_search_declared_name(self) -> str | None:
@@ -2148,7 +2300,20 @@ class ToolContext:
 
     @property
     def use_tool_loop(self) -> bool:
-        return bool(self.mcp_server_configs) or self.use_sandbox or self.use_web_search
+        return bool(self.mcp_server_configs) or self.use_sandbox or self.use_web_search or self.use_web_fetch
+
+    def build_web_retrieval_backend(self) -> WebRetrievalBackend:
+        """Build the request's shared Search and Fetch backend."""
+        return _build_web_retrieval_backend(
+            base_url=self.web_search_url,
+            search_tool_entry=self.web_search_tool_entry,
+            fetch_tool_entry=self.web_fetch_tool_entry,
+            fetch_policy=self.web_fetch_policy,
+            counter=self.web_retrieval_counter,
+            auth_token=self.web_search_auth_token,
+            config=self.config,
+            tally=self.tally,
+        )
 
 
 async def _validate_mcp_server_urls(
@@ -2384,6 +2549,123 @@ async def _resolve_mcp_server_ids(
         raise adapter.error(500, MCP_SERVER_TOKEN_UNREADABLE_DETAIL, ErrorKind.API) from exc
 
 
+def _canonicalize_web_search_request_domains(tool_entry: dict[str, Any]) -> None:
+    """Validate and canonicalize caller-supplied Search domain rules in place."""
+    for field in ("allowed_domains", "blocked_domains"):
+        values = tool_entry.get(field)
+        if values is None:
+            continue
+        if not isinstance(values, list) or len(values) > MAX_WEB_SEARCH_DOMAINS:
+            raise DomainRuleValidationError(f"{field} must contain at most {MAX_WEB_SEARCH_DOMAINS} hostnames")
+        if any(not isinstance(value, str) for value in values):
+            raise DomainRuleValidationError(f"{field} must be a list of hostnames")
+        tool_entry[field] = [rule.value for rule in canonicalize_domain_rules(values)]
+
+
+_WEB_SEARCH_DECLARATION_FIELDS = frozenset(
+    {
+        "type",
+        "max_uses",
+        "max_results",
+        "allowed_domains",
+        "blocked_domains",
+        "purpose_hint",
+        "provider_options",
+    }
+)
+
+
+def _function_tool_name(entry: dict[str, Any]) -> str | None:
+    function = entry.get("function")
+    if entry.get("type") == "function":
+        name = function.get("name") if isinstance(function, dict) else entry.get("name")
+    elif isinstance(entry.get("input_schema"), dict):
+        # Anthropic function tools are flat and carry no ``type=function``.
+        name = entry.get("name")
+    else:
+        return None
+    return name if isinstance(name, str) else None
+
+
+def _validate_managed_web_declarations(
+    adapter: FormatAdapter[Any, Any],
+    tools: list[dict[str, Any]] | None,
+    *,
+    intercept_web_search: bool,
+) -> None:
+    """Reject ambiguous managed declarations before any policy or network I/O."""
+    entries = [entry for entry in tools or [] if isinstance(entry, dict)]
+    search_count = sum(
+        entry.get("type") == "otari_web_search"
+        or (intercept_web_search and _is_provider_web_search_tool_type(entry.get("type")))
+        for entry in entries
+    )
+    fetch_count = sum(entry.get("type") == "otari_web_fetch" for entry in entries)
+    if search_count > 1 or fetch_count > 1:
+        raise adapter.error(400, WEB_TOOL_DUPLICATE_DETAIL, ErrorKind.INVALID_REQUEST)
+    for entry in entries:
+        if entry.get("type") == "otari_web_fetch" and set(entry) != {"type"}:
+            raise adapter.error(400, WEB_FETCH_DECLARATION_INVALID_DETAIL, ErrorKind.INVALID_REQUEST)
+        if entry.get("type") == "otari_web_search" and not set(entry) <= _WEB_SEARCH_DECLARATION_FIELDS:
+            raise adapter.error(400, WEB_SEARCH_DECLARATION_INVALID_DETAIL, ErrorKind.INVALID_REQUEST)
+    managed_names = {
+        name for name, count in ((WEB_SEARCH_TOOL_NAME, search_count), (WEB_FETCH_TOOL_NAME, fetch_count)) if count
+    }
+    if any(_function_tool_name(entry) in managed_names for entry in entries):
+        raise adapter.error(400, WEB_TOOL_RESERVED_NAME_DETAIL, ErrorKind.INVALID_REQUEST)
+
+
+def _policy_from_domain_values(
+    allowed: list[str] | tuple[str, ...] | None,
+    blocked: list[str] | tuple[str, ...] | None,
+) -> DomainPolicy:
+    return DomainPolicy(
+        allowed=canonicalize_domain_rules(allowed or ()),
+        blocked=canonicalize_domain_rules(blocked or ()),
+    )
+
+
+def _combined_fetch_policy(
+    workspace_policy: DomainPolicy,
+    search_tool_entry: dict[str, Any] | None,
+) -> DomainPolicy:
+    """Let Search request filters narrow, but never replace, Fetch policy."""
+    request_allowed = None
+    request_blocked = None
+    if search_tool_entry is not None:
+        if search_tool_entry.get("allowed_domains"):
+            request_allowed = canonicalize_domain_rules(search_tool_entry["allowed_domains"])
+        if search_tool_entry.get("blocked_domains"):
+            request_blocked = canonicalize_domain_rules(search_tool_entry["blocked_domains"])
+    workspace_allowed = workspace_policy.allowed or None
+    allowed = intersect_domain_allow_lists(workspace_allowed, request_allowed) or ()
+    blocked = union_domain_block_lists(workspace_policy.blocked or None, request_blocked)
+    return DomainPolicy(allowed=allowed, blocked=blocked)
+
+
+def _validated_hybrid_web_policy(payload: dict[str, Any]) -> tuple[bool, set[str], DomainPolicy]:
+    """Strictly validate the authorization fields supplied by the control plane."""
+    enabled = payload.get("enabled")
+    # Legacy platforms authorize Search only; an explicit null remains malformed.
+    authorized = payload.get("authorized_tools", [WEB_SEARCH_TOOL_NAME])
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be a boolean")
+    if not isinstance(authorized, list) or any(not isinstance(value, str) for value in authorized):
+        raise ValueError("authorized_tools must be a list of strings")
+    domain_values: dict[str, list[str] | None] = {}
+    for field in ("allowed_domains", "blocked_domains"):
+        value = payload.get(field)
+        if value is not None and (
+            not isinstance(value, list)
+            or len(value) > MAX_WEB_SEARCH_DOMAINS
+            or any(not isinstance(item, str) for item in value)
+        ):
+            raise ValueError(f"{field} must be a bounded list of strings")
+        domain_values[field] = value
+    policy = _policy_from_domain_values(domain_values["allowed_domains"], domain_values["blocked_domains"])
+    return enabled, set(authorized), policy
+
+
 async def prepare_gateway_tools(
     *,
     adapter: FormatAdapter[Any, Any],
@@ -2415,6 +2697,13 @@ async def prepare_gateway_tools(
     reservation taken by :func:`resolve_request_context` before propagating.
     """
     try:
+        intercept_web_search = _web_search_intercept_enabled(ctx.config) and ctx.config.web_search_configured()
+        _validate_managed_web_declarations(
+            adapter,
+            tools,
+            intercept_web_search=intercept_web_search,
+        )
+
         # The organization's and the policy's guardrails are merged in here
         # rather than at each route, so every completion endpoint enforces a
         # mandate identically and none can forget to. `guardrails` as passed is
@@ -2603,8 +2892,7 @@ async def prepare_gateway_tools(
         # *to*, and claiming the keyword would turn a request the provider would have
         # served into a 400. So with no backend configured, or the toggle off, a
         # provider-named keyword passes through exactly as it always has.
-        intercept_web_search = _web_search_intercept_enabled(ctx.config) and ctx.config.web_search_configured()
-        web_search_tool_entry, remaining_user_tools = _extract_web_search_tool(
+        web_search_tool_entry, tools_after_search = _extract_web_search_tool(
             tools_after_sandbox,
             intercept=intercept_web_search,
         )
@@ -2612,107 +2900,114 @@ async def prepare_gateway_tools(
             _read_web_search_max_uses(web_search_tool_entry)
         except ValueError as exc:
             raise adapter.error(400, WEB_SEARCH_MAX_USES_INVALID_DETAIL, ErrorKind.INVALID_REQUEST) from exc
+        web_fetch_tool_entry, remaining_user_tools = _extract_web_fetch_tool(tools_after_search)
+        if web_fetch_tool_entry is not None and not ctx.config.web_fetch_enabled:
+            raise adapter.error(400, WEB_FETCH_NOT_ENABLED_DETAIL, ErrorKind.INVALID_REQUEST)
         # Forwarded to the search backend as `X-Gateway-Token`. Only set in
         # hybrid mode, where the backend may be the platform-hosted web-search
         # endpoint that authenticates the gateway. Standalone backends (SearXNG /
         # self-hosted adapter) get no token and ignore the header.
         web_search_auth_token: str | None = None
         use_web_search = False
+        use_web_fetch = web_fetch_tool_entry is not None
+        web_fetch_policy = DomainPolicy()
         if web_search_tool_entry is not None:
             if not ctx.config.web_search_configured():
                 raise adapter.error(400, WEB_SEARCH_NOT_CONFIGURED_DETAIL, ErrorKind.INVALID_REQUEST)
-            if use_sandbox or mcp_servers:
-                raise adapter.error(400, WEB_SEARCH_CONFLICT_DETAIL, ErrorKind.INVALID_REQUEST)
+            try:
+                _canonicalize_web_search_request_domains(web_search_tool_entry)
+            except DomainRuleValidationError as exc:
+                raise adapter.error(
+                    400,
+                    WEB_SEARCH_REQUEST_DOMAIN_INVALID_DETAIL,
+                    ErrorKind.INVALID_REQUEST,
+                ) from exc
             use_web_search = True
 
-            # Both modes carry a per-workspace web-search configuration (whether
-            # it is enabled at all, plus the result ceiling, the domain filters,
-            # the purpose hint and the provider options); they differ only in
-            # where it is read and how it composes with the request.
-            #
-            # Hybrid asks otari.ai, which owns the policy, and applies the
-            # platform's own precedence, "per-request overrides workspace
-            # default":
-            #  * top-level keys are applied only when the request didn't supply a
-            #    meaningful (truthy) value of its own. An empty list / empty string
-            #    reads as "no preference" and falls back to the workspace value
-            #    rather than silently clearing the workspace's policy (e.g. a
-            #    request `allowed_domains: []` must NOT wipe a workspace allow-list);
-            #  * provider_options is shallow-merged so workspace defaults fill the
-            #    keys the request omitted while per-request keys still win (rather
-            #    than the request's dict replacing the workspace dict wholesale).
-            #
-            # Standalone reads the row from this deployment's own database and
-            # *narrows* with it instead, per the seam settled in #655/#678: the
-            # ceiling is floored, the block-list is added to, and the allow-list
-            # is intersected, so no request can shed a guardrail its workspace
-            # set. `workspace_web_search_service` says why the two differ.
+        if (use_web_search or use_web_fetch) and (use_sandbox or mcp_servers):
+            raise adapter.error(400, WEB_SEARCH_CONFLICT_DETAIL, ErrorKind.INVALID_REQUEST)
+
+        if use_web_search or use_web_fetch:
             if ctx.hybrid_mode:
-                assert ctx.user_token is not None  # guaranteed by the hybrid-mode preamble
-                # Forward the platform token only when the search backend IS the
-                # platform (its URL is under the platform base URL the gateway
-                # already trusts this token with for resolve). Never leak this
-                # high-privilege credential to a bundled SearXNG or a third-party
-                # adapter that an operator happened to point GATEWAY_WEB_SEARCH_URL at.
-                if web_search_url is not None and url_targets_platform(
-                    web_search_url, ctx.config.platform.get("base_url")
+                assert ctx.user_token is not None
+                if (
+                    use_web_search
+                    and web_search_url is not None
+                    and url_targets_platform(web_search_url, ctx.config.platform.get("base_url"))
                 ):
                     web_search_auth_token = ctx.config.platform_token
+                requested_tools = [
+                    name
+                    for name, requested in (
+                        (WEB_SEARCH_TOOL_NAME, use_web_search),
+                        (WEB_FETCH_TOOL_NAME, use_web_fetch),
+                    )
+                    if requested
+                ]
                 web_search_policy = await _resolve_platform_web_search(
                     config=ctx.config,
                     user_token=ctx.user_token,
+                    requested_tools=requested_tools,
                 )
-                if not web_search_policy.get("enabled"):
-                    raise adapter.error(403, WEB_SEARCH_NOT_ENABLED_DETAIL, ErrorKind.PERMISSION)
-                for key in ("max_results", "allowed_domains", "blocked_domains", "purpose_hint"):
-                    resolved_value = web_search_policy.get(key)
-                    if not web_search_tool_entry.get(key) and resolved_value is not None:
-                        web_search_tool_entry[key] = resolved_value
-                workspace_options = web_search_policy.get("provider_options")
-                if isinstance(workspace_options, dict):
-                    request_options = web_search_tool_entry.get("provider_options")
-                    web_search_tool_entry["provider_options"] = (
-                        {**workspace_options, **request_options}
-                        if isinstance(request_options, dict)
-                        else workspace_options
+                try:
+                    enabled, authorized_tools, mandatory_policy = _validated_hybrid_web_policy(web_search_policy)
+                except (ValueError, DomainRuleValidationError) as exc:
+                    raise adapter.error(502, MALFORMED_WEB_ACCESS_POLICY_DETAIL, ErrorKind.API) from exc
+                if not enabled:
+                    detail = WEB_ACCESS_NOT_ENABLED_DETAIL if use_web_fetch else WEB_SEARCH_NOT_ENABLED_DETAIL
+                    raise adapter.error(403, detail, ErrorKind.PERMISSION)
+                if not set(requested_tools) <= authorized_tools:
+                    raise adapter.error(403, WEB_ACCESS_TOOL_NOT_AUTHORIZED_DETAIL, ErrorKind.PERMISSION)
+                try:
+                    web_fetch_policy = _combined_fetch_policy(
+                        mandatory_policy,
+                        web_search_tool_entry if use_web_fetch else None,
                     )
+                except DisjointDomainAllowListsError as exc:
+                    raise adapter.error(403, WEB_ACCESS_DOMAINS_EXCLUDED_DETAIL, ErrorKind.PERMISSION) from exc
+                if web_search_tool_entry is not None:
+                    # Search keeps the platform contract's historical defaults
+                    # precedence. Fetch separately retains mandatory domains above.
+                    for key in ("max_results", "allowed_domains", "blocked_domains", "purpose_hint"):
+                        resolved_value = web_search_policy.get(key)
+                        if not web_search_tool_entry.get(key) and resolved_value is not None:
+                            web_search_tool_entry[key] = resolved_value
+                    workspace_options = web_search_policy.get("provider_options")
+                    if isinstance(workspace_options, dict):
+                        request_options = web_search_tool_entry.get("provider_options")
+                        web_search_tool_entry["provider_options"] = (
+                            {**workspace_options, **request_options}
+                            if isinstance(request_options, dict)
+                            else workspace_options
+                        )
             else:
-                # Standalone's counterpart to the resolve above: the configuration
-                # is a row in this deployment's own database, read here at
-                # admission because this is where the request's session is live
-                # and where the values it carries still have somewhere to land.
-                # The workspace comes off the key that authenticated the request,
-                # never off a header; a master-key request resolves to the
-                # deployment's default workspace, so an operator who has narrowed
-                # that workspace is narrowed by it too
-                # (`services/workspace_scope.py`).
-                #
-                # No row means no narrowing, which is what keeps a deployment that
-                # has configured nothing per-workspace behaving exactly as it did.
-                # A row may only narrow: it refuses the tool, lowers the result
-                # ceiling, and adds to the domains a search may not reach. It can
-                # never turn on a backend the deployment has not configured, which
-                # the missing-URL 400 above already settled.
                 if ctx.db is None or ctx.workspace_id is None:
-                    # Fail closed, for the reason the code-execution arm above
-                    # does: both are invariants on this path today, so this is
-                    # unreachable, which is exactly why it refuses rather than
-                    # falling through. What it guards is a *veto*, and skipping
-                    # the read would serve web search to a workspace whose row
-                    # says `enabled=False`, silently, on the day one of those
-                    # invariants stops holding.
                     raise adapter.error(500, WEB_SEARCH_CONFIG_UNRESOLVABLE_DETAIL, ErrorKind.API)
-                workspace_search = await resolve_workspace_web_search_config(ctx.db, ctx.workspace_id)
+                try:
+                    workspace_search = await resolve_workspace_web_search_config(ctx.db, ctx.workspace_id)
+                except InvalidStoredWebSearchDomainError as exc:
+                    raise adapter.error(503, WEB_SEARCH_CONFIG_INVALID_DETAIL, ErrorKind.API) from exc
+                mandatory_policy = DomainPolicy()
                 if workspace_search is not None:
                     if not workspace_search.enabled:
-                        raise adapter.error(403, WEB_SEARCH_NOT_ENABLED_DETAIL, ErrorKind.PERMISSION)
+                        detail = WEB_ACCESS_NOT_ENABLED_DETAIL if use_web_fetch else WEB_SEARCH_NOT_ENABLED_DETAIL
+                        raise adapter.error(403, detail, ErrorKind.PERMISSION)
+                    mandatory_policy = _policy_from_domain_values(
+                        workspace_search.allowed_domains,
+                        workspace_search.blocked_domains,
+                    )
+                try:
+                    web_fetch_policy = _combined_fetch_policy(
+                        mandatory_policy,
+                        web_search_tool_entry if use_web_fetch else None,
+                    )
+                except DisjointDomainAllowListsError as exc:
+                    raise adapter.error(403, WEB_ACCESS_DOMAINS_EXCLUDED_DETAIL, ErrorKind.PERMISSION) from exc
+                if workspace_search is not None and web_search_tool_entry is not None:
                     try:
                         web_search_tool_entry = narrow_web_search_tool_entry(
                             web_search_tool_entry,
                             workspace_search,
-                            # What the request would get with no row at all, so
-                            # a workspace ceiling above the operator's own
-                            # narrows nothing rather than raising it.
                             baseline_max_results=web_search_max_results_baseline(ctx.config),
                         )
                     except WorkspaceWebSearchDomainsExcludedError as exc:
@@ -2720,7 +3015,13 @@ async def prepare_gateway_tools(
 
         # Inside the try so a rejection releases the budget reservation the
         # request already took, like every other admission failure here.
-        await _require_tool_pricing(adapter, ctx, use_sandbox=use_sandbox, use_web_search=use_web_search)
+        await _require_tool_pricing(
+            adapter,
+            ctx,
+            use_sandbox=use_sandbox,
+            use_web_search=use_web_search,
+            use_web_fetch=use_web_fetch,
+        )
     except HTTPException:
         await release_reservation(ctx)
         raise
@@ -2764,6 +3065,9 @@ async def prepare_gateway_tools(
         web_search_tool_entry=web_search_tool_entry,
         web_search_url=web_search_url,
         web_search_auth_token=web_search_auth_token,
+        use_web_fetch=use_web_fetch,
+        web_fetch_tool_entry=web_fetch_tool_entry,
+        web_fetch_policy=web_fetch_policy,
         remaining_user_tools=remaining_user_tools,
         max_tool_iterations=min(
             max_tool_iterations or DEFAULT_MAX_TOOL_ITERATIONS,
@@ -2781,6 +3085,7 @@ async def _require_tool_pricing(
     *,
     use_sandbox: bool,
     use_web_search: bool,
+    use_web_fetch: bool = False,
 ) -> None:
     """Reject a request whose gateway-run tool cannot be billed.
 
@@ -2806,6 +3111,8 @@ async def _require_tool_pricing(
     tools = [CODE_EXECUTION_TOOL_NAME] if use_sandbox else []
     if use_web_search:
         tools.append(WEB_SEARCH_TOOL_NAME)
+    if use_web_fetch:
+        tools.append(WEB_FETCH_TOOL_NAME)
     for tool in tools:
         pricing = await find_model_pricing(
             ctx.db,
@@ -2861,6 +3168,20 @@ def _elapsed_ms(started_at: float | None) -> int | None:
     return round((time.monotonic() - started_at) * 1000)
 
 
+def _ttft_ms(started_at: float | None, first_chunk_at: float | None) -> int | None:
+    """Milliseconds between ``started_at`` and the first streamed chunk.
+
+    Unlike ``_elapsed_ms`` this is not measured against "now": time-to-first-token
+    is fixed the moment the first chunk arrives, and every settlement callback
+    (on_complete, on_no_usage, on_error, on_incomplete) fires after the stream has
+    finished, when "now" is the wrong end of the interval. None when no chunk ever
+    arrived (a stream that failed before yielding anything has no TTFT to record).
+    """
+    if started_at is None or first_chunk_at is None:
+        return None
+    return round((first_chunk_at - started_at) * 1000)
+
+
 async def log_usage(
     db: AsyncSession,
     log_writer: LogWriter,
@@ -2875,6 +3196,7 @@ async def log_usage(
     status_code: int | None = None,
     cost_override: Decimal | float | None = None,
     latency_ms: int | None = None,
+    ttft_ms: int | None = None,
     counts_toward_budget: bool = True,
     attribution: RoutingAttribution | None = None,
     tool_tally: ToolUsageTally | None = None,
@@ -2916,6 +3238,8 @@ async def log_usage(
         cost_override: Fixed amount to record when billing without provider usage
         latency_ms: Total server-side request duration in milliseconds, or None
             when the caller has no meaningful duration to record
+        ttft_ms: Milliseconds from request start to the first streamed chunk, or
+            None for a non-streaming request or a stream that never yielded one
         attribution: Which routing policy produced this row and where in its plan,
             or None for a request that named a plain model
         workspace_id: The workspace already resolved for this request (from
@@ -2946,6 +3270,7 @@ async def log_usage(
         error_message=error,
         status_code=status_code,
         latency_ms=latency_ms,
+        ttft_ms=ttft_ms,
         counts_toward_budget=counts_toward_budget,
         policy_name=attribution.policy_name if attribution else None,
         selection_reason=attribution.selection_reason if attribution else None,
@@ -3334,15 +3659,8 @@ async def dispatch_non_stream(
             kwargs = adapter.inject_hints(call_kwargs, backend.purpose_hints(), header=tool_ctx.tools_header)
             return await adapter.run_tool_loop(kwargs, backend, tool_ctx.max_tool_iterations, on_first_response)
 
-    assert tool_ctx.use_web_search
-    assert tool_ctx.web_search_tool_entry is not None  # guaranteed by the web_search opt-in
-    async with _build_web_search_backend(
-        base_url=tool_ctx.web_search_url,
-        tool_entry=tool_ctx.web_search_tool_entry,
-        auth_token=tool_ctx.web_search_auth_token,
-        config=tool_ctx.config,
-        tally=tool_ctx.tally,
-    ) as web_backend:
+    assert tool_ctx.use_web_search or tool_ctx.use_web_fetch
+    async with tool_ctx.build_web_retrieval_backend() as web_backend:
         kwargs = adapter.inject_hints(call_kwargs, web_backend.purpose_hints(), header=tool_ctx.tools_header)
         return await adapter.run_tool_loop(
             kwargs,
@@ -3418,15 +3736,8 @@ async def open_stream(
         await sandbox_backend.__aenter__()  # may raise SandboxNotReachableError
         return _eager_backend_stream(adapter, kwargs, sandbox_backend, tool_ctx)
 
-    assert tool_ctx.use_web_search
-    assert tool_ctx.web_search_tool_entry is not None  # guaranteed by the web_search opt-in
-    web_search_backend = _build_web_search_backend(
-        base_url=tool_ctx.web_search_url,
-        tool_entry=tool_ctx.web_search_tool_entry,
-        auth_token=tool_ctx.web_search_auth_token,
-        config=tool_ctx.config,
-        tally=tool_ctx.tally,
-    )
+    assert tool_ctx.use_web_search or tool_ctx.use_web_fetch
+    web_search_backend = tool_ctx.build_web_retrieval_backend()
     await web_search_backend.__aenter__()  # may raise WebSearchNotReachableError
     return _eager_backend_stream(adapter, kwargs, web_search_backend, tool_ctx)
 
@@ -3550,6 +3861,11 @@ def build_streaming_response(
       reservation does not leak.
     """
     platform_active = platform_correlation_id is not None
+    first_chunk_at: float | None = None
+
+    def _on_first_chunk() -> None:
+        nonlocal first_chunk_at
+        first_chunk_at = time.monotonic()
 
     async def _on_complete(usage_data: CompletionUsage) -> SettledCost | None:
         if platform_active:
@@ -3578,6 +3894,7 @@ def build_streaming_response(
             user_id=user_id,
             usage_override=usage_data,
             latency_ms=_elapsed_ms(started_at),
+            ttft_ms=_ttft_ms(started_at, first_chunk_at),
             counts_toward_budget=_handle_counts_toward_budget(reservation),
             attribution=attribution,
             tool_tally=tool_tally,
@@ -3623,6 +3940,7 @@ def build_streaming_response(
                 endpoint=adapter.endpoint,
                 user_id=user_id,
                 latency_ms=_elapsed_ms(started_at),
+                ttft_ms=_ttft_ms(started_at, first_chunk_at),
                 counts_toward_budget=reservation.counts_toward_budget,
                 attribution=attribution,
                 tool_tally=tool_tally,
@@ -3650,6 +3968,7 @@ def build_streaming_response(
             error="stream completed without usage data" if policy == "fail" else None,
             cost_override=reservation.estimate,
             latency_ms=_elapsed_ms(started_at),
+            ttft_ms=_ttft_ms(started_at, first_chunk_at),
             counts_toward_budget=reservation.counts_toward_budget,
             attribution=attribution,
             tool_tally=tool_tally,
@@ -3695,6 +4014,7 @@ def build_streaming_response(
             error=str(exc),
             status_code=failure_status_code(exc),
             latency_ms=_elapsed_ms(started_at),
+            ttft_ms=_ttft_ms(started_at, first_chunk_at),
             counts_toward_budget=_handle_counts_toward_budget(reservation),
             attribution=attribution,
             tool_tally=tool_tally,
@@ -3731,6 +4051,7 @@ def build_streaming_response(
                 user_id=user_id,
                 error="client disconnected before the stream completed",
                 latency_ms=_elapsed_ms(started_at),
+                ttft_ms=_ttft_ms(started_at, first_chunk_at),
                 counts_toward_budget=_handle_counts_toward_budget(reservation),
                 tool_tally=tool_tally,
                 workspace_id=workspace_id,
@@ -3773,6 +4094,7 @@ def build_streaming_response(
             settle_before_done=platform_active,
             is_cost_carrier=adapter.is_stream_cost_carrier if platform_active else None,
             attach_settlement=_attach_inline_cost if platform_active else None,
+            on_first_chunk=_on_first_chunk,
         ),
         media_type="text/event-stream",
         headers=headers,
@@ -3927,13 +4249,9 @@ async def run_single_attempt_stream(
         await release_reservation(ctx)
         raise
     except SandboxNotReachableError as exc:
-        # The sandbox is part of the gateway's own infra, not the LLM
-        # provider; a distinct status stops operators chasing a "provider
-        # outage" that is actually the sandbox container being down. 502
-        # keeps "upstream dependency failed" semantics.
         logger.error("Sandbox unreachable for %s:%s: %s", provider, model, exc)
         await release_reservation(ctx)
-        raise adapter.error(502, SANDBOX_UNREACHABLE_DETAIL, ErrorKind.API) from exc
+        raise _sandbox_error(adapter, exc) from exc
     except WebSearchNotReachableError as exc:
         logger.error("Web search backend unreachable for %s:%s: %s", provider, model, exc)
         await release_reservation(ctx)
@@ -4070,17 +4388,8 @@ async def run_streaming_with_fallback(
             )
         elif tool_ctx.use_sandbox:
             pool_for_loop = await backend_stack.enter_async_context(tool_ctx.build_sandbox_backend())
-        elif tool_ctx.use_web_search:
-            assert tool_ctx.web_search_tool_entry is not None  # guaranteed by the web_search opt-in
-            pool_for_loop = await backend_stack.enter_async_context(
-                _build_web_search_backend(
-                    base_url=tool_ctx.web_search_url,
-                    tool_entry=tool_ctx.web_search_tool_entry,
-                    auth_token=tool_ctx.web_search_auth_token,
-                    config=tool_ctx.config,
-                    tally=tool_ctx.tally,
-                ),
-            )
+        elif tool_ctx.use_web_search or tool_ctx.use_web_fetch:
+            pool_for_loop = await backend_stack.enter_async_context(tool_ctx.build_web_retrieval_backend())
     except BaseException:
         # Eager-open failure (e.g. SandboxNotReachableError): propagate so the
         # route handler maps it to the existing HTTP status. Nothing to clean
@@ -4211,25 +4520,22 @@ async def _stream_with_stack_cleanup(
         await backend_stack.aclose()
 
 
+def _sandbox_error(adapter: FormatAdapter[Any, Any], exc: SandboxNotReachableError) -> HTTPException:
+    if isinstance(exc, SandboxUnavailableError):
+        headers = {"Retry-After": exc.retry_after} if exc.retry_after is not None else None
+        return adapter.error(503, SANDBOX_UNAVAILABLE_DETAIL, ErrorKind.API, headers)
+    return adapter.error(502, SANDBOX_UNREACHABLE_DETAIL, ErrorKind.API)
+
+
 def raise_all_streaming_attempts_failed(
     adapter: FormatAdapter[Any, Any],
     exc: Exception,
     route: ResolvedRoute,
 ) -> NoReturn:
-    """Map a terminal :func:`run_streaming_with_fallback` failure (no attempt
-    yielded a first chunk) onto the format's wire error.
-
-    Gateway-side backend failures (sandbox / web_search eager-open) get a 502
-    with a backend-specific detail so operators don't chase a fake provider
-    outage. A single attempt preserves its classified provider error. Once a
-    multi-attempt route is exhausted, it surfaces the aggregate result: 504 when
-    the last failure was a timeout, 429 when it was a rate limit, and 502
-    otherwise. A 502 for an exhausted-by-rate-limit route would tell a client
-    that was just asked to back off that it may retry now.
-    """
+    """Map pre-stream failures, preserving sandbox retry hints and provider status."""
     if isinstance(exc, SandboxNotReachableError):
         logger.error("Sandbox unreachable request_id=%s: %s", route.request_id, exc)
-        raise adapter.error(502, SANDBOX_UNREACHABLE_DETAIL, ErrorKind.API) from exc
+        raise _sandbox_error(adapter, exc) from exc
     if isinstance(exc, WebSearchNotReachableError):
         logger.error("Web search backend unreachable request_id=%s: %s", route.request_id, exc)
         raise adapter.error(502, WEB_SEARCH_UNREACHABLE_DETAIL, ErrorKind.API) from exc
@@ -4341,15 +4647,10 @@ async def run_platform_non_stream(
             max_tool_iterations=tool_ctx.max_tool_iterations,
         )
     except SandboxNotReachableError as exc:
-        # The sandbox is part of the gateway's own infra, not the LLM
-        # provider; a distinct status stops operators chasing a "provider
-        # outage" that is actually the sandbox container being down. 502
-        # keeps "upstream dependency failed" semantics. Runs through the
-        # inline flush below because the error response drops the queued
-        # BackgroundTasks for any earlier attempts' reports.
+        # Error responses drop queued tasks; flush earlier attempt reports.
         logger.error("Sandbox unreachable request_id=%s: %s", route.request_id, exc)
         await _flush_pending_usage_reports(config, pending_error_reports, route.request_id, session_label)
-        raise adapter.error(502, SANDBOX_UNREACHABLE_DETAIL, ErrorKind.API) from exc
+        raise _sandbox_error(adapter, exc) from exc
     except WebSearchNotReachableError as exc:
         logger.error("Web search backend unreachable request_id=%s: %s", route.request_id, exc)
         await _flush_pending_usage_reports(config, pending_error_reports, route.request_id, session_label)
@@ -4652,7 +4953,7 @@ async def run_standalone_non_stream(
         # sandbox container being down.
         logger.error("Sandbox unreachable for %s:%s: %s", provider, model, e)
         await release_reservation(ctx)
-        raise adapter.error(502, SANDBOX_UNREACHABLE_DETAIL, ErrorKind.API) from e
+        raise _sandbox_error(adapter, e) from e
     except WebSearchNotReachableError as e:
         logger.error("Web search backend unreachable for %s:%s: %s", provider, model, e)
         await release_reservation(ctx)

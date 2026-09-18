@@ -3,12 +3,17 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { OrganizationBudget, OrganizationSpendCeiling } from "@/client"
+import type {
+  OrganizationBudget,
+  OrganizationContext,
+  OrganizationSpendCeiling,
+} from "@/client"
 import { OrganizationBudgetsPage } from "@/features/budgets/OrganizationBudgetsPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import {
   bootstrap,
+  organization,
   organizationContext,
   organizationSpendCeiling as spendCeiling,
   workspace,
@@ -48,15 +53,28 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 // Mocked at the `@/client` boundary (a real `fetch`), per the standards: the
 // hooks and their invalidation are part of what is under test.
+function catalogModel(id: string) {
+  return {
+    id,
+    object: "model",
+    created: 0,
+    owned_by: id.split(":")[0],
+    pricing_source: "none",
+  }
+}
+
 function mockApi({
   budgets = [organizationBudget()],
   ceilings = [] as OrganizationSpendCeiling[],
   writeStatus = 201,
   budgetsGate,
+  models = [] as string[],
 }: {
   budgets?: OrganizationBudget[]
   ceilings?: OrganizationSpendCeiling[]
   writeStatus?: number
+  /** What GET /v1/models serves, which is where the provider picker looks. */
+  models?: string[]
   // Holds the budget list in flight, so a dialog can be opened before it
   // lands: that is when a default arriving after mount is observable.
   budgetsGate?: Promise<unknown>
@@ -85,6 +103,9 @@ function mockApi({
       if (method === "DELETE") return jsonResponse({ message: "deleted" })
       return jsonResponse(organizationBudget(), writeStatus)
     }
+    if (url.endsWith(`${API_ROOT}/models`)) {
+      return jsonResponse({ object: "list", data: models.map(catalogModel) })
+    }
     if (url.includes(`${API_ROOT}/workspaces`)) {
       return jsonResponse({
         data: [workspace({ name: "Engineering" })],
@@ -96,25 +117,35 @@ function mockApi({
   return requests
 }
 
+// The caller this page exists for: an admin who does not operate the
+// deployment. The fixture defaults to an owner who does, which is the one
+// caller that would reach the other page instead.
+const admin = (overrides: Partial<OrganizationContext> = {}) =>
+  organizationContext({
+    role: "admin",
+    deployment_operator: false,
+    ...overrides,
+  })
+
 function renderPage() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(
+  const tree = (context: OrganizationContext) => (
     <DeploymentProvider value={bootstrap()}>
       <QueryClientProvider client={client}>
-        <OrganizationBudgetsPage
-          // The caller this page exists for: an admin who does not operate the
-          // deployment. The fixture defaults to an owner who does, which is the
-          // one caller that would reach the other page instead.
-          organization={organizationContext({
-            role: "admin",
-            deployment_operator: false,
-          })}
-        />
+        <OrganizationBudgetsPage organization={context} />
       </QueryClientProvider>
-    </DeploymentProvider>,
+    </DeploymentProvider>
   )
+  const result = render(tree(admin()))
+  // Switching organization invalidates every query rather than remounting this
+  // page, so the page seeing a new context in place is what a switch looks like
+  // from here.
+  return {
+    ...result,
+    switchTo: (context: OrganizationContext) => result.rerender(tree(context)),
+  }
 }
 
 afterEach(() => {
@@ -212,6 +243,21 @@ describe("OrganizationBudgetsPage", () => {
     })
   })
 
+  it("says what an unnamed budget will be called, before it is saved", async () => {
+    // The name is optional, and a budget saved without one is handed out under
+    // what it caps (#2130) rather than under the head of its id.
+    mockApi({ budgets: [] })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole("grid", { name: "Organization budgets" })
+
+    await user.click(screen.getByRole("button", { name: "Add budget" }))
+    await user.type(screen.getByLabelText("Limit (USD)"), "75")
+    expect(
+      screen.getByText(/Left blank, that is "\$75.00 \/ month"/),
+    ).toBeInTheDocument()
+  })
+
   it("refuses a limit that is not an amount rather than sending it", async () => {
     mockApi({ budgets: [] })
     const user = userEvent.setup()
@@ -291,6 +337,38 @@ describe("OrganizationBudgetsPage", () => {
       name: "New spend ceiling",
     })
     expect(within(reopened).queryByRole("alert")).toBeNull()
+  })
+
+  it("narrows a ceiling to a provider picked from the ones served here", async () => {
+    // The instance is free text on the wire (a provider configured in
+    // config.yml has no row to point at), so a typo used to store a cap that
+    // narrowed to nothing and then quietly never bit. The list is read off the
+    // catalog because /v1/providers is operator-only and this page is the one
+    // an admin who is not an operator lands on.
+    const requests = mockApi({ models: ["openai-eu:gpt-4o"] })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole("button", { name: "Add ceiling" }))
+    const dialog = await screen.findByRole("dialog", {
+      name: "New spend ceiling",
+    })
+    await user.click(
+      within(dialog).getByRole("button", { name: /show suggestions/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "openai-eu" }))
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add ceiling" }),
+    )
+
+    await waitFor(() => {
+      const write = requests.find(
+        (request) =>
+          request.method === "POST" &&
+          request.url.includes(`${API_ROOT}/organizations/me/spend-ceilings`),
+      )
+      expect(write?.body).toMatchObject({ provider_key_id: "openai-eu" })
+    })
   })
 
   it("warns that deleting a held budget will be refused, before trying", async () => {
@@ -389,11 +467,147 @@ describe("OrganizationBudgetsPage", () => {
         request.url.includes(`${API_ROOT}/organizations/me/spend-ceilings`),
     )
     // The scope an admin reaches this page to set, held to the organization's
-    // own first budget.
+    // own first budget. `scope_id` is asserted because the endpoint resolves it
+    // as a uuid: a word standing in for "the organization" is refused, and the
+    // scope type alone cannot tell the two apart (otari-ai#2147).
     expect(posted?.body).toMatchObject({
       scope_type: "organization",
+      scope_id: organization().id,
       budget_id: organizationBudget().budget_id,
     })
+  })
+
+  it("creates a ceiling against the workspace that was picked", async () => {
+    // The other half of the target control. Both options carry a real id, so
+    // the one guard against them being swapped is that each posts its own.
+    const requests = mockApi()
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole("grid", { name: "Organization spend ceilings" })
+
+    await user.click(screen.getByRole("button", { name: "Add ceiling" }))
+    await user.click(screen.getByRole("button", { name: /Capping/ }))
+    await user.click(
+      await screen.findByRole("option", { name: "Engineering (workspace)" }),
+    )
+    await user.click(
+      screen
+        .getAllByRole("button", { name: "Add ceiling" })
+        .at(-1) as HTMLElement,
+    )
+
+    await waitFor(() => {
+      const posted = requests.find(
+        (request) =>
+          request.method === "POST" &&
+          request.url.includes(`${API_ROOT}/organizations/me/spend-ceilings`),
+      )
+      expect(posted?.body).toMatchObject({
+        scope_type: "workspace",
+        scope_id: workspace().id,
+      })
+    })
+  })
+
+  it("seeds the new organization after a switch, not the one it opened on", async () => {
+    // The dialog seeds its target on mount and this page is not remounted by a
+    // switch, so without the organization in its key the next open would post
+    // the previous organization's id, which is not among the options it offers
+    // and submits as a workspace.
+    const requests = mockApi()
+    const user = userEvent.setup()
+    const { switchTo } = renderPage()
+    await screen.findByRole("grid", { name: "Organization spend ceilings" })
+    await user.click(screen.getByRole("button", { name: "Add ceiling" }))
+    await screen.findByRole("dialog", { name: "New spend ceiling" })
+
+    const moved = organization({
+      id: "77777777-7777-7777-7777-777777777777",
+      name: "Second Organization",
+    })
+    switchTo(admin({ organization: moved }))
+
+    // The frame opened on the previous organization is gone, so this is a fresh
+    // open against the new one.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "New spend ceiling" }),
+      ).toBeNull(),
+    )
+    await user.click(screen.getByRole("button", { name: "Add ceiling" }))
+    await screen.findByRole("dialog", { name: "New spend ceiling" })
+    await user.click(
+      screen
+        .getAllByRole("button", { name: "Add ceiling" })
+        .at(-1) as HTMLElement,
+    )
+
+    await waitFor(() => {
+      const posted = requests.find(
+        (request) =>
+          request.method === "POST" &&
+          request.url.includes(`${API_ROOT}/organizations/me/spend-ceilings`),
+      )
+      expect(posted?.body).toMatchObject({
+        scope_type: "organization",
+        scope_id: moved.id,
+      })
+    })
+  })
+
+  it("drops an open edit when the organization changes under it", async () => {
+    // `editing` and `pendingDelete` hold rows, not ids, and a switch leaves this
+    // page mounted. Without the reset the frame stays open naming a ceiling from
+    // the organization the reader has just left, and saving PATCHes an id the
+    // new organization does not own.
+    const requests = mockApi({ ceilings: [spendCeiling()] })
+    const user = userEvent.setup()
+    const { switchTo } = renderPage()
+    const table = await screen.findByRole("grid", {
+      name: "Organization spend ceilings",
+    })
+    await user.click(await within(table).findByRole("button", { name: "Edit" }))
+    await screen.findByRole("dialog", { name: "Edit spend ceiling" })
+
+    switchTo(
+      admin({
+        organization: organization({
+          id: "77777777-7777-7777-7777-777777777777",
+          name: "Second Organization",
+        }),
+      }),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Edit spend ceiling" }),
+      ).toBeNull(),
+    )
+    expect(requests.some((request) => request.method === "PATCH")).toBe(false)
+  })
+
+  it("offers an unnamed budget by what it caps, without saying the figure twice", async () => {
+    // The head of a uuid is not something an admin can pick by (#2130), and the
+    // option already carries the limit, so a derived label must not repeat it.
+    mockApi({
+      budgets: [
+        organizationBudget({
+          budget_id: "04f2f38a-1111-1111-1111-111111111111",
+          name: null,
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole("grid", { name: "Organization spend ceilings" })
+
+    await user.click(screen.getByRole("button", { name: "Add ceiling" }))
+    await user.click(screen.getByRole("button", { name: /Budget/ }))
+
+    expect(
+      await screen.findByRole("option", { name: "$250.00 / month" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("option", { name: /04f2f38a/ })).toBeNull()
   })
 
   it("will not offer a ceiling with no budget to hold", async () => {

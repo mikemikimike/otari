@@ -18,8 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.models import hash_key
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import APIKey, UsageLog, WorkspaceActivationState
-from gateway.models.tenancy import Organization, User, Workspace
+from gateway.models.api_keys import APIKey
+from gateway.models.tenancy import Organization, User, Workspace, WorkspaceActivationState
+from gateway.models.usage import UsageLog
 from gateway.repositories.tenancy import (
     OrganizationMemberRepository,
     OrganizationRepository,
@@ -312,6 +313,10 @@ async def test_issuing_the_key_twice_rotates_one_row_rather_than_collecting_two(
     assert first.key_id == second.key_id
     assert second.key_name == ACTIVATION_KEY_NAME
     assert second.key_prefix is not None and second.key.startswith(second.key_prefix)
+    # The rotation branch re-fingerprints both halves; a stale suffix would name the
+    # plaintext the first call handed out, which no longer authenticates.
+    assert second.key_suffix is not None and second.key.endswith(second.key_suffix)
+    assert first.key_suffix is not None and first.key.endswith(first.key_suffix)
 
     keys = await _keys_in(async_db, workspace.id)
     assert [key.key_name for key in keys] == [ACTIVATION_KEY_NAME]

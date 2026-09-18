@@ -1,12 +1,14 @@
 # Built-in tools
 
-Otari can run two tools during Chat Completions, Messages, and Responses:
+Otari can run three tools during Chat Completions, Messages, and Responses:
 
 - `otari_code_execution`, a sandboxed code session
 - `otari_web_search`, a search backend
+- `otari_web_fetch`, a bounded public-web fetcher
 
-Each tool is optional and needs a separate backend. Requests cannot currently
-combine these tools with each other or with MCP servers.
+Code execution and Search need separate backends. Fetch runs in the gateway.
+Search and Fetch may be combined, but web tools cannot be combined with code
+execution or MCP servers.
 
 Inspect the tools available on a running deployment:
 
@@ -51,8 +53,9 @@ here, so a float that happens to be whole is rejected too.
 Past the cap, the model is told the search was refused and can answer without it.
 An Anthropic-native declaration is answered in its own vocabulary, a
 `web_search_tool_result` carrying `error_code: max_uses_exceeded`; every other
-caller gets the same `[tool error]` string a failed tool produces. A request
-without `max_uses` is bounded only by `max_tool_iterations`.
+caller gets the same `[tool error]` string a failed tool produces. Even without
+`max_uses`, requests remain bounded by `max_tool_iterations` and the shared
+[10-call Search and Fetch limit](#web-fetch).
 
 ### Who may read the settings
 
@@ -70,6 +73,7 @@ In standalone mode, gateway-run tools are priced per successful call:
 ```text
 otari:code_execution
 otari:web_search
+otari:web_fetch
 ```
 
 The dashboard accepts dollars per call. The pricing API stores the value in
@@ -136,7 +140,56 @@ Workspace-selected images must come from
 The authenticating API key determines the workspace. With no policy, deployment
 defaults apply. In hybrid mode, the control plane resolves the policy instead.
 
-## Web search
+## Web retrieval
+
+### Web fetch
+
+Fetch is disabled by default because it permits model-directed outbound requests.
+Enable it at deployment time with `web_fetch_enabled: true` in `config.yml` or
+`OTARI_WEB_FETCH_ENABLED=true` in the environment. When disabled,
+`otari_web_fetch` remains discoverable with `"available": false`, and requests
+declaring it are rejected without affecting other tools or ordinary completion
+requests.
+
+Declare Fetch on any completion API with `{"type": "otari_web_fetch"}`. The
+model-facing function accepts exactly one field:
+
+```json
+{"url": "https://example.com/article"}
+```
+
+Otari retrieves one public HTTP or HTTPS URL, validates every redirect, and
+extracts HTML, textual formats (including Markdown, JSON, XML, and JavaScript),
+or text-bearing PDF content. Private, loopback, link-local, and otherwise unsafe
+destinations are rejected. Provider-native Fetch declarations are passed
+through unchanged rather than intercepted.
+
+The tool result contains the display-safe source URL, the content type, an
+optional requested URL when redirects changed the destination, extracted
+content, and a warning that fetched content is untrusted. URL query strings and
+fragments are omitted from the displayed metadata. The complete result is
+limited to 50 KiB of valid UTF-8; the downloaded body is limited to 5 MiB and
+PDF extraction is also bounded by page, time, memory, and intermediate-output
+limits.
+
+Search and Fetch share a limit of 10 attempted calls per request across model
+turns and routing attempts. Invalid, blocked, and failed calls consume that
+allowance. Attempting an eleventh call aborts the tool loop rather than returning
+a `[tool error]` for the model to recover from. Non-streaming requests return
+HTTP `422`; a response that is already streaming emits an error event and ends
+without a completed answer.
+
+Successful Fetch calls are billed under `otari:web_fetch`; ordinary Fetch
+failures return sanitized tool errors, are counted as errors, and are not billed.
+
+Declaring Fetch authorizes the model to make arbitrary public GET requests
+within the workspace domain policy. Fetched content can contain prompt
+injection. For example, a malicious page may instruct the model to encode
+conversation or tool data into a later Fetch URL on an attacker-controlled
+domain. Disable Fetch or restrict allowed domains when that residual egress risk
+is unacceptable.
+
+### Web search
 
 Otari reaches a licensed search API directly. Set `web_search_provider` to
 `tavily` or `brave` and `web_search_provider_api_key` to that provider's key;
@@ -162,6 +215,41 @@ Public SearXNG engines may rate-limit automated traffic, so prefer a licensed
 provider for production. `web_search_url` points at any other backend exposing
 a SearXNG-compatible `/search?format=json` endpoint, and a configured provider
 wins over it.
+
+When content extraction is enabled, Otari retrieves each result through its
+bounded public-web client. It validates and pins the resolved address before
+connecting, validates every redirect, rejects HTTPS-to-HTTP downgrades, follows
+at most five redirects, and applies one five-second network deadline across DNS,
+connection setup, redirects, and body streaming. The decoded response body is
+limited to 5 MiB.
+
+Result-page retrieval ignores environment proxies by default. To use an
+operator-controlled proxy that blocks unsafe destination addresses, set
+`web_retrieval_trust_env_proxy: true` in the gateway configuration or
+`OTARI_WEB_RETRIEVAL_TRUST_ENV_PROXY=true`. Retrieval then honors `HTTP_PROXY`,
+`HTTPS_PROXY`, and the `ALL_PROXY` fallback (including lowercase forms), with
+`NO_PROXY` exclusions. Only HTTP(S) proxy URLs are supported. Proxy settings
+are read when the retrieval client is created.
+
+This opt-in delegates connection-time address safety to the proxy, which must
+block internal and other unsafe addresses after resolving each destination.
+A general forwarding proxy does not provide this protection automatically.
+Otari still applies local DNS/address checks, domain policy, redirect checks,
+and response limits, so destination DNS must also work on the gateway.
+Requests without an applicable proxy, including `NO_PROXY` matches, remain
+IP-pinned. A failed proxy request never falls back to a direct connection.
+This deployment-only setting cannot be enabled by a tool request or workspace.
+
+Otari extracts HTML, textual formats (including Markdown, JSON, XML, and
+JavaScript), and text-bearing PDFs. HTML and PDF parsing runs in a supervised
+single-worker process with fixed time, memory, queue, page, and intermediate
+output limits. Unsafe, unreachable, unsupported, empty, timed-out, or
+unextractable results fall back to the search provider's snippet. A provider's
+own `extracted_content` still takes precedence and is not fetched locally.
+
+Each complete `web_search` tool result is limited to 50 KiB of valid UTF-8,
+including any truncation notice. The existing 1,500-character per-result content
+limit still applies before this overall result limit.
 
 Where the search key must not sit on the machine serving traffic, a deployment
 can also serve the search itself at `GET /api/v1/web-search/search`. This is the
@@ -193,19 +281,23 @@ together.
 
 A runnable example lives under `demo/web-search/`.
 
-### Per-workspace search policy
+### Per-workspace web-access policy
 
-A workspace search policy can:
+A workspace web-access policy can:
 
-- disable search
+- disable `otari_web_search`, `otari_web_fetch`, and `POST /api/v1/search`
 - lower `max_results`
-- narrow allowed domains or add blocked domains
+- narrow allowed domains or add blocked domains for Search results and Fetch
+  destinations, including redirects
 - provide a default purpose hint
 - supply provider options
 
 Manage it under `/api/v1/workspaces/{workspace_id}/web-search` or from Tools.
+`max_results`, the purpose hint, and provider options apply only to Search.
 Workspace values can narrow deployment policy but cannot enable a missing
-backend or relax an operator limit.
+backend, enable deployment-disabled Fetch, or relax an operator limit. Fetch
+remains available subject to deployment and workspace policy when no Search
+backend is configured.
 
 The policy also applies to direct search where relevant. In hybrid mode, the
 connected control plane supplies workspace search configuration.

@@ -35,6 +35,7 @@ function pricingOverride(
     cache_write_price_per_million: null,
     cache_write_1h_price_per_million: null,
     pricing_tiers: [],
+    unit: "tokens",
     effective_from: "2026-08-01T00:00:00Z",
     effective_to: null,
     created_at: "2026-08-01T00:00:00Z",
@@ -46,16 +47,33 @@ function pricingOverride(
 // Mocked at the `@/client` boundary (a real `fetch`), which is what the standards
 // call for: the hooks and their invalidation are part of what is under test, so
 // stubbing them would leave the interesting half uncovered.
+function catalogModel(id: string, deployment_managed = false) {
+  return {
+    id,
+    object: "model",
+    created: 0,
+    owned_by: id.split(":")[0],
+    pricing_source: "none",
+    deployment_managed,
+  }
+}
+
 function mockApi({
   context = organizationContext(),
   overrides = [] as OrganizationPricingOverride[],
   writeStatus = 201,
   writeBody = pricingOverride() as unknown,
+  models = [] as string[],
+  managedModels = [] as string[],
 }: {
   context?: OrganizationContext
   overrides?: OrganizationPricingOverride[]
   writeStatus?: number
   writeBody?: unknown
+  /** What GET /v1/models serves, which is where the model-key picker looks. */
+  models?: string[]
+  /** Catalog entries the deployment supplies the credential for. */
+  managedModels?: string[]
 } = {}) {
   const requests: RecordedRequest[] = []
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -72,6 +90,15 @@ function mockApi({
       }
       return jsonResponse(writeBody, writeStatus)
     }
+    if (url.endsWith(`${API_ROOT}/models`)) {
+      return jsonResponse({
+        object: "list",
+        data: [
+          ...models.map((id) => catalogModel(id)),
+          ...managedModels.map((id) => catalogModel(id, true)),
+        ],
+      })
+    }
     return jsonResponse(context)
   })
   return requests
@@ -81,7 +108,7 @@ function mockApi({
 // mounts, so a page that later grows a <Link> or URL state is already covered.
 // Awaited, because the router resolves its first location asynchronously and a
 // synchronous DOM read would race it.
-function renderPage() {
+function renderPage(url = "/organization/pricing") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -89,6 +116,7 @@ function renderPage() {
     <QueryClientProvider client={client}>
       <RateOverridesCard />
     </QueryClientProvider>,
+    { url },
   )
 }
 
@@ -174,7 +202,7 @@ describe("RateOverridesCard", () => {
       await screen.findByRole("button", { name: /add override/i }),
     )
     await user.type(
-      await screen.findByLabelText(/model key/i),
+      await screen.findByRole("combobox", { name: /model key/i }),
       "anthropic:claude-sonnet-5",
     )
     await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
@@ -191,6 +219,71 @@ describe("RateOverridesCard", () => {
         model_key: "anthropic:claude-sonnet-5",
         input_price_per_million: 3,
         output_price_per_million: 15,
+      })
+    })
+  })
+
+  it("opens an add on the selector the catalog linked with", async () => {
+    mockApi({ overrides: [] })
+
+    await renderPage(
+      "/organization/pricing?override=nebius%3Azai-org%2FGLM-5.3",
+    )
+
+    const dialog = await screen.findByRole("dialog")
+    expect(
+      within(dialog).getByRole("combobox", { name: /model key/i }),
+    ).toHaveValue("nebius:zai-org/GLM-5.3")
+  })
+
+  it("does not open the linked editor for a member who cannot manage", async () => {
+    mockApi({
+      overrides: [],
+      context: organizationContext({ role: "member" }),
+    })
+
+    await renderPage(
+      "/organization/pricing?override=nebius%3Azai-org%2FGLM-5.3",
+    )
+
+    await screen.findByText(/no override yet/i)
+    expect(screen.queryByRole("dialog")).toBeNull()
+  })
+
+  it("fills the model key from the catalog, so a rate is not stored under a typo", async () => {
+    // The catalog rather than /v1/models/discoverable: this card answers to an
+    // organization admin, who is refused the deployment-operator read.
+    const requests = mockApi({
+      overrides: [],
+      models: ["anthropic:claude-sonnet-5"],
+    })
+    const user = userEvent.setup()
+
+    await renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: /add override/i }),
+    )
+    // The trigger, not the input: the field opens on typing, so that an
+    // autofocused list does not hide the rest of the form from a screen reader.
+    await user.click(
+      await screen.findByRole("button", { name: /show suggestions/i }),
+    )
+    await user.click(
+      await screen.findByRole("option", { name: "anthropic:claude-sonnet-5" }),
+    )
+    await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
+    await user.type(screen.getByLabelText(/output, per 1m tokens/i), "15")
+    await user.click(screen.getByRole("button", { name: /^add override$/i }))
+
+    await waitFor(() => {
+      const write = requests.find(
+        (request) =>
+          request.method === "POST" &&
+          request.url.includes(`${API_ROOT}/organizations/me/pricing`),
+      )
+      expect(write?.body).toMatchObject({
+        model_key: "anthropic:claude-sonnet-5",
       })
     })
   })
@@ -228,7 +321,7 @@ describe("RateOverridesCard", () => {
       await screen.findByRole("button", { name: /add override/i }),
     )
     await user.type(
-      await screen.findByLabelText(/model key/i),
+      await screen.findByRole("combobox", { name: /model key/i }),
       "anthropic:claude-sonnet-5",
     )
     await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
@@ -245,7 +338,9 @@ describe("RateOverridesCard", () => {
 
     const reopened = await screen.findByRole("dialog")
     expect(within(reopened).queryByRole("alert")).toBeNull()
-    expect(within(reopened).getByLabelText(/model key/i)).toHaveValue("")
+    expect(
+      within(reopened).getByRole("combobox", { name: /model key/i }),
+    ).toHaveValue("")
   })
 
   it("refuses a model key with no provider prefix before sending it", async () => {
@@ -257,7 +352,10 @@ describe("RateOverridesCard", () => {
     await user.click(
       await screen.findByRole("button", { name: /add override/i }),
     )
-    await user.type(await screen.findByLabelText(/model key/i), "gpt-4o")
+    await user.type(
+      await screen.findByRole("combobox", { name: /model key/i }),
+      "gpt-4o",
+    )
     await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
     await user.type(screen.getByLabelText(/output, per 1m tokens/i), "15")
 
@@ -286,7 +384,10 @@ describe("RateOverridesCard", () => {
     await user.click(
       await screen.findByRole("button", { name: /add override/i }),
     )
-    await user.type(await screen.findByLabelText(/model key/i), "openai:gpt-4o")
+    await user.type(
+      await screen.findByRole("combobox", { name: /model key/i }),
+      "openai:gpt-4o",
+    )
     await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
     await user.type(screen.getByLabelText(/output, per 1m tokens/i), "15")
 
@@ -366,7 +467,9 @@ describe("RateOverridesCard", () => {
     expect(await screen.findByLabelText(/input, per 1m tokens/i)).toHaveValue(
       "",
     )
-    expect(await screen.findByLabelText(/model key/i)).toHaveValue("")
+    expect(
+      await screen.findByRole("combobox", { name: /model key/i }),
+    ).toHaveValue("")
   })
 
   it("deletes an override after a confirmation", async () => {
@@ -432,7 +535,10 @@ describe("RateOverridesCard", () => {
     await user.click(
       await screen.findByRole("button", { name: /add override/i }),
     )
-    await user.type(await screen.findByLabelText(/model key/i), "openai:gpt-4o")
+    await user.type(
+      await screen.findByRole("combobox", { name: /model key/i }),
+      "openai:gpt-4o",
+    )
     await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
     await user.type(screen.getByLabelText(/output, per 1m tokens/i), "15")
     await user.click(screen.getByRole("button", { name: /^add override$/i }))
@@ -440,5 +546,109 @@ describe("RateOverridesCard", () => {
     expect(
       await screen.findByText(/already covers part of that period/i),
     ).toBeInTheDocument()
+  })
+
+  // otari-ai#2095: the rates of a model the deployment supplies the credential
+  // for are the deployment's, not a tenant's. The server refuses either way;
+  // these cover the half that keeps the control from being offered.
+  describe("a model the deployment supplies", () => {
+    const tenant = organizationContext({ deployment_operator: false })
+
+    it("blocks the save and says whose rate it is", async () => {
+      mockApi({ context: tenant, managedModels: ["nebius_prod:llama-3"] })
+      const user = userEvent.setup()
+
+      await renderPage()
+
+      await user.click(
+        await screen.findByRole("button", { name: /add override/i }),
+      )
+      await user.type(
+        await screen.findByRole("combobox", { name: /model key/i }),
+        "nebius_prod:llama-3",
+      )
+      await user.type(screen.getByLabelText(/input, per 1m tokens/i), "0")
+      await user.type(screen.getByLabelText(/output, per 1m tokens/i), "0")
+
+      expect(
+        await screen.findByText(/one of this deployment's own providers/i),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole("button", { name: /^add override$/i }),
+      ).toBeDisabled()
+    })
+
+    it("leaves a model the organization supplies its own key for alone", async () => {
+      mockApi({
+        context: tenant,
+        models: ["openai:gpt-4o"],
+        managedModels: ["nebius_prod:llama-3"],
+      })
+      const user = userEvent.setup()
+
+      await renderPage()
+
+      await user.click(
+        await screen.findByRole("button", { name: /add override/i }),
+      )
+      await user.type(
+        await screen.findByRole("combobox", { name: /model key/i }),
+        "openai:gpt-4o",
+      )
+      await user.type(screen.getByLabelText(/input, per 1m tokens/i), "3")
+      await user.type(screen.getByLabelText(/output, per 1m tokens/i), "15")
+
+      expect(
+        screen.getByRole("button", { name: /^add override$/i }),
+      ).toBeEnabled()
+    })
+
+    it("refuses to edit a row stored before the rule, and still allows deleting it", async () => {
+      mockApi({
+        context: tenant,
+        overrides: [pricingOverride({ model_key: "nebius_prod:llama-3" })],
+        managedModels: ["nebius_prod:llama-3"],
+      })
+
+      await renderPage()
+
+      // Named by the reason rather than by the word "Edit": a disabled control
+      // takes no focus, so its accessible name is where the refusal can be read.
+      expect(
+        await screen.findByRole("button", {
+          name: /one of this deployment's own providers/i,
+        }),
+      ).toBeDisabled()
+      expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled()
+    })
+
+    // The dialog is rendered whether or not it is showing, so an ungated catalog
+    // read inside it would fire for a reader and undo the card's own gate.
+    it("asks for no catalog at all when the caller cannot edit", async () => {
+      const requests = mockApi({
+        context: organizationContext({ role: "member" }),
+        overrides: [pricingOverride()],
+      })
+
+      await renderPage()
+      expect(await screen.findByText("openai:gpt-4o")).toBeInTheDocument()
+
+      expect(
+        requests.filter((request) =>
+          request.url.endsWith(`${API_ROOT}/models`),
+        ),
+      ).toEqual([])
+    })
+
+    it("leaves the deployment operator pricing its own models", async () => {
+      mockApi({
+        overrides: [pricingOverride({ model_key: "nebius_prod:llama-3" })],
+        managedModels: ["nebius_prod:llama-3"],
+      })
+
+      await renderPage()
+
+      expect(await screen.findByRole("button", { name: /edit/i })).toBeEnabled()
+    })
   })
 })

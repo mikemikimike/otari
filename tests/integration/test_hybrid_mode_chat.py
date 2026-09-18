@@ -1,4 +1,6 @@
+import json
 from collections.abc import AsyncIterator, Generator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -26,6 +28,7 @@ def platform_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
     app = app_for(
         GatewayConfig(
             mode="hybrid",
+            web_fetch_enabled=True,
             platform={"base_url": "http://platform.test/api/v1"},
         )
     )
@@ -1630,7 +1633,7 @@ def test_hybrid_mode_web_search_cap_is_not_refilled_by_a_streaming_fallover(
         if url.endswith("/gateway/provider-keys/resolve"):
             return _two_attempt_resolve_response(request_id="ws-cap-req")
         if url.endswith("/gateway/web-search/resolve"):
-            return httpx.Response(200, json={"enabled": True})
+            return httpx.Response(200, json={"enabled": True, "authorized_tools": ["web_search"]})
         return httpx.Response(204)
 
     calls: list[str] = []
@@ -1690,7 +1693,7 @@ def test_hybrid_mode_web_search_cap_is_not_refilled_by_a_streaming_fallover(
         return _stream()
 
     monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
-    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_search_backend", _CappedSearchBackend)
+    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_retrieval_backend", _CappedSearchBackend)
     monkeypatch.setattr("gateway.services.mcp_loop.acompletion", fake_loop_acompletion)
 
     response = platform_client.post(
@@ -1808,13 +1811,14 @@ class _FakeWebSearchBackend:
     def __init__(
         self,
         *,
-        base_url: str,
-        tool_entry: dict[str, Any],
+        base_url: str | None,
+        search_tool_entry: dict[str, Any] | None,
         auth_token: str | None = None,
         config: Any = None,
         tally: Any = None,
+        **_kwargs: Any,
     ) -> None:
-        type(self).last_tool_entry = dict(tool_entry)
+        type(self).last_tool_entry = dict(search_tool_entry or {})
         type(self).last_auth_token = auth_token
         # The real backend records each call on the request's tally; accept it so
         # the constructor contract matches, even though this double runs no search.
@@ -1861,6 +1865,70 @@ def _single_attempt_resolve_response(*, request_id: str) -> httpx.Response:
     )
 
 
+_WEB_ACCESS_CONTRACT_CASES = json.loads(
+    (Path(__file__).parents[1] / "fixtures" / "web_access_resolution_contract.json").read_text()
+)["cases"]
+
+
+@pytest.mark.parametrize("case", _WEB_ACCESS_CONTRACT_CASES, ids=lambda case: str(case["name"]))
+def test_hybrid_mode_web_access_contract_matrix(
+    platform_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    case: dict[str, Any],
+) -> None:
+    """Mirror the control-plane request and response contract through the HTTP route."""
+    requested_tools = case["expected_requested_tools"]
+    if "web_search" in requested_tools:
+        monkeypatch.setenv("OTARI_WEB_SEARCH_URL", "http://searxng:8080")
+    else:
+        monkeypatch.delenv("OTARI_WEB_SEARCH_URL", raising=False)
+
+    web_resolve_bodies: list[dict[str, Any]] = []
+
+    async def fake_post_platform(
+        url: str, headers: dict[str, str], body: dict[str, Any], timeout_seconds: float
+    ) -> httpx.Response:
+        if url.endswith("/gateway/provider-keys/resolve"):
+            return _single_attempt_resolve_response(request_id=f"contract-{case['name']}")
+        if url.endswith("/gateway/web-search/resolve"):
+            web_resolve_bodies.append(body)
+            return httpx.Response(200, json=case["platform_response"])
+        return httpx.Response(204)
+
+    async def fake_loop_acompletion(**kwargs: Any) -> ChatCompletion:
+        return ChatCompletion(
+            id="cmpl-web-access-contract",
+            object="chat.completion",
+            created=0,
+            model="openai:gpt-4o-mini",
+            choices=[
+                Choice(
+                    finish_reason="stop",
+                    index=0,
+                    message=ChatCompletionMessage(role="assistant", content="answer"),
+                )
+            ],
+            usage=CompletionUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+        )
+
+    monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
+    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_retrieval_backend", _FakeWebSearchBackend)
+    monkeypatch.setattr("gateway.services.mcp_loop.acompletion", fake_loop_acompletion)
+
+    response = platform_client.post(
+        f"{API_ROOT}/chat/completions",
+        json={
+            "model": "anything",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": case["tools"],
+        },
+        headers={"Authorization": "Bearer user_test_token"},
+    )
+
+    assert response.status_code == case["expected_status"]
+    assert web_resolve_bodies == [{"requested_tools": requested_tools}]
+
+
 def test_hybrid_mode_web_search_403_when_disabled(
     platform_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -1875,7 +1943,7 @@ def test_hybrid_mode_web_search_403_when_disabled(
         if url.endswith("/gateway/provider-keys/resolve"):
             return _single_attempt_resolve_response(request_id="ws-req-disabled")
         if url.endswith("/gateway/web-search/resolve"):
-            return httpx.Response(200, json={"enabled": False})
+            return httpx.Response(200, json={"enabled": False, "authorized_tools": []})
         return httpx.Response(204)
 
     monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
@@ -1914,6 +1982,7 @@ def test_hybrid_mode_web_search_merges_workspace_config(
                 200,
                 json={
                     "enabled": True,
+                    "authorized_tools": ["web_search"],
                     "max_results": 9,
                     "allowed_domains": ["docs.python.org"],
                     "purpose_hint": "workspace hint",
@@ -1939,7 +2008,7 @@ def test_hybrid_mode_web_search_merges_workspace_config(
         )
 
     monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
-    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_search_backend", _FakeWebSearchBackend)
+    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_retrieval_backend", _FakeWebSearchBackend)
     monkeypatch.setattr("gateway.services.mcp_loop.acompletion", fake_loop_acompletion)
 
     response = platform_client.post(
@@ -1984,7 +2053,7 @@ def test_hybrid_mode_web_search_forwards_token_to_platform_backend(
         if url.endswith("/gateway/provider-keys/resolve"):
             return _single_attempt_resolve_response(request_id="ws-req-platform")
         if url.endswith("/gateway/web-search/resolve"):
-            return httpx.Response(200, json={"enabled": True})
+            return httpx.Response(200, json={"enabled": True, "authorized_tools": ["web_search"]})
         return httpx.Response(204)
 
     async def fake_loop_acompletion(**kwargs: Any) -> ChatCompletion:
@@ -2004,7 +2073,7 @@ def test_hybrid_mode_web_search_forwards_token_to_platform_backend(
         )
 
     monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
-    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_search_backend", _FakeWebSearchBackend)
+    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_retrieval_backend", _FakeWebSearchBackend)
     monkeypatch.setattr("gateway.services.mcp_loop.acompletion", fake_loop_acompletion)
 
     response = platform_client.post(
@@ -2037,7 +2106,14 @@ def test_hybrid_mode_web_search_empty_request_list_keeps_workspace_policy(
         if url.endswith("/gateway/provider-keys/resolve"):
             return _single_attempt_resolve_response(request_id="ws-req-empty")
         if url.endswith("/gateway/web-search/resolve"):
-            return httpx.Response(200, json={"enabled": True, "allowed_domains": ["docs.python.org"]})
+            return httpx.Response(
+                200,
+                json={
+                    "enabled": True,
+                    "authorized_tools": ["web_search"],
+                    "allowed_domains": ["docs.python.org"],
+                },
+            )
         return httpx.Response(204)
 
     async def fake_loop_acompletion(**kwargs: Any) -> ChatCompletion:
@@ -2057,7 +2133,7 @@ def test_hybrid_mode_web_search_empty_request_list_keeps_workspace_policy(
         )
 
     monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
-    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_search_backend", _FakeWebSearchBackend)
+    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_retrieval_backend", _FakeWebSearchBackend)
     monkeypatch.setattr("gateway.services.mcp_loop.acompletion", fake_loop_acompletion)
 
     response = platform_client.post(
@@ -2416,7 +2492,7 @@ def test_platform_mode_streaming_sandbox_gets_the_same_image(
         if url.endswith("/gateway/provider-keys/resolve"):
             return _single_attempt_resolve_response(request_id="sbx-stream-image")
         if url.endswith("/gateway/code-execution/resolve"):
-            return httpx.Response(200, json={"enabled": True})
+            return httpx.Response(200, json={"enabled": True, "authorized_tools": ["web_search"]})
         return httpx.Response(204)
 
     async def fake_loop_acompletion(**kwargs: Any) -> Any:
@@ -2542,9 +2618,11 @@ def test_platform_mode_sandbox_applies_workspace_max_iterations_cap(
     assert captured["max_iterations"] == 2
 
 
+@pytest.mark.parametrize("unavailable", [False, True])
 def test_platform_mode_sandbox_unreachable_returns_502(
     platform_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
+    unavailable: bool,
 ) -> None:
     """Hybrid non-streaming chat with the sandbox backend down surfaces the
     backend-specific 502, not a generic provider error or a 500. Regression
@@ -2553,8 +2631,8 @@ def test_platform_mode_sandbox_unreachable_returns_502(
     inherits it."""
     monkeypatch.setenv("OTARI_SANDBOX_URL", "http://sandbox:8080")
 
-    from gateway.api.routes._pipeline import SANDBOX_UNREACHABLE_DETAIL
-    from gateway.services.sandbox_backend import SandboxNotReachableError
+    from gateway.api.routes._pipeline import SANDBOX_UNAVAILABLE_DETAIL, SANDBOX_UNREACHABLE_DETAIL
+    from gateway.services.sandbox_backend import SandboxNotReachableError, SandboxUnavailableError
 
     usage_reports: list[dict[str, Any]] = []
 
@@ -2573,6 +2651,8 @@ def test_platform_mode_sandbox_unreachable_returns_502(
             pass
 
         async def __aenter__(self) -> "_DownSandboxBackend":
+            if unavailable:
+                raise SandboxUnavailableError("15")
             raise SandboxNotReachableError("failed to create sandbox session at http://sandbox:8080")
 
         async def __aexit__(self, *exc: object) -> None:
@@ -2591,8 +2671,9 @@ def test_platform_mode_sandbox_unreachable_returns_502(
         headers={"Authorization": "Bearer user_test_token"},
     )
 
-    assert response.status_code == 502
-    assert response.json() == {"detail": SANDBOX_UNREACHABLE_DETAIL}
+    assert response.status_code == (503 if unavailable else 502)
+    assert response.headers.get("Retry-After") == ("15" if unavailable else None)
+    assert response.json() == {"detail": SANDBOX_UNAVAILABLE_DETAIL if unavailable else SANDBOX_UNREACHABLE_DETAIL}
     assert usage_reports == [
         {
             "correlation_id": "sbx-down",
@@ -2621,7 +2702,7 @@ def test_platform_mode_web_search_unreachable_returns_502(
         if url.endswith("/gateway/provider-keys/resolve"):
             return _single_attempt_resolve_response(request_id="ws-down")
         if url.endswith("/gateway/web-search/resolve"):
-            return httpx.Response(200, json={"enabled": True})
+            return httpx.Response(200, json={"enabled": True, "authorized_tools": ["web_search"]})
         usage_reports.append(body)
         return httpx.Response(204)
 
@@ -2636,7 +2717,7 @@ def test_platform_mode_web_search_unreachable_returns_502(
         return _DownWebSearchBackend()
 
     monkeypatch.setattr("gateway.api.routes._platform._post_platform", fake_post_platform)
-    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_search_backend", fake_build_web_search_backend)
+    monkeypatch.setattr("gateway.api.routes._pipeline._build_web_retrieval_backend", fake_build_web_search_backend)
 
     response = platform_client.post(
         f"{API_ROOT}/chat/completions",

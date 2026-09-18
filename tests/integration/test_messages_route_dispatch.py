@@ -35,7 +35,7 @@ from any_llm.types.messages import (
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from gateway.core.config import API_ROOT
+from gateway.core.config import API_ROOT, GatewayConfig
 from gateway.services.mcp_client import MCPToolCallOutcome
 from gateway.services.mcp_loop_messages import MCP_ACTIVITY_ID_PREFIX, MCP_CLIENT_BETA
 
@@ -689,12 +689,16 @@ def test_code_execution_dispatches_through_sandbox_backend(
     assert pool_seen == [fake_backend], "loop didn't receive the SandboxBackend"
 
 
-def test_web_search_dispatches_through_web_search_backend(
+@pytest.mark.parametrize("tool_type", ["otari_web_search", "otari_web_fetch"])
+def test_managed_web_tool_dispatches_through_web_retrieval_backend(
     client: TestClient,
     api_key_header: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
+    test_config: GatewayConfig,
+    tool_type: str,
 ) -> None:
-    """``tools: [{"type": "otari_web_search"}]`` routes through ``WebSearchBackend``."""
+    """Managed web declarations route through the shared backend."""
+    monkeypatch.setattr(test_config, "web_fetch_enabled", True)
     monkeypatch.setenv("OTARI_WEB_SEARCH_URL", "http://127.0.0.1:9999/search")
 
     pool_seen: list[Any] = []
@@ -715,7 +719,7 @@ def test_web_search_dispatches_through_web_search_backend(
 
     with (
         patch("gateway.api.routes.messages.anthropic_tool_loop", new=fake_loop),
-        patch("gateway.api.routes._pipeline._build_web_search_backend", return_value=fake_builder_result),
+        patch("gateway.api.routes._pipeline._build_web_retrieval_backend", return_value=fake_builder_result),
     ):
         resp = client.post(
             f"{API_ROOT}/messages",
@@ -723,7 +727,7 @@ def test_web_search_dispatches_through_web_search_backend(
                 "model": "anthropic:claude-3-5-sonnet-20241022",
                 "messages": [{"role": "user", "content": "search"}],
                 "max_tokens": 100,
-                "tools": [{"type": "otari_web_search"}],
+                "tools": [{"type": tool_type}],
             },
             headers=api_key_header,
         )
@@ -772,15 +776,17 @@ def test_provider_code_execution_passes_through_to_upstream(
     assert {t["type"] for t in forwarded} == {tool_type}
 
 
-@pytest.mark.parametrize("tool_type", ["web_search", "web_search_20250305"])
-def test_provider_web_search_passes_through_to_upstream(
+@pytest.mark.parametrize(
+    "tool_type",
+    ["web_search", "web_search_20250305", "web_fetch_20250910", "web_fetch_20260209"],
+)
+def test_provider_web_tool_passes_through_to_upstream(
     client: TestClient,
     api_key_header: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
     tool_type: str,
 ) -> None:
-    """Provider-named web_search keywords pass through to Anthropic even when
-    no gateway web_search backend is configured."""
+    """Provider-native web declarations pass through to Anthropic."""
     monkeypatch.delenv("OTARI_WEB_SEARCH_URL", raising=False)
     captured: dict[str, Any] = {}
 
@@ -957,7 +963,7 @@ def test_web_search_combined_with_sandbox_returns_400(
     _assert_anthropic_error(
         resp.json(),
         error_type="invalid_request_error",
-        message_substr="otari_web_search cannot be combined",
+        message_substr="cannot be combined with otari_code_execution",
     )
 
 
@@ -1014,18 +1020,24 @@ def test_max_tool_iterations_exceeded_returns_422_anthropic_body(
     )
 
 
+@pytest.mark.parametrize("unavailable", [False, True])
 def test_sandbox_unreachable_returns_502_anthropic_body(
     client: TestClient,
     api_key_header: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
+    unavailable: bool,
 ) -> None:
     monkeypatch.setenv("OTARI_SANDBOX_URL", "http://127.0.0.1:9999/sandbox")
 
-    from gateway.services.sandbox_backend import SandboxNotReachableError
+    from gateway.services.sandbox_backend import SandboxNotReachableError, SandboxUnavailableError
 
     with patch(
         "gateway.api.routes._pipeline.SandboxBackend",
-        return_value=AsyncMock(__aenter__=AsyncMock(side_effect=SandboxNotReachableError("boom"))),
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(
+                side_effect=SandboxUnavailableError("15") if unavailable else SandboxNotReachableError("boom")
+            )
+        ),
     ):
         resp = client.post(
             f"{API_ROOT}/messages",
@@ -1038,8 +1050,13 @@ def test_sandbox_unreachable_returns_502_anthropic_body(
             headers=api_key_header,
         )
 
-    assert resp.status_code == 502
-    _assert_anthropic_error(resp.json(), error_type="api_error", message_substr="sandbox unreachable")
+    assert resp.status_code == (503 if unavailable else 502)
+    assert resp.headers.get("Retry-After") == ("15" if unavailable else None)
+    _assert_anthropic_error(
+        resp.json(),
+        error_type="api_error",
+        message_substr="sandbox temporarily unavailable" if unavailable else "sandbox unreachable",
+    )
 
 
 # ---------- streaming dispatch ----------
@@ -1609,10 +1626,12 @@ def test_stream_code_execution_dispatches_through_sandbox(
     assert pool_seen == [fake_backend], "tool loop didn't receive the SandboxBackend"
 
 
+@pytest.mark.parametrize("unavailable", [False, True])
 def test_stream_sandbox_unreachable_returns_502_anthropic_body(
     client: TestClient,
     api_key_header: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
+    unavailable: bool,
 ) -> None:
     """Regression test for the eager-open error mapping bug: when the
     streaming sandbox eager-open fails, the route must return a 502 with the
@@ -1622,11 +1641,15 @@ def test_stream_sandbox_unreachable_returns_502_anthropic_body(
     """
     monkeypatch.setenv("OTARI_SANDBOX_URL", "http://127.0.0.1:9999/sandbox")
 
-    from gateway.services.sandbox_backend import SandboxNotReachableError
+    from gateway.services.sandbox_backend import SandboxNotReachableError, SandboxUnavailableError
 
     with patch(
         "gateway.api.routes._pipeline.SandboxBackend",
-        return_value=AsyncMock(__aenter__=AsyncMock(side_effect=SandboxNotReachableError("boom"))),
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(
+                side_effect=SandboxUnavailableError("15") if unavailable else SandboxNotReachableError("boom")
+            )
+        ),
     ):
         resp = client.post(
             f"{API_ROOT}/messages",
@@ -1640,8 +1663,13 @@ def test_stream_sandbox_unreachable_returns_502_anthropic_body(
             headers=api_key_header,
         )
 
-    assert resp.status_code == 502
-    _assert_anthropic_error(resp.json(), error_type="api_error", message_substr="sandbox unreachable")
+    assert resp.status_code == (503 if unavailable else 502)
+    assert resp.headers.get("Retry-After") == ("15" if unavailable else None)
+    _assert_anthropic_error(
+        resp.json(),
+        error_type="api_error",
+        message_substr="sandbox temporarily unavailable" if unavailable else "sandbox unreachable",
+    )
 
 
 # ---------- web-search interception (opt-in) ----------
@@ -1692,7 +1720,7 @@ def test_intercept_routes_provider_keywords_to_the_gateway_backend(
 
     with (
         patch("gateway.api.routes.messages.anthropic_tool_loop", new=fake_loop),
-        patch("gateway.api.routes._pipeline._build_web_search_backend", return_value=fake_builder_result),
+        patch("gateway.api.routes._pipeline._build_web_retrieval_backend", return_value=fake_builder_result),
     ):
         resp = client.post(
             f"{API_ROOT}/messages",
@@ -1748,7 +1776,7 @@ def test_intercept_emits_native_blocks_only_for_a_native_declaration(
     def post(tool_entry: dict[str, Any]) -> None:
         with (
             patch("gateway.api.routes.messages.anthropic_tool_loop", new=fake_loop),
-            patch("gateway.api.routes._pipeline._build_web_search_backend", return_value=fake_builder_result),
+            patch("gateway.api.routes._pipeline._build_web_retrieval_backend", return_value=fake_builder_result),
         ):
             resp = client.post(
                 f"{API_ROOT}/messages",
@@ -1887,7 +1915,7 @@ def test_intercept_retargets_a_forced_tool_choice(
 
     with (
         patch("gateway.api.routes.messages.anthropic_tool_loop", new=fake_loop),
-        patch("gateway.api.routes._pipeline._build_web_search_backend", return_value=fake_builder_result),
+        patch("gateway.api.routes._pipeline._build_web_retrieval_backend", return_value=fake_builder_result),
     ):
         resp = client.post(
             f"{API_ROOT}/messages",

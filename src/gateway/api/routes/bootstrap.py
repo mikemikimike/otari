@@ -27,8 +27,28 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import get_config, get_db_if_needed
+from gateway.api.deps import get_config, get_db_if_needed, get_enabled_features
+from gateway.api.routes import (
+    admin,
+    budgets,
+    keys,
+    models,
+    org_provider_keys,
+    organization_usage,
+    organizations,
+    playground,
+    pricing,
+    providers,
+    routing,
+    settings,
+    tools,
+    usage,
+    users,
+    workspaces,
+)
 from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.feature import CoreFeature
+from gateway.core.surface import Surface
 from gateway.log_config import logger
 from gateway.services.maintenance_mode_service import is_maintenance_mode
 from gateway.services.tenancy.user_service import operator_has_password, password_sign_in_possible
@@ -54,81 +74,55 @@ SessionType = Literal["local_operator", "hosted_user", "none"]
 # this list stays the set of methods that need no further qualification.
 SignInMethod = Literal["master_key", "password", "passkey"]
 
-# The management API groups a standalone gateway serves, one name per ``/api/v1/``
-# router the dashboard's surfaces are built on. Naming the groups rather than the
-# pages keeps the list checkable: ``test_deployment_bootstrap`` asserts every
-# name here is a route this app actually mounts, so a surface cannot outlive the
-# API behind it. Several pages share one (Activity and Usage are both views over
-# ``/api/v1/usage``), and the Overview index needs none.
-#
-# Deliberately *not* called capabilities. otari.ai already spends that word on
-# the entitlement axis, down to a nav item's ``capability`` field and a
-# ``routing`` entry that means "this org is licensed for routing". This axis
-# answers something else entirely, "does this process host the surface at all",
-# and the two vocabularies meet in one shell at M5. See ARCHITECTURE.md.
-#
-# A hybrid gateway serves none of them: its control plane is otari.ai, and a
-# second management UI beside it is what the deployment contract rules out.
-# The set is therefore all-or-nothing here, because this gateway's management API
-# is: `register_routers` mounts the whole of it in standalone and none of it in
-# hybrid. It travels as a set rather than as a second reading of the mode because
-# the shared shell also runs against a hosted control plane, where the two come
-# apart.
-STANDALONE_SURFACES: tuple[str, ...] = (
-    # The deployment-wide account administration prefix (/api/v1/admin). The
-    # deployment axis only: it says this process hosts the surface, not that the
-    # caller may use it, which is `GET /api/v1/admin/access`'s question and the
-    # service's to enforce.
-    "admin",
-    "budgets",
-    "keys",
-    "models",
-    "organizations",
-    "pricing",
-    "providers",
-    "routing",
-    "settings",
-    "tools",
-    "usage",
-    "users",
-    "workspaces",
+# A route module's ``SURFACE`` is published only once listed here.
+_DECLARED_SURFACES: tuple[Surface, ...] = (
+    admin.SURFACE,
+    budgets.SURFACE,
+    keys.SURFACE,
+    models.SURFACE,
+    org_provider_keys.SURFACE,
+    organization_usage.SURFACE,
+    organizations.SURFACE,
+    playground.SURFACE,
+    pricing.SURFACE,
+    providers.SURFACE,
+    routing.SURFACE,
+    settings.SURFACE,
+    tools.SURFACE,
+    usage.SURFACE,
+    users.SURFACE,
+    workspaces.SURFACE,
 )
 
-# The same list for a *hosted* deployment: one control plane serving many
-# organizations, rather than one operator's own gateway. Three rows differ. The
-# first two are the same fact seen from either side, that a credential here
-# belongs to a tenant rather than to the process; the third is not about
-# credentials at all.
-#
-# ``providers`` drops. It is the deployment-instance surface over
-# ``provider_credentials``, whose primary key is the instance name alone, so an
-# instance added there is served to every organization and shadows that
-# organization's own BYO key for the provider (#818). On the single-tenant
-# product that page is correct, and it stays; on a multi-tenant one it is a
-# control whose blast radius nobody looking at it can see.
-#
-# ``organization_providers`` appears, and is the per-tenant surface that
-# replaces it: ``/api/v1/organizations/me/provider-keys``, the organization-scoped
-# BYO keys #670 shipped. It is the one name here that is not its router's path
-# prefix, because the router is nested under ``organizations``; ``organizations``
-# stays a separate surface, since the roster and the credential set are
-# different pages with different access.
-#
-# Dropping the surface is not itself a guard over the table: ``config.yml``'s
-# ``providers:`` block and ``/api/v1/provider-credentials`` still populate it with no
-# page in front of them, which is #818's to close.
-#
-# ``organization_usage`` appears for a different reason: not a credential's
-# ownership but a question that only exists once tenants do. The router behind it
-# (``/api/v1/organizations/me/usage``) is mounted on both editions, but on standalone
-# the organization is the deployment and ``/usage`` already answers it whole, so
-# the dashboard's organization-wide Usage page is a destination only where "my
-# organization" is narrower than "everything" (otari-ai#1963).
-HOSTED_SURFACES: tuple[str, ...] = (
-    *(surface for surface in STANDALONE_SURFACES if surface != "providers"),
-    "organization_providers",
-    "organization_usage",
-)
+STANDALONE_SURFACES: tuple[str, ...] = tuple(surface.name for surface in _DECLARED_SURFACES if surface.standalone)
+HOSTED_SURFACES: tuple[str, ...] = tuple(surface.name for surface in _DECLARED_SURFACES if surface.hosted)
+
+
+def published_surfaces(config: GatewayConfig, enabled_features: tuple[CoreFeature, ...]) -> list[str]:
+    """The surfaces this deployment publishes, sorted.
+
+    Covers the fixed set and each enabled feature's surface.
+    Empty for hybrid, which hosts none, and one row short on a hosted deployment
+    with no data plane configured; see below.
+    """
+    if config.is_hybrid_mode:
+        return []
+    featured = [feature.surface for feature in enabled_features if feature.surface is not None]
+    surfaces = (*_DECLARED_SURFACES, *featured)
+    if config.is_hosted_mode:
+        names = {surface.name for surface in surfaces if surface.hosted}
+        # The one surface a hosted deployment publishes conditionally. The
+        # Playground forwards its completion to ``data_plane_url``
+        # (``services/playground_dispatch``), so a control plane that has not been
+        # told where its data plane is cannot serve the page at all. Decided here
+        # rather than declared ``hosted=False`` on the surface, because what
+        # settles it is this deployment's configuration and not the topology:
+        # every other row on the roster is the same answer for every deployment of
+        # that type.
+        if config.data_plane_url is None:
+            names.discard(playground.SURFACE.name)
+        return sorted(names)
+    return sorted({surface.name for surface in surfaces if surface.standalone})
 
 
 class DeploymentBootstrap(BaseModel):
@@ -254,6 +248,14 @@ class DeploymentBootstrap(BaseModel):
             "gateway, which issues no session."
         )
     )
+    public_catalog: bool = Field(
+        default=False,
+        description=(
+            "Whether the model catalog is served to a visitor with no session: GET /api/v1/catalog/models "
+            "answers anonymously and the dashboard renders Models ahead of sign-in. False for a hybrid "
+            "gateway, which serves no catalog of its own."
+        ),
+    )
     open_signup: bool = Field(
         description=(
             "Whether POST /api/v1/auth/signup creates an account for an address nobody has "
@@ -281,6 +283,7 @@ class DeploymentBootstrap(BaseModel):
 async def get_bootstrap(
     db: Annotated[AsyncSession | None, Depends(get_db_if_needed)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    enabled_features: Annotated[tuple[CoreFeature, ...], Depends(get_enabled_features)],
 ) -> DeploymentBootstrap:
     """Return the deployment context the dashboard shell renders from.
 
@@ -298,7 +301,7 @@ async def get_bootstrap(
         return DeploymentBootstrap(
             deployment_type="hybrid",
             session_type="none",
-            surfaces=[],
+            surfaces=published_surfaces(config, enabled_features),
             sign_in_methods=[],
             management_url=config.platform_management_url,
             # This gateway *is* the data plane, so the address that reached this
@@ -324,7 +327,7 @@ async def get_bootstrap(
     return DeploymentBootstrap(
         deployment_type="hosted" if hosted else "standalone",
         session_type="local_operator",
-        surfaces=sorted(HOSTED_SURFACES if hosted else STANDALONE_SURFACES),
+        surfaces=published_surfaces(config, enabled_features),
         sign_in_methods=await _sign_in_methods(db, config),
         management_url=None,
         # Standalone is its own data plane and answers null; a hosted control
@@ -334,6 +337,7 @@ async def get_bootstrap(
         terms_url=config.terms_url,
         privacy_url=config.privacy_url,
         maintenance_mode=await _maintenance_mode(db),
+        public_catalog=bool(config.public_catalog) and not config.is_hybrid_mode,
         passkeys_ready=config.webauthn_enabled,
         oauth_providers=list(config.oauth_providers),
         mail_ready=config.mail_ready,

@@ -52,15 +52,17 @@ from gateway.api.deps import (
 )
 from gateway.api.routes.keys import (
     _KEY_EXCEEDS_USER_DETAIL,
+    NOT_INTERNAL,
     CreateKeyResponse,
     KeyInfo,
     _load_key_in_organization,
 )
-from gateway.auth.models import generate_api_key, hash_key, key_prefix
+from gateway.auth.models import generate_api_key, hash_key, key_prefix, key_suffix
 from gateway.core.config import GatewayConfig
-from gateway.models.entities import APIKey, User
+from gateway.models.api_keys import APIKey
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.tenancy import Workspace
+from gateway.models.users import User
 from gateway.ports.growth_signal_port import GrowthActivationEvent
 from gateway.repositories.users_repository import get_or_create_attribution_user
 from gateway.services.model_access import is_allowlist_subset, validate_allowed_models
@@ -147,7 +149,7 @@ async def _caller_context(db: AsyncSession, identity: TenancyUser) -> tuple[uuid
     identity's UUID rendered as a string, the attribution convention
     ``get_or_create_attribution_user`` documents.
     """
-    organization = await OrganizationService(db).get_active_organization_for_user(identity)
+    organization = await OrganizationService(db, membership_listener=None).get_active_organization_for_user(identity)
     return organization.id, str(identity.id)
 
 
@@ -165,9 +167,9 @@ async def create_own_key(
     The member-scoped counterpart of ``POST /api/v1/keys``: the owner is always the
     caller's own attribution user, the key is always budget-enforced, and the
     workspace must be visible to the caller (a member of it, or an organization
-    owner/admin/superuser, who see every workspace). The secret is returned once.
+    owner/admin, who see every workspace). The secret is returned once.
     """
-    organizations = OrganizationService(db)
+    organizations = OrganizationService(db, membership_listener=None)
     organization = await organizations.get_active_organization_for_user(identity)
 
     if request.workspace_id is not None:
@@ -252,6 +254,7 @@ async def create_own_key(
         workspace_id=workspace_id,
         key_hash=hash_key(api_key),
         key_prefix=key_prefix(api_key),
+        key_suffix=key_suffix(api_key),
         key_name=request.key_name,
         user_id=owner.user_id,
         expires_at=request.expires_at,
@@ -314,6 +317,7 @@ async def list_own_keys(
         .where(
             col(Workspace.organization_id) == organization_id,
             col(APIKey.user_id) == owner_user_id,
+            NOT_INTERNAL,
         )
     )
     if workspace_id is not None:
@@ -399,6 +403,7 @@ async def rotate_own_key(
     new_api_key = generate_api_key()
     key.key_hash = hash_key(new_api_key)
     key.key_prefix = key_prefix(new_api_key)
+    key.key_suffix = key_suffix(new_api_key)
     key.last_used_at = None
 
     try:

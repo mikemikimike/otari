@@ -125,7 +125,23 @@ An edge that would be too loud is suppressed by **naming the container**, so a c
 site never has to remember. Inside one of these, a ghost renders edgeless:
 
 `.otari-toolbar` · `.otari-table` · `.otari-pagination` · `.otari-bulk-bar` ·
-`.otari-breakdown` · `.otari-rail`
+`.otari-breakdown` · `.otari-rail` · `.otari-setup-actions` ·
+`.otari-auth-actions`
+
+`.otari-setup-actions` is the one that holds a single button rather than a row:
+the first-run sheet's Skip, which is the screen's one way out and is quieted on
+purpose so it does not compete with the request the screen is asking for. A lone
+button is otherwise not a reason to name a container.
+
+`.otari-actions` groups inline actions or a list of suggested actions. It drops
+ghost edges without imposing the field density of a filter toolbar.
+
+`.otari-auth-actions` is the public auth pages' footer row, and it is the one
+place that does more than drop the edge. The row is text links plus a single
+button, which is a button only because a popover trigger has to be a react-aria
+pressable (`AuthHelp`), so there the ghost also takes the links' ink and their
+44px height. That is why it is not `.otari-actions`: giving the link ink to
+every inline action row would restyle pages that want a button to read as one.
 
 Put the class on the container, not on the button. If you are building a new
 container that holds a row of ghosts and the edges read as a grid of boxes, add a
@@ -302,3 +318,11 @@ hides.
 | `RefreshButton` | `onRefresh`, `isFetching?`, `updatedAt?`, `label?` | A refetch, with its own freshness caption. Pass `updatedAt` or the caption reads nothing |
 | `CopyButton` | `value`, `label` | Copy one value. Icon-only, 44x44 hit area |
 | `CopyField` | `label`, `value`, `multiline?`, `concealed?`, `action?` | A readonly field of a value to paste elsewhere. `concealed` is what it shows until the operator asks for the value, for a credential: Copy copies the real one either way, so a key is handed over without being read off the screen |
+
+API-key handoff fields start concealed, showing the first eight and last four
+characters. That stand-in is `concealedFingerprint`, beside `CONCEALED_SECRET`
+in the same module, so its shape is decided in one place rather than rebuilt at
+a call site. Copy and reveal are adjacent icon controls inside the field, each
+a 44x44 target below `md`. Copy uses the full value in either state; request
+examples share the reveal state and the same stand-in, so one credential never
+wears two on a screen.

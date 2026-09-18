@@ -9,16 +9,19 @@ from gateway.api.routes import (
     auth_oauth,
     auth_password,
     auth_password_reset,
+    auth_profile,
     auth_session,
     auth_signup,
     auth_webauthn,
     batches,
     bootstrap,
     budgets,
+    catalog,
     chat,
     embeddings,
     files,
     health,
+    hooks,
     hosted_mode,
     hybrid_mode,
     images,
@@ -39,6 +42,7 @@ from gateway.api.routes import (
     organization_usage,
     organizations,
     otlp,
+    playground,
     pricing,
     providers,
     rerank,
@@ -63,6 +67,7 @@ from gateway.api.routes import (
 )
 from gateway.container import Container
 from gateway.core.config import API_ROOT, OTLP_ROOT, GatewayConfig
+from gateway.core.feature import CoreFeature
 
 
 def register_routers(app: FastAPI, config: GatewayConfig) -> None:
@@ -75,7 +80,7 @@ def register_routers(app: FastAPI, config: GatewayConfig) -> None:
     contributed router serves.
     """
     api = APIRouter(prefix=API_ROOT)
-    _register_core_routers(api, config)
+    _register_core_routers(api, config, app.state.enabled_features)
     _register_contributed_routers(api, app.state.container)
     if config.is_hybrid_mode:
         api.include_router(hybrid_mode.router)
@@ -111,7 +116,7 @@ def _register_contributed_routers(api: APIRouter, container: Container) -> None:
         )
 
 
-def _register_core_routers(api: APIRouter, config: GatewayConfig) -> None:
+def _register_core_routers(api: APIRouter, config: GatewayConfig, enabled_features: tuple[CoreFeature, ...]) -> None:
     # Whether this deployment serves inference at all. False only for a hosted
     # control plane, which owns many tenants' wallets and credentials but runs
     # none of their traffic: that belongs on a hybrid data-plane gateway, whose
@@ -144,6 +149,13 @@ def _register_core_routers(api: APIRouter, config: GatewayConfig) -> None:
         # database; standalone uses the ordinary API/master-key path.
         api.include_router(mcp.router)
 
+    # Agent Gates' Hook Server, mounted in every mode. It evaluates only the
+    # policy and evidence the caller sent in the same request, so it needs no
+    # local tenancy, no provider and no database, and a hybrid gateway is as
+    # able to answer it as a standalone one. ``hooks.verify_hook_caller``
+    # authenticates per mode.
+    api.include_router(hooks.router)
+
     if config.is_hybrid_mode:
         # The hybrid stub router is mounted by register_routers, after the
         # contributed routers; see the note there.
@@ -152,6 +164,7 @@ def _register_core_routers(api: APIRouter, config: GatewayConfig) -> None:
     api.include_router(admin.router)
     api.include_router(auth_session.router)
     api.include_router(auth_password.router)
+    api.include_router(auth_profile.router)
     api.include_router(auth_signup.router)
     api.include_router(auth_password_reset.router)
     api.include_router(auth_webauthn.router)
@@ -176,6 +189,24 @@ def _register_core_routers(api: APIRouter, config: GatewayConfig) -> None:
     # /api/v1/models/{model_id:path} catch-all the catalog router ends with.
     api.include_router(models.operator_router)
     api.include_router(models.catalog_router)
+    # The same merged catalog, folded by model for a chooser rather than listed
+    # flat for an SDK. Same reader gate as /v1/models.
+    api.include_router(catalog.router)
+    api.include_router(catalog.operator_router)
+    # Both planes at once, which is why it is mounted here rather than with the
+    # data plane above: the Playground page reads the management surface (its own
+    # saved transcripts, the workspace's tools) and dispatches a completion. The
+    # management session is what hybrid mode cannot offer, so hybrid is the one
+    # mode that returns before this. A hosted control plane has the session and
+    # not the data plane, and serves the page by forwarding that one request to
+    # ``data_plane_url`` (``services/playground_dispatch``), so its prefix is not
+    # in ``hosted_mode.DATA_PLANE_PREFIXES``: a stub there would shadow this
+    # router, which is registered later.
+    api.include_router(playground.router)
+    # The provider registry, which the organization provider-key form reads to
+    # offer its BYO choices. Split off the operator router because that form's
+    # audience is a tenant's owners and admins, who operate nothing.
+    api.include_router(providers.catalog_router)
     api.include_router(providers.router)
     api.include_router(keys.router)
     api.include_router(users.router)
@@ -233,3 +264,10 @@ def _register_core_routers(api: APIRouter, config: GatewayConfig) -> None:
     api.include_router(tool_settings.reader_router)
     api.include_router(search_tools.router)
     api.include_router(tools.router)
+    # Enabled features, mounted as core routes: no capability gate, because a
+    # listed feature is part of this build. Management plane only, after the
+    # hybrid return above; a feature that serves inference is not a shape the
+    # registry has yet.
+    for feature in enabled_features:
+        for router in feature.routers(config):
+            api.include_router(router)

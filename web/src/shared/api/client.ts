@@ -27,6 +27,16 @@ let unauthorizedHandler: (() => void) | null = null
 // once, so moving the API again is a change here and nowhere else.
 export const API_ROOT = "/api/v1"
 
+/**
+ * The gateway's build id, served beside the dashboard rather than under the API.
+ *
+ * Named here rather than spelled at the one call site so the e2e spec that
+ * proves the gateway answers it reads the same constant the poll does. The two
+ * drifting apart is the defect: a caller that moves back under `API_ROOT` gets
+ * a 404 that nothing reports, because a failed poll means "no answer yet".
+ */
+export const DASHBOARD_BUILD_PATH = "/dashboard-build.json"
+
 function apiUrl(path: string): string {
   return `${API_ROOT}${path}`
 }
@@ -292,7 +302,7 @@ async function publicGet(path: string): Promise<{
   if (!response.ok) {
     throw new ApiError(response.status, await extractErrorMessage(response))
   }
-  return { ok: true, body: await response.json() }
+  return { ok: true, body: await readJson<unknown>(response, TIMEOUT_MESSAGE) }
 }
 
 // One unauthenticated POST, with the sign-in screen's error handling: a 401 or
@@ -337,7 +347,7 @@ async function publicPost(
   if (!response.ok) {
     throw new ApiError(response.status, await extractErrorMessage(response))
   }
-  return { ok: true, body: await response.json() }
+  return { ok: true, body: await readJson<unknown>(response, TIMEOUT_MESSAGE) }
 }
 
 // Best-effort server-side sign-out: revokes the cookie's session and expires
@@ -389,6 +399,81 @@ export function longRequestSignal(): AbortSignal {
 // stalls trips the same deadline on the JSON read instead.
 function isTimeout(error: unknown): boolean {
   return error instanceof DOMException && error.name === "TimeoutError"
+}
+
+/**
+ * Read the body of a response that already looked like an answer.
+ *
+ * A body that is not JSON is never the gateway's: it is an intermediary
+ * answering in its place, which the edge in front of a hosted deployment does
+ * by serving the dashboard's own page at 200 for the statuses it remaps. The
+ * gateway's real answer is gone either way, so what a banner can usefully say
+ * is which side of the gateway replied. `response.json()`'s own `SyntaxError`
+ * says the opposite: `errorMessage` renders it verbatim, and the markup it
+ * quotes reads as a defect in the page that made the call (otari-ai#2147).
+ *
+ * Only `SyntaxError`. A body that fails to arrive at all is a different fault
+ * and keeps its own reporting.
+ */
+async function readJson<T>(
+  response: Response,
+  timeoutMessage: string,
+): Promise<T> {
+  try {
+    return (await response.json()) as T
+  } catch (error) {
+    if (isTimeout(error)) {
+      throw new ApiError(0, timeoutMessage)
+    }
+    if (error instanceof SyntaxError) {
+      throw new ApiError(
+        response.status,
+        `The gateway's reply was not JSON (HTTP ${response.status}). Something between this page and the gateway answered in its place, so whether the request was carried out is unknown.`,
+      )
+    }
+    throw error
+  }
+}
+
+/**
+ * Read something the gateway serves at its own root rather than under the API.
+ *
+ * A handful of things are not API resources and are mounted beside the
+ * dashboard itself: the page, its assets, and `/dashboard-build.json`, which is
+ * `include_in_schema=False` and has no place in the OpenAPI surface. `apiFetch`
+ * prepends `API_ROOT` to everything it is given, which is right for a resource
+ * and wrong for these, so they come through here instead.
+ *
+ * That difference is the whole reason this exists. When the API moved under
+ * `/api/v1` (#1026) every caller was rewritten to drop the version and let
+ * `apiFetch` add the root; the build path was rewritten with them, and has
+ * asked for `/api/v1/dashboard-build.json` ever since, which is a 404. Nothing
+ * surfaced it, because the one caller treats a failed poll as "no answer yet".
+ *
+ * Unauthenticated by design, like the page it describes, so it has no 401
+ * sign-out path: there is nothing here a session could authorize. The
+ * credential is omitted explicitly rather than left to `fetch`, whose default
+ * is `same-origin` and would therefore attach the session cookie to every poll
+ * for the life of an open tab. Nothing reads it, so nothing should send it.
+ */
+export async function siteFetch<T>(path: string): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(path, {
+      credentials: "omit",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+  } catch (error) {
+    if (isTimeout(error)) {
+      throw new ApiError(0, TIMEOUT_MESSAGE)
+    }
+    throw new ApiError(0, "Network error: could not reach the gateway.")
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, await extractErrorMessage(response))
+  }
+  return readJson<T>(response, TIMEOUT_MESSAGE)
 }
 
 export async function apiFetch<T>(
@@ -443,14 +528,61 @@ export async function apiFetch<T>(
     return undefined as T
   }
 
-  try {
-    return (await response.json()) as T
-  } catch (error) {
-    // Every caller expects an ApiError; a raw DOMException here would reach the
-    // UI as an unrecognized failure. A malformed body is still its own error.
-    if (isTimeout(error)) {
-      throw new ApiError(0, timeoutMessage)
-    }
-    throw error
+  return readJson<T>(response, timeoutMessage)
+}
+
+/**
+ * Start a streaming request and hand back the live `Response`.
+ *
+ * The one thing `apiFetch` cannot do: it awaits `response.json()`, which is the
+ * whole body, and the Playground exists to render a reply as it arrives rather
+ * than once it is finished. So the caller gets the response and reads
+ * `body.getReader()` itself.
+ *
+ * Everything else is deliberately `apiFetch`'s: the same URL building (a caller
+ * names its resource and never spells the API root), the same refusal
+ * extraction, and the same 401 handling, so a session that expired mid-stream
+ * bounces to sign-in exactly as it would on any other call. Written here rather
+ * than as a raw `fetch` at the call site for that reason: the layer rule is not
+ * about the function, it is about who owns those three behaviors.
+ *
+ * No timeout of its own, and this is the one place that is right. A generated
+ * answer legitimately takes minutes, and the deadline `apiFetch` enforces
+ * exists to stop a *hung* request from holding a connection slot, which a
+ * stream delivering tokens is not. The caller passes an `AbortSignal` it can
+ * trigger instead, which is what a Stop control needs anyway.
+ */
+export async function apiStream(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const headers = new Headers(init.headers)
+  headers.set("Accept", "text/event-stream")
+  if (init.body != null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json")
   }
+
+  let response: Response
+  try {
+    response = await fetch(apiUrl(path), { ...init, headers })
+  } catch (error) {
+    // An abort is the caller's own Stop control, not a fault, so it is left to
+    // propagate as itself rather than being reported as an unreachable gateway.
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error
+    }
+    throw new ApiError(0, "Network error: could not reach the gateway.")
+  }
+
+  if (response.status === 401) {
+    unauthorizedHandler?.()
+    throw new ApiError(response.status, await extractErrorMessage(response))
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, await extractErrorMessage(response))
+  }
+  if (response.body === null) {
+    throw new ApiError(0, "The gateway returned no response body.")
+  }
+  return response
 }

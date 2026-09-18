@@ -31,19 +31,16 @@ _MODULES = [
     "gateway.services.tenancy.workspace_service",
     "gateway.services.tenancy.organization_service",
     "gateway.services.tenancy.provisioning_service",
-    # workspace_budget_default_service sits between workspace_service and
-    # organization_service (both reach it, it reaches organization_service and
-    # authorization but never workspace_service), and authorization sits
-    # between workspace_service and organization_service the same way. Pinned
-    # here for the same reason as the two above them.
+    # workspace_budget_default_service reaches organization_service and
+    # authorization, and nothing in organizations reaches it. authorization sits
+    # between workspace_service and organization_service. Pinned here for the
+    # same reason as the two above them.
     "gateway.services.tenancy.workspace_budget_default_service",
     "gateway.services.tenancy.authorization",
     # organization_budget_service reaches organization_service and the entity
-    # models but deliberately not `scoped_budget_service`, which would close the
-    # cycle described in its own module docstring: that module reaches
-    # `workspace_scope` -> `tenancy.provisioning_service` -> `tenancy/__init__`.
-    # It spells the five scope names out instead, and
-    # `test_organization_budget_scopes.py` pins those against `ScopeType`.
+    # models but deliberately not `scoped_budget_service`, which reaches this
+    # package through `workspace_scope`. It spells the five scope names out
+    # instead.
     "gateway.services.tenancy.organization_budget_service",
     # budget_retiming is the leaf both budget surfaces share. It must stay
     # importable on its own: the tenant-scoped service cannot reach
@@ -72,3 +69,35 @@ def test_module_imports_first(module: str) -> None:
     )
 
     assert result.returncode == 0, f"{module} cannot be imported first:\n{result.stderr}"
+
+
+# Budgets depends on organizations, never the reverse, so an organizations
+# module must not load a budget module.
+_BUDGET_MODULE_PREFIXES = (
+    "gateway.services.budget",
+    "gateway.services.scoped_budget_service",
+    "gateway.services.tenancy.organization_budget_service",
+    "gateway.services.tenancy.workspace_budget_default_service",
+    "gateway.services.budgets",
+)
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "gateway.services.tenancy.workspace_service",
+        "gateway.services.tenancy.organization_service",
+        "gateway.services.tenancy.provisioning_service",
+    ],
+)
+def test_organizations_modules_load_no_budget_module(module: str) -> None:
+    code = (
+        "import sys, importlib\n"
+        f"importlib.import_module({module!r})\n"
+        f"loaded = sorted(m for m in sys.modules if m.startswith({_BUDGET_MODULE_PREFIXES!r}))\n"
+        "print(','.join(loaded))\n"
+    )
+
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+
+    assert result.stdout.strip() == "", f"{module} loaded budget modules: {result.stdout.strip()}"

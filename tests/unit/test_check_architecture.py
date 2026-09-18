@@ -8,6 +8,7 @@ from types import ModuleType
 import pytest
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "check_architecture.py"
+_DISCOVERY_MESSAGE = "Forbidden import in OSS base (no entry-point discovery; the feature registry is a literal tuple)"
 
 
 def _load() -> ModuleType:
@@ -29,8 +30,18 @@ def _write(src_root: Path, relative_path: str, content: str) -> Path:
     return file_path
 
 
+def _point_main_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every baseline is emptied, so an entry that is stale in the temporary tree cannot fail main() on its own.
+    monkeypatch.setattr(check, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(check, "SRC_ROOT", tmp_path / "src")
+    monkeypatch.setattr(check, "GATEWAY_ROOT", tmp_path / "src" / "gateway")
+    monkeypatch.setattr(check, "TESTS_ROOT", tmp_path / "tests")
+    for name in [name for name in vars(check) if name.endswith("_BASELINE")]:
+        monkeypatch.setattr(check, name, ())
+
+
 def test_service_importing_models_is_clean(tmp_path: Path) -> None:
-    file_path = _write(tmp_path, "gateway/services/thing.py", "from gateway.models.entities import User\n")
+    file_path = _write(tmp_path, "gateway/services/thing.py", "from gateway.models.users import User\n")
     assert check.check_file(file_path, tmp_path) == []
 
 
@@ -289,13 +300,358 @@ def test_main_discovers_tests_root_and_fails_on_overlay_import(tmp_path: Path, m
     # it walks TESTS_ROOT (not just GATEWAY_ROOT) and resolves those paths
     # against REPO_ROOT, using the gateway-composed overlay spelling.
     _write(tmp_path, "src/gateway/__init__.py", "")
+    _write(tmp_path, "tests/unit/test_thing.py", "")
+    _point_main_at(tmp_path, monkeypatch)
+    assert check.main() == 0
     _write(tmp_path, "tests/unit/test_thing.py", "from gateway.overlay.billing import charge\n")
-    monkeypatch.setattr(check, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(check, "SRC_ROOT", tmp_path / "src")
-    monkeypatch.setattr(check, "GATEWAY_ROOT", tmp_path / "src" / "gateway")
-    monkeypatch.setattr(check, "TESTS_ROOT", tmp_path / "tests")
     assert check.main() == 1
 
 
 def test_real_gateway_tree_is_clean() -> None:
     assert check.main() == 0
+
+
+def test_the_gateway_package_is_an_allowed_top_level_package(tmp_path: Path) -> None:
+    _write(tmp_path, "gateway/__init__.py", "")
+    assert check.check_top_level_packages(tmp_path) == []
+
+
+@pytest.mark.parametrize("relative_path", ["otari_probe/__init__.py", "otari_probe/routes.py", "otari_probe.py"])
+def test_a_new_top_level_package_is_refused(tmp_path: Path, relative_path: str) -> None:
+    _write(tmp_path, "gateway/__init__.py", "")
+    _write(tmp_path, relative_path, "")
+    assert check.check_top_level_packages(tmp_path) == [
+        f"Top-level package src/{relative_path.split('/')[0]} is not allowed; "
+        "a feature in this repository belongs under src/gateway and in its feature registry"
+    ]
+
+
+def test_a_directory_without_python_source_is_not_a_package(tmp_path: Path) -> None:
+    # Installing the project in editable mode writes gateway.egg-info beside the package.
+    _write(tmp_path, "gateway/__init__.py", "")
+    _write(tmp_path, "gateway.egg-info/PKG-INFO", "")
+    assert check.check_top_level_packages(tmp_path) == []
+
+
+def test_main_fails_on_a_new_top_level_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write(tmp_path, "src/gateway/__init__.py", "")
+    _write(tmp_path, "tests/__init__.py", "")
+    _point_main_at(tmp_path, monkeypatch)
+    assert check.main() == 0
+    _write(tmp_path, "src/otari_probe/__init__.py", "")
+    assert check.main() == 1
+
+
+def test_a_service_may_not_import_the_feature_registry(tmp_path: Path) -> None:
+    # Only the app wiring reads the registry; a service that imported it could
+    # register itself, which is discovery by another name.
+    file_path = _write(tmp_path, "gateway/services/thing.py", "from gateway.features import CORE_FEATURES\n")
+    assert check.check_file(file_path, tmp_path) == [(1, "gateway.features", "Forbidden import in Services")]
+
+
+def test_a_route_may_not_import_the_feature_registry(tmp_path: Path) -> None:
+    file_path = _write(tmp_path, "gateway/api/routes/alerts.py", "from gateway.features import CORE_FEATURES\n")
+    assert check.check_file(file_path, tmp_path) == [(1, "gateway.features", "Forbidden import in API routes")]
+
+
+@pytest.mark.parametrize("relative_path", ["gateway/features.py", "gateway/main.py", "gateway/services/thing.py"])
+def test_entry_point_discovery_is_forbidden_anywhere_under_gateway(tmp_path: Path, relative_path: str) -> None:
+    # The registry is a literal tuple on purpose; importlib.metadata is how the
+    # alternative gets written, and the message says so.
+    file_path = _write(tmp_path, relative_path, "from importlib.metadata import entry_points\n")
+    assert check.check_file(file_path, tmp_path) == [(1, "importlib.metadata", _DISCOVERY_MESSAGE)]
+
+
+@pytest.mark.parametrize(
+    ("source", "module"),
+    [
+        ("from importlib import metadata\n", "importlib.metadata"),
+        ("import importlib_metadata\n", "importlib_metadata"),
+        ("import pkg_resources\n", "pkg_resources"),
+    ],
+)
+def test_every_spelling_of_entry_point_discovery_is_forbidden(tmp_path: Path, source: str, module: str) -> None:
+    file_path = _write(tmp_path, "gateway/core/plugins.py", source)
+    assert check.check_file(file_path, tmp_path) == [(1, module, _DISCOVERY_MESSAGE)]
+
+
+_SERVICE_REMEDY = "a service reaches the database through its repositories and the Unit of Work"
+_ROUTE_REMEDY = "a route reaches the database through a service"
+
+
+def _use_empty_database_baselines(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(check, "SERVICE_DATABASE_IMPORT_BASELINE", ())
+    monkeypatch.setattr(check, "ROUTE_DATABASE_IMPORT_BASELINE", ())
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "remedy"),
+    [
+        ("gateway/services/thing_service.py", _SERVICE_REMEDY),
+        ("gateway/services/things/_store.py", _SERVICE_REMEDY),
+        ("gateway/api/routes/things.py", _ROUTE_REMEDY),
+    ],
+)
+@pytest.mark.parametrize(
+    ("source", "module"),
+    [
+        ("from sqlalchemy import select\n", "sqlalchemy"),
+        ("from sqlmodel import col\n", "sqlmodel"),
+        ("import sqlalchemy as sa\n", "sqlalchemy"),
+        ("from sqlalchemy.ext.asyncio import AsyncSession\n", "sqlalchemy.ext.asyncio"),
+        (
+            "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import sqlmodel.sql.expression\n",
+            "sqlmodel.sql.expression",
+        ),
+    ],
+)
+def test_a_route_or_service_that_imports_a_database_library_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative_path: str, remedy: str, source: str, module: str
+) -> None:
+    _use_empty_database_baselines(monkeypatch)
+    _write(tmp_path, relative_path, source)
+    line = source.count("\n")
+    assert check.check_database_imports(tmp_path) == [f"{relative_path}:{line} imports {module}; {remedy}"]
+
+
+def test_a_service_class_that_takes_a_session_in_its_constructor_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_empty_database_baselines(monkeypatch)
+    _write(
+        tmp_path,
+        "gateway/services/thing_service.py",
+        "from sqlalchemy.ext.asyncio import AsyncSession\n\n\n"
+        "class ThingService:\n"
+        "    def __init__(self, db: AsyncSession) -> None:\n"
+        "        self._db = db\n",
+    )
+    assert check.check_database_imports(tmp_path) == [
+        f"gateway/services/thing_service.py:1 imports sqlalchemy.ext.asyncio; {_SERVICE_REMEDY}"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "source"),
+    [
+        ("gateway/repositories/thing_repository.py", "from sqlalchemy import select\n"),
+        ("gateway/services/thing_service.py", "import sqlalchemylike\nfrom gateway.repositories import things\n"),
+    ],
+)
+def test_a_repository_or_an_unrelated_import_is_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative_path: str, source: str
+) -> None:
+    _use_empty_database_baselines(monkeypatch)
+    _write(tmp_path, relative_path, source)
+    assert check.check_database_imports(tmp_path) == []
+
+
+def test_a_module_on_its_layers_baseline_may_import_a_database_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check, "SERVICE_DATABASE_IMPORT_BASELINE", ("gateway/services/thing_service.py",))
+    monkeypatch.setattr(check, "ROUTE_DATABASE_IMPORT_BASELINE", ())
+    _write(tmp_path, "gateway/services/thing_service.py", "from sqlalchemy import select\n")
+    _write(tmp_path, "gateway/api/routes/things.py", "from sqlalchemy import select\n")
+    assert check.check_database_imports(tmp_path) == [
+        f"gateway/api/routes/things.py:1 imports sqlalchemy; {_ROUTE_REMEDY}"
+    ]
+
+
+@pytest.mark.parametrize("source", ["from gateway.repositories import things\n", None])
+def test_a_database_baseline_entry_that_imports_no_database_library_must_leave_the_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str | None
+) -> None:
+    monkeypatch.setattr(check, "SERVICE_DATABASE_IMPORT_BASELINE", ())
+    monkeypatch.setattr(check, "ROUTE_DATABASE_IMPORT_BASELINE", ("gateway/api/routes/things.py",))
+    _write(tmp_path, "gateway/api/routes/other.py", "")
+    if source is not None:
+        _write(tmp_path, "gateway/api/routes/things.py", source)
+    assert check.check_database_imports(tmp_path) == [
+        "gateway/api/routes/things.py is on the database import baseline but imports no database library; "
+        "remove it from the baseline"
+    ]
+
+
+def test_main_fails_on_a_service_that_imports_a_database_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, "src/gateway/services/__init__.py", "")
+    _write(tmp_path, "src/gateway/services/thing_service.py", "")
+    _write(tmp_path, "tests/__init__.py", "")
+    _point_main_at(tmp_path, monkeypatch)
+    monkeypatch.setattr(check, "FLAT_MODULE_BASELINE", ("gateway/services/thing_service.py",))
+    assert check.main() == 0
+    _write(tmp_path, "src/gateway/services/thing_service.py", "from sqlalchemy import select\n")
+    assert check.main() == 1
+
+
+def _use_empty_flat_module_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(check, "FLAT_MODULE_BASELINE", ())
+
+
+@pytest.mark.parametrize("layer", ["services", "repositories"])
+def test_a_new_top_level_module_in_a_domain_layer_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layer: str
+) -> None:
+    _use_empty_flat_module_baseline(monkeypatch)
+    _write(tmp_path, f"gateway/{layer}/__init__.py", "")
+    _write(tmp_path, f"gateway/{layer}/things.py", "")
+    assert check.check_flat_modules(tmp_path) == [
+        f"gateway/{layer}/things.py is a new top-level module; put it in its domain's package under gateway/{layer}/"
+    ]
+
+
+@pytest.mark.parametrize("layer", ["services", "repositories"])
+def test_a_domain_package_in_a_domain_layer_is_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layer: str
+) -> None:
+    _use_empty_flat_module_baseline(monkeypatch)
+    _write(tmp_path, f"gateway/{layer}/__init__.py", "")
+    _write(tmp_path, f"gateway/{layer}/things/__init__.py", "")
+    _write(tmp_path, f"gateway/{layer}/things/_store.py", "")
+    _write(tmp_path, f"gateway/{layer}/things/nested/__init__.py", "")
+    _write(tmp_path, f"gateway/{layer}/things/nested/deep.py", "")
+    assert check.check_flat_modules(tmp_path) == []
+
+
+def test_a_directory_of_modules_without_an_init_is_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_empty_flat_module_baseline(monkeypatch)
+    _write(tmp_path, "gateway/services/things/store.py", "")
+    _write(tmp_path, "gateway/services/cache/readme.txt", "")
+    assert check.check_flat_modules(tmp_path) == [
+        "gateway/services/things has no __init__.py; a domain package needs one"
+    ]
+
+
+@pytest.mark.parametrize("layer", ["services", "repositories"])
+def test_a_nested_directory_of_modules_without_an_init_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layer: str
+) -> None:
+    _use_empty_flat_module_baseline(monkeypatch)
+    _write(tmp_path, f"gateway/{layer}/things/__init__.py", "")
+    _write(tmp_path, f"gateway/{layer}/things/handlers/task.py", "")
+    _write(tmp_path, f"gateway/{layer}/things/assets/readme.txt", "")
+    assert check.check_flat_modules(tmp_path) == [
+        f"gateway/{layer}/things/handlers has no __init__.py; a domain package needs one"
+    ]
+
+
+def test_a_module_on_the_flat_module_baseline_is_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(check, "FLAT_MODULE_BASELINE", ("gateway/repositories/users_repository.py",))
+    _write(tmp_path, "gateway/repositories/users_repository.py", "")
+    assert check.check_flat_modules(tmp_path) == []
+
+
+def test_a_flat_module_baseline_entry_that_no_longer_exists_must_leave_the_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(check, "FLAT_MODULE_BASELINE", ("gateway/services/things.py",))
+    _write(tmp_path, "gateway/services/things/__init__.py", "")
+    assert check.check_flat_modules(tmp_path) == [
+        "gateway/services/things.py is on the flat module baseline but no longer exists; remove it from the baseline"
+    ]
+
+
+def test_main_fails_on_a_new_top_level_service_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write(tmp_path, "src/gateway/services/__init__.py", "")
+    _write(tmp_path, "tests/__init__.py", "")
+    _point_main_at(tmp_path, monkeypatch)
+    assert check.main() == 0
+    _write(tmp_path, "src/gateway/services/things.py", "")
+    assert check.main() == 1
+
+
+_TRANSACTION_REMEDY = "only a Unit of Work block ends a transaction"
+
+
+@pytest.mark.parametrize(
+    ("source", "call"),
+    [
+        ("async def save(db: object) -> None:\n    await db.commit()\n", "commit"),
+        ("async def save(db: object) -> None:\n    await db.rollback()\n", "rollback"),
+        ("class Store:\n    async def save(self) -> None:\n        await self.db.commit()\n", "commit"),
+    ],
+)
+def test_a_commit_or_rollback_outside_the_unit_of_work_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, call: str
+) -> None:
+    monkeypatch.setattr(check, "TRANSACTION_CONTROL_BASELINE", ())
+    _write(tmp_path, "gateway/services/thing_service.py", source)
+    line = source.count("\n")
+    assert check.check_transaction_control(tmp_path) == [
+        f"gateway/services/thing_service.py:{line} calls {call}; {_TRANSACTION_REMEDY}"
+    ]
+
+
+def test_the_unit_of_work_may_commit_and_roll_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(check, "TRANSACTION_CONTROL_BASELINE", ())
+    _write(
+        tmp_path,
+        "gateway/core/unit_of_work.py",
+        "class UnitOfWork:\n    async def end(self) -> None:\n        await self._session.commit()\n",
+    )
+    assert check.check_transaction_control(tmp_path) == []
+
+
+def test_a_module_on_the_transaction_baseline_may_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(check, "TRANSACTION_CONTROL_BASELINE", ("gateway/services/thing_service.py",))
+    _write(
+        tmp_path, "gateway/services/thing_service.py", "async def save(db: object) -> None:\n    await db.commit()\n"
+    )
+    assert check.check_transaction_control(tmp_path) == []
+
+
+@pytest.mark.parametrize("source", ["async def save(db: object) -> None:\n    await db.flush()\n", None])
+def test_a_transaction_baseline_entry_that_ends_no_transaction_must_leave_the_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str | None
+) -> None:
+    monkeypatch.setattr(check, "TRANSACTION_CONTROL_BASELINE", ("gateway/services/thing_service.py",))
+    _write(tmp_path, "gateway/services/other_service.py", "")
+    if source is not None:
+        _write(tmp_path, "gateway/services/thing_service.py", source)
+    assert check.check_transaction_control(tmp_path) == [
+        "gateway/services/thing_service.py is on the transaction control baseline but calls neither commit nor "
+        "rollback; remove it from the baseline"
+    ]
+
+
+@pytest.mark.parametrize(
+    "relative_path", ["gateway/services/thing_service.py", "gateway/api/routes/things.py", "gateway/core/thing.py"]
+)
+def test_importing_the_session_accessor_outside_repositories_is_flagged(tmp_path: Path, relative_path: str) -> None:
+    file_path = _write(tmp_path, relative_path, "from gateway.core.unit_of_work import session_for\n")
+    assert check.check_file(file_path, tmp_path) == [
+        (1, "gateway.core.unit_of_work.session_for", f"Forbidden import in {check.SESSION_ACCESSOR_RULE}")
+    ]
+
+
+def test_a_repository_may_import_the_session_accessor(tmp_path: Path) -> None:
+    file_path = _write(
+        tmp_path,
+        "gateway/repositories/thing_repository.py",
+        "from gateway.core.unit_of_work import UnitOfWork, session_for\n",
+    )
+    assert check.check_file(file_path, tmp_path) == []
+
+
+def test_a_service_may_import_the_unit_of_work_itself(tmp_path: Path) -> None:
+    file_path = _write(
+        tmp_path, "gateway/services/thing_service.py", "from gateway.core.unit_of_work import UnitOfWork\n"
+    )
+    assert check.check_file(file_path, tmp_path) == []
+
+
+def test_main_fails_on_a_commit_outside_the_unit_of_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write(tmp_path, "src/gateway/services/__init__.py", "")
+    _write(tmp_path, "src/gateway/services/thing_service.py", "")
+    _write(tmp_path, "tests/__init__.py", "")
+    _point_main_at(tmp_path, monkeypatch)
+    monkeypatch.setattr(check, "FLAT_MODULE_BASELINE", ("gateway/services/thing_service.py",))
+    assert check.main() == 0
+    _write(
+        tmp_path,
+        "src/gateway/services/thing_service.py",
+        "async def save(db: object) -> None:\n    await db.commit()\n",
+    )
+    assert check.main() == 1

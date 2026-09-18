@@ -63,10 +63,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import col
 
-from gateway.models.entities import MAX_COUNT_LIMIT, APIKey, Budget, ScopedBudget, WorkspaceBudgetDefault
-from gateway.models.entities import User as GatewayUser
+from gateway.models.api_keys import APIKey
+from gateway.models.budgets import MAX_COUNT_LIMIT, Budget, ScopedBudget, WorkspaceBudgetDefault
 from gateway.models.money import MAX_USD_LIMIT, as_float, to_usd_or_none
 from gateway.models.tenancy import Organization, OrganizationMember, User, Workspace, WorkspaceMember
+from gateway.models.users import User as GatewayUser
 from gateway.services.budget_periods import ResetAlignment, period_window
 from gateway.services.budget_retiming import cadence_of, retime_ceilings_for_budget
 from gateway.services.tenancy.errors import (
@@ -81,13 +82,8 @@ from gateway.services.tenancy.errors import (
 from gateway.services.tenancy.organization_service import OrganizationService
 
 # The scopes this surface understands, spelled out rather than imported from
-# `scoped_budget_service`: that module reaches `workspace_scope`, which reaches
-# `tenancy.provisioning_service`, which runs `tenancy/__init__`, which imports
-# this package. `WorkspaceService._delete_scoped_budgets_for` avoids the same
-# cycle the same way, and `tests/unit/test_service_module_imports.py` pins it.
-# The values are identical to `ScopeType`, and
-# `tests/unit/test_organization_budget_scopes.py` asserts that rather than
-# trusting it.
+# `scoped_budget_service`, which reaches this package through `workspace_scope`.
+# The values are identical to `ScopeType`.
 SCOPE_ORGANIZATION = "organization"
 SCOPE_WORKSPACE = "workspace"
 SCOPE_WORKSPACE_MEMBER = "workspace_member"
@@ -361,7 +357,7 @@ class OrganizationBudgetService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.organizations = OrganizationService(db)
+        self.organizations = OrganizationService(db, membership_listener=None)
 
     # ------------------------------------------------------------------
     # Identity and scope resolution

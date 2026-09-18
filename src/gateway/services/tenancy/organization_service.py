@@ -107,7 +107,8 @@ from gateway.services.tenancy.invitation_email import render_invitation_email
 # into the tenancy graph is a function-local import), so this direction of the
 # dependency is the safe one; ``tests/unit/test_service_module_imports.py``
 # pins it.
-from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME
+from gateway.services.tenancy.membership_listener import MembershipListener
+from gateway.services.tenancy.provisioning_service import DEFAULT_WORKSPACE_NAME, password_claims_deployment
 
 
 def _validated_organization_name(name: str | None) -> str:
@@ -208,8 +209,9 @@ CALLER_WORKSPACE_LIMIT = 1000
 class OrganizationService:
     """Business logic for the organization surface."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, *, membership_listener: MembershipListener | None):
         self.db = db
+        self._membership_listener = membership_listener
         self.organizations = OrganizationRepository(db)
         self.members = OrganizationMemberRepository(db)
         self.users = UserRepository(db)
@@ -240,8 +242,8 @@ class OrganizationService:
         return membership
 
     @staticmethod
-    def _enforce_management_role(membership: OrganizationMember, user: User) -> None:
-        if membership.role not in MANAGEMENT_ROLES and not user.is_superuser:
+    def _enforce_management_role(membership: OrganizationMember) -> None:
+        if membership.role not in MANAGEMENT_ROLES:
             raise NotAuthorizedError
 
     async def require_active_organization_management_access(
@@ -252,7 +254,7 @@ class OrganizationService:
     ) -> OrganizationMember:
         """Return the caller's membership, refusing unless it may manage the organization."""
         membership = await self._require_active_membership(user, organization)
-        self._enforce_management_role(membership, user)
+        self._enforce_management_role(membership)
         return membership
 
     async def user_has_active_membership(self, *, organization_id: uuid.UUID, user_id: uuid.UUID) -> bool:
@@ -284,6 +286,8 @@ class OrganizationService:
                 user_id=user.id,
                 email=user.email,
                 full_name=user.full_name,
+                has_password=user.hashed_password is not None,
+                claims_deployment=await password_claims_deployment(self.db, user),
             ),
             # The platform answers "does this org have a self-hosted gateway
             # attached". A standalone deployment reading this *is* that gateway,
@@ -815,6 +819,12 @@ class OrganizationService:
         }
         return [assignment for assignment in assignments if assignment.workspace_id in found]
 
+    def _require_membership_listener(self) -> MembershipListener:
+        if self._membership_listener is None:
+            msg = "This organization service cannot change workspace membership"
+            raise RuntimeError(msg)
+        return self._membership_listener
+
     async def _apply_workspace_assignments(
         self,
         *,
@@ -832,33 +842,22 @@ class OrganizationService:
         An existing membership is updated rather than skipped, as the platform's
         own assignment path does: a suspended row that is left alone would leave
         the member listed in a workspace they were just granted while still
-        being refused everything in it. Reviving one is materialized exactly
-        as creating one is: a suspended member could have missed a default
-        created while they were out, and the revive is the only signal that
-        they are back to being covered by the workspace's defaults again.
-        Gated on the row actually having been inactive: re-applying the same
-        assignment to an already-active membership (a repeat invitation
-        accept, say) is not a join, and materializing it would resurrect a
-        per-member ceiling an admin deliberately deleted through
-        `/v1/scoped-budgets`.
+        being refused everything in it. Reviving one is announced exactly as
+        creating one is, because a revive is the only signal that the member
+        is back. Gated on the row actually having been inactive: re-applying
+        the same assignment to an already-active membership (a repeat
+        invitation accept, say) is not a join, and announcing it would
+        resurrect state an admin deliberately deleted.
 
         Each target workspace is locked (`WorkspaceRepository.lock`) before
-        its create-or-revive-and-materialize step, same as
+        its create-or-revive-and-announce step, same as
         `WorkspaceService.add_member`, and in a stable order (`wanted` is
         walked sorted by id, not in insertion order) so two requests naming
         the same workspaces in different orders cannot deadlock each other.
-        Imported locally, not at module top: `WorkspaceBudgetDefaultService`
-        reaches back to `OrganizationService` (for its own authorization
-        checks), and importing it at the top of this module would close that
-        into a real cycle. See `tests/unit/test_service_module_imports.py`.
         """
-        from gateway.services.tenancy.workspace_budget_default_service import (
-            WorkspaceBudgetDefaultService,
-        )
-
+        listener = self._require_membership_listener()
         members = WorkspaceMemberRepository(self.db)
         workspaces = WorkspaceRepository(self.db)
-        budget_defaults = WorkspaceBudgetDefaultService(self.db)
         wanted: dict[uuid.UUID, str] = {}
         for assignment in assignments:
             wanted.setdefault(assignment.workspace_id, assignment.role)
@@ -879,10 +878,10 @@ class OrganizationService:
                 was_inactive = existing.status != "active"
                 revived = await members.update(existing, WorkspaceMemberUpdate(role=role, status="active"))
                 if was_inactive:
-                    await budget_defaults.materialize_for_member(revived)
+                    await listener.member_joined(revived)
                 continue
             member = await members.create(workspace_id=workspace_id, user_id=user_id, role=role)
-            await budget_defaults.materialize_for_member(member)
+            await listener.member_joined(member)
 
     async def invite_active_organization_member_for_user(
         self,

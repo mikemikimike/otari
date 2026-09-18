@@ -839,12 +839,59 @@ describe("RoutingPage", () => {
     )
     expect(screen.getByText("If that fails, try")).toBeInTheDocument()
     // Adding another one belongs inside the section it extends, not in the row of
-    // links that start a section.
-    const section = screen.getByText("If that fails, try").closest("div")!
-      .parentElement!
+    // links that start a section. Walked up to the bordered section rather than
+    // a fixed number of parents: the heading now sits in a row of its own with
+    // the section's Remove, so counting levels would pin the markup instead of
+    // the rule.
+    const section = screen
+      .getByText("If that fails, try")
+      .closest<HTMLElement>("div.border")!
     expect(
       within(section).getByRole("button", { name: /Another fallback/ }),
     ).toBeInTheDocument()
+  })
+
+  it("takes a whole section away in one press, whatever it holds", async () => {
+    mockApi([])
+    const user = userEvent.setup()
+    renderPage(<RoutingPage />)
+
+    await user.click(await createTrigger())
+    await user.click(
+      screen.getByRole("button", { name: /Let a router pick the cheapest/ }),
+    )
+    // Two rows from one press, so the row control could never be a one-press
+    // way out of this section: that is the asymmetry the section control fixes.
+    expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(2)
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove the routed pool" }),
+    )
+
+    expect(
+      screen.queryByRole("button", { name: "Remove" }),
+    ).not.toBeInTheDocument()
+    // The affordance that summons it is back, which is what says the section is
+    // gone rather than merely emptied.
+    expect(
+      screen.getByRole("button", { name: /Let a router pick the cheapest/ }),
+    ).toBeInTheDocument()
+  })
+
+  it("offers a section control beside every section that can be summoned", async () => {
+    mockApi([])
+    const user = userEvent.setup()
+    renderPage(<RoutingPage />)
+
+    await user.click(await createTrigger())
+    for (const [summon, remove] of [
+      [/Tier down when the budget fills up/, "Remove the budget tier-down"],
+      [/Add a fallback chain/, "Remove the fallback chain"],
+      [/Add guardrails/, "Remove the guardrails"],
+    ] as const) {
+      await user.click(screen.getByRole("button", { name: summon }))
+      expect(screen.getByRole("button", { name: remove })).toBeInTheDocument()
+    }
   })
 
   it("disables the guardrails affordance when no guardrails service is configured", async () => {
@@ -2143,6 +2190,117 @@ describe("RoutingPage", () => {
     ).toBeInTheDocument()
     // The operator's numbered getting-started walkthrough is not for them.
     expect(screen.queryByText(/Create a policy/)).not.toBeInTheDocument()
+  })
+})
+
+// otari-ai#2087: the page showed an operator every tenant's stored rows and an
+// admin every workspace of their organization's, while resolution is scoped to
+// one workspace. Both reads and both writes name the selected workspace now,
+// and the surface they land on is still the caller's role.
+describe("RoutingPage scoped to the selected workspace", () => {
+  const OPERATOR_WORKSPACE = ADMIN_WORKSPACE
+
+  function operatorInWorkspace(): OrganizationContext {
+    return organizationContext({
+      workspace_memberships: [
+        { workspace_id: OPERATOR_WORKSPACE, name: "Alpha one", role: "owner" },
+      ],
+    })
+  }
+
+  it("names the selected workspace on the operator's list read", async () => {
+    const { calls } = mockApi([policy("fast", CHAIN)], null, [], {
+      context: operatorInWorkspace(),
+    })
+    renderInWorkspace(<RoutingPage />)
+
+    await screen.findByText("fast")
+    const listed = calls.filter(
+      (call) =>
+        call.method === "GET" &&
+        call.url.includes(`${API_ROOT}/routing/policies`),
+    )
+    expect(listed.length).toBeGreaterThan(0)
+    for (const call of listed) {
+      expect(call.url).toContain(`workspace_id=${OPERATOR_WORKSPACE}`)
+    }
+  })
+
+  it("names the selected workspace on an admin's list read", async () => {
+    const { calls } = mockApi([], null, [], {
+      context: adminContext(),
+      memberPolicies: [policy("tenant-fast", CHAIN)],
+    })
+    renderInWorkspace(<RoutingPage />)
+
+    await screen.findByText("tenant-fast")
+    const listed = calls.filter(
+      (call) =>
+        call.method === "GET" &&
+        call.url.includes(`${API_ROOT}/organizations/me/routing-policies`),
+    )
+    expect(listed.length).toBeGreaterThan(0)
+    for (const call of listed) {
+      expect(call.url).toContain(`workspace_id=${ADMIN_WORKSPACE}`)
+    }
+  })
+
+  it("lands an operator's create in the workspace they are looking at", async () => {
+    // Without this the write omitted the workspace, so the row went to the
+    // deployment's default one and the page it was created from never showed it.
+    const { calls } = mockApi([], null, [], { context: operatorInWorkspace() })
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />)
+
+    await user.click(await createTrigger())
+    await user.type(
+      screen.getByRole("textbox", { name: /policy name/i }),
+      "scoped",
+    )
+    await user.type(
+      screen.getByRole("combobox", { name: /^serves$/i }),
+      "openai:gpt-5-mini",
+    )
+    await user.keyboard("{Escape}")
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Create policy",
+      }),
+    )
+
+    const written = calls.find(
+      (call) =>
+        call.method === "POST" &&
+        call.url.endsWith(`${API_ROOT}/routing/policies`),
+    )
+    expect(written?.body).toMatchObject({
+      name: "scoped",
+      workspace_id: OPERATOR_WORKSPACE,
+    })
+  })
+
+  it("names the row's workspace on an operator's delete", async () => {
+    const OTHER_WORKSPACE = "66666666-6666-6666-6666-666666666666"
+    const { calls } = mockApi(
+      [policy("doomed", CHAIN, { workspace_id: OTHER_WORKSPACE })],
+      null,
+      [],
+      { context: operatorInWorkspace() },
+    )
+    const user = userEvent.setup()
+    renderInWorkspace(<RoutingPage />)
+
+    await screen.findByText("doomed")
+    await user.click(screen.getByRole("button", { name: "Delete" }))
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Delete policy",
+      }),
+    )
+
+    const deleted = calls.find((call) => call.method === "DELETE")
+    expect(deleted?.url).toContain(`${API_ROOT}/routing/policies/doomed`)
+    expect(deleted?.url).toContain(`workspace_id=${OTHER_WORKSPACE}`)
   })
 })
 

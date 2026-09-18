@@ -21,6 +21,7 @@ import { Route as KeysRouteImport } from './routes/keys'
 import { Route as MembersRouteImport } from './routes/members'
 import { Route as ModelsRouteImport } from './routes/models'
 import { Route as OrganizationRouteImport } from './routes/organization'
+import { Route as PlaygroundRouteImport } from './routes/playground'
 import { Route as ProvidersRouteImport } from './routes/providers'
 import { Route as RoutingRouteImport } from './routes/routing'
 import { Route as SettingsRouteImport } from './routes/settings'
@@ -28,6 +29,8 @@ import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as WorkspacesRouteImport } from './routes/workspaces'
 import { Route as AdminAccountsRouteImport } from './routes/admin.accounts'
+import { Route as ModelsIndexRouteImport } from './routes/models.index'
+import { Route as ModelsSplatRouteImport } from './routes/models.$'
 import { Route as OrganizationIndexRouteImport } from './routes/organization.index'
 import { Route as OrganizationDomainsRouteImport } from './routes/organization.domains'
 import { Route as OrganizationGuardrailsRouteImport } from './routes/organization.guardrails'
@@ -101,6 +104,11 @@ const OrganizationRoute = OrganizationRouteImport.update({
   path: '/organization',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlaygroundRoute = PlaygroundRouteImport.update({
+  id: '/playground',
+  path: '/playground',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProvidersRoute = ProvidersRouteImport.update({
   id: '/providers',
   path: '/providers',
@@ -135,6 +143,16 @@ const AdminAccountsRoute = AdminAccountsRouteImport.update({
   id: '/admin/accounts',
   path: '/admin/accounts',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ModelsIndexRoute = ModelsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ModelsRoute,
+} as any)
+const ModelsSplatRoute = ModelsSplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => ModelsRoute,
 } as any)
 const OrganizationIndexRoute = OrganizationIndexRouteImport.update({
   id: '/',
@@ -209,8 +227,9 @@ export interface FileRoutesByFullPath {
   '/invitations': typeof InvitationsRoute
   '/keys': typeof KeysRoute
   '/members': typeof MembersRoute
-  '/models': typeof ModelsRoute
+  '/models': typeof ModelsRouteWithChildren
   '/organization': typeof OrganizationRouteWithChildren
+  '/playground': typeof PlaygroundRoute
   '/providers': typeof ProvidersRoute
   '/routing': typeof RoutingRoute
   '/settings': typeof SettingsRoute
@@ -218,6 +237,7 @@ export interface FileRoutesByFullPath {
   '/usage': typeof UsageRoute
   '/workspaces': typeof WorkspacesRoute
   '/admin/accounts': typeof AdminAccountsRoute
+  '/models/$': typeof ModelsSplatRoute
   '/organization/domains': typeof OrganizationDomainsRoute
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
@@ -228,6 +248,7 @@ export interface FileRoutesByFullPath {
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
+  '/models/': typeof ModelsIndexRoute
   '/organization/': typeof OrganizationIndexRoute
   '/tools/': typeof ToolsIndexRoute
 }
@@ -242,13 +263,14 @@ export interface FileRoutesByTo {
   '/invitations': typeof InvitationsRoute
   '/keys': typeof KeysRoute
   '/members': typeof MembersRoute
-  '/models': typeof ModelsRoute
+  '/playground': typeof PlaygroundRoute
   '/providers': typeof ProvidersRoute
   '/routing': typeof RoutingRoute
   '/settings': typeof SettingsRoute
   '/usage': typeof UsageRoute
   '/workspaces': typeof WorkspacesRoute
   '/admin/accounts': typeof AdminAccountsRoute
+  '/models/$': typeof ModelsSplatRoute
   '/organization/domains': typeof OrganizationDomainsRoute
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
@@ -259,6 +281,7 @@ export interface FileRoutesByTo {
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
+  '/models': typeof ModelsIndexRoute
   '/organization': typeof OrganizationIndexRoute
   '/tools': typeof ToolsIndexRoute
 }
@@ -274,8 +297,9 @@ export interface FileRoutesById {
   '/invitations': typeof InvitationsRoute
   '/keys': typeof KeysRoute
   '/members': typeof MembersRoute
-  '/models': typeof ModelsRoute
+  '/models': typeof ModelsRouteWithChildren
   '/organization': typeof OrganizationRouteWithChildren
+  '/playground': typeof PlaygroundRoute
   '/providers': typeof ProvidersRoute
   '/routing': typeof RoutingRoute
   '/settings': typeof SettingsRoute
@@ -283,6 +307,7 @@ export interface FileRoutesById {
   '/usage': typeof UsageRoute
   '/workspaces': typeof WorkspacesRoute
   '/admin/accounts': typeof AdminAccountsRoute
+  '/models/$': typeof ModelsSplatRoute
   '/organization/domains': typeof OrganizationDomainsRoute
   '/organization/guardrails': typeof OrganizationGuardrailsRoute
   '/organization/members': typeof OrganizationMembersRoute
@@ -293,6 +318,7 @@ export interface FileRoutesById {
   '/tools/guardrails': typeof ToolsGuardrailsRoute
   '/tools/mcp-servers': typeof ToolsMcpServersRoute
   '/tools/web-search': typeof ToolsWebSearchRoute
+  '/models/': typeof ModelsIndexRoute
   '/organization/': typeof OrganizationIndexRoute
   '/tools/': typeof ToolsIndexRoute
 }
@@ -311,6 +337,7 @@ export interface FileRouteTypes {
     | '/members'
     | '/models'
     | '/organization'
+    | '/playground'
     | '/providers'
     | '/routing'
     | '/settings'
@@ -318,6 +345,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/workspaces'
     | '/admin/accounts'
+    | '/models/$'
     | '/organization/domains'
     | '/organization/guardrails'
     | '/organization/members'
@@ -328,6 +356,7 @@ export interface FileRouteTypes {
     | '/tools/guardrails'
     | '/tools/mcp-servers'
     | '/tools/web-search'
+    | '/models/'
     | '/organization/'
     | '/tools/'
   fileRoutesByTo: FileRoutesByTo
@@ -342,13 +371,14 @@ export interface FileRouteTypes {
     | '/invitations'
     | '/keys'
     | '/members'
-    | '/models'
+    | '/playground'
     | '/providers'
     | '/routing'
     | '/settings'
     | '/usage'
     | '/workspaces'
     | '/admin/accounts'
+    | '/models/$'
     | '/organization/domains'
     | '/organization/guardrails'
     | '/organization/members'
@@ -359,6 +389,7 @@ export interface FileRouteTypes {
     | '/tools/guardrails'
     | '/tools/mcp-servers'
     | '/tools/web-search'
+    | '/models'
     | '/organization'
     | '/tools'
   id:
@@ -375,6 +406,7 @@ export interface FileRouteTypes {
     | '/members'
     | '/models'
     | '/organization'
+    | '/playground'
     | '/providers'
     | '/routing'
     | '/settings'
@@ -382,6 +414,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/workspaces'
     | '/admin/accounts'
+    | '/models/$'
     | '/organization/domains'
     | '/organization/guardrails'
     | '/organization/members'
@@ -392,6 +425,7 @@ export interface FileRouteTypes {
     | '/tools/guardrails'
     | '/tools/mcp-servers'
     | '/tools/web-search'
+    | '/models/'
     | '/organization/'
     | '/tools/'
   fileRoutesById: FileRoutesById
@@ -407,8 +441,9 @@ export interface RootRouteChildren {
   InvitationsRoute: typeof InvitationsRoute
   KeysRoute: typeof KeysRoute
   MembersRoute: typeof MembersRoute
-  ModelsRoute: typeof ModelsRoute
+  ModelsRoute: typeof ModelsRouteWithChildren
   OrganizationRoute: typeof OrganizationRouteWithChildren
+  PlaygroundRoute: typeof PlaygroundRoute
   ProvidersRoute: typeof ProvidersRoute
   RoutingRoute: typeof RoutingRoute
   SettingsRoute: typeof SettingsRoute
@@ -504,6 +539,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrganizationRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/playground': {
+      id: '/playground'
+      path: '/playground'
+      fullPath: '/playground'
+      preLoaderRoute: typeof PlaygroundRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/providers': {
       id: '/providers'
       path: '/providers'
@@ -552,6 +594,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/accounts'
       preLoaderRoute: typeof AdminAccountsRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/models/': {
+      id: '/models/'
+      path: '/'
+      fullPath: '/models/'
+      preLoaderRoute: typeof ModelsIndexRouteImport
+      parentRoute: typeof ModelsRoute
+    }
+    '/models/$': {
+      id: '/models/$'
+      path: '/$'
+      fullPath: '/models/$'
+      preLoaderRoute: typeof ModelsSplatRouteImport
+      parentRoute: typeof ModelsRoute
     }
     '/organization/': {
       id: '/organization/'
@@ -640,6 +696,19 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface ModelsRouteChildren {
+  ModelsSplatRoute: typeof ModelsSplatRoute
+  ModelsIndexRoute: typeof ModelsIndexRoute
+}
+
+const ModelsRouteChildren: ModelsRouteChildren = {
+  ModelsSplatRoute: ModelsSplatRoute,
+  ModelsIndexRoute: ModelsIndexRoute,
+}
+
+const ModelsRouteWithChildren =
+  ModelsRoute._addFileChildren(ModelsRouteChildren)
+
 interface OrganizationRouteChildren {
   OrganizationDomainsRoute: typeof OrganizationDomainsRoute
   OrganizationGuardrailsRoute: typeof OrganizationGuardrailsRoute
@@ -693,8 +762,9 @@ const rootRouteChildren: RootRouteChildren = {
   InvitationsRoute: InvitationsRoute,
   KeysRoute: KeysRoute,
   MembersRoute: MembersRoute,
-  ModelsRoute: ModelsRoute,
+  ModelsRoute: ModelsRouteWithChildren,
   OrganizationRoute: OrganizationRouteWithChildren,
+  PlaygroundRoute: PlaygroundRoute,
   ProvidersRoute: ProvidersRoute,
   RoutingRoute: RoutingRoute,
   SettingsRoute: SettingsRoute,
