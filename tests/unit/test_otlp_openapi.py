@@ -8,6 +8,7 @@ _SPEC_PATH = Path(__file__).resolve().parents[2] / "docs/public/openapi.json"
 
 
 def test_otlp_export_responses_describe_json_and_protobuf_shapes() -> None:
+    """Ensure every OTLP export route publishes both response media types."""
     spec: dict[str, Any] = json.loads(_SPEC_PATH.read_text())
     schemas = spec["components"]["schemas"]
     expected = {

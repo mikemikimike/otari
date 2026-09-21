@@ -7829,6 +7829,61 @@
         "title": "OTLPTraceServiceResponse",
         "type": "object"
       },
+      "OfferingUsage": {
+        "description": "What the viewer's organization actually paid for one offering, last 30 days.\n\nThe listed rate is what a token costs; this is what the tokens cost, which is\nlower wherever prompt caching hit. Absent for a visitor and for an offering\nthe organization never called.",
+        "properties": {
+          "cache_hit_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cache-read tokens over prompt tokens. Null when no prompt tokens.",
+            "title": "Cache Hit Rate"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "effective_price_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Spend over every token served, per million. Null when no tokens were served.",
+            "title": "Effective Price Per Million"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          },
+          "spend_usd": {
+            "title": "Spend Usd",
+            "type": "number"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "total_tokens",
+          "cache_read_tokens",
+          "spend_usd",
+          "cache_hit_rate",
+          "effective_price_per_million"
+        ],
+        "title": "OfferingUsage",
+        "type": "object"
+      },
       "OrgProviderKeyCreateRequest": {
         "description": "What a caller sends to create a key.\n\nThe plaintext key is never stored as sent: the service encrypts it\n(`services/secret_box.py`) and keeps only the ciphertext and ``last4``,\nthe same convention `providers.ProviderCredential` already uses.",
         "properties": {
