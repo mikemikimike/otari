@@ -8632,6 +8632,48 @@ export interface components {
              */
             user_id: string;
         };
+        /** OTLPLogsPartialSuccess */
+        OTLPLogsPartialSuccess: {
+            /** Errormessage */
+            errorMessage?: string | null;
+            /**
+             * Rejectedlogrecords
+             * @description Rejected log record count, encoded as an int64 string by OTLP JSON.
+             */
+            rejectedLogRecords?: string | null;
+        };
+        /** OTLPLogsServiceResponse */
+        OTLPLogsServiceResponse: {
+            partialSuccess?: components["schemas"]["OTLPLogsPartialSuccess"] | null;
+        };
+        /** OTLPMetricsPartialSuccess */
+        OTLPMetricsPartialSuccess: {
+            /** Errormessage */
+            errorMessage?: string | null;
+            /**
+             * Rejecteddatapoints
+             * @description Rejected data point count, encoded as an int64 string by OTLP JSON.
+             */
+            rejectedDataPoints?: string | null;
+        };
+        /** OTLPMetricsServiceResponse */
+        OTLPMetricsServiceResponse: {
+            partialSuccess?: components["schemas"]["OTLPMetricsPartialSuccess"] | null;
+        };
+        /** OTLPTracePartialSuccess */
+        OTLPTracePartialSuccess: {
+            /** Errormessage */
+            errorMessage?: string | null;
+            /**
+             * Rejectedspans
+             * @description Rejected span count, encoded as an int64 string by OTLP JSON.
+             */
+            rejectedSpans?: string | null;
+        };
+        /** OTLPTraceServiceResponse */
+        OTLPTraceServiceResponse: {
+            partialSuccess?: components["schemas"]["OTLPTracePartialSuccess"] | null;
+        };
         /**
          * OfferingUsage
          * @description What the viewer's organization actually paid for one offering, last 30 days.
@@ -21019,13 +21061,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description OTLP export response. A partial success still returns HTTP 200; the rejected count is present only when the gateway rejected part of the export. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OTLPLogsServiceResponse"];
+                    "application/x-protobuf": components["schemas"]["OTLPLogsServiceResponse"];
                 };
             };
         };
@@ -21039,13 +21082,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description OTLP export response. A partial success still returns HTTP 200; the rejected count is present only when the gateway rejected part of the export. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OTLPMetricsServiceResponse"];
+                    "application/x-protobuf": components["schemas"]["OTLPMetricsServiceResponse"];
                 };
             };
         };
@@ -21059,13 +21103,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description OTLP export response. A partial success still returns HTTP 200; the rejected count is present only when the gateway rejected part of the export. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OTLPTraceServiceResponse"];
+                    "application/x-protobuf": components["schemas"]["OTLPTraceServiceResponse"];
                 };
             };
         };
