@@ -112,12 +112,10 @@ class FileService:
     """Everything the Files API does with a caller's uploads.
 
     The bytes go to a blob store behind :class:`FileStoragePort` and the
-    metadata to a row, and the two are kept in step as far as they can be: an
-    upload refused after its bytes are written takes them with it, and a
-    discarded file loses its bytes after the row says so. Neither is absolute.
-    A cancellation between the write and the commit leaves bytes no row points
-    at, because the commit's outcome is unknown there and removing them could
-    destroy the bytes of a row that did land.
+    metadata to a row. A failed or cancelled stream is never published by the
+    store; after a successful write, the row is committed separately. A
+    cancellation during that commit leaves its outcome unknown, so removing
+    the blob could destroy bytes for a row that did land.
     """
 
     def __init__(
@@ -342,9 +340,7 @@ class FileService:
         between two pages still says where the next page starts. Another user's
         ID names no position.
         """
-        cursor = await self._files.any_owned(
-            cursor_id, listing.scope.user_id, workspace_id=listing.scope.workspace_id
-        )
+        cursor = await self._files.any_owned(cursor_id, listing.scope.user_id, workspace_id=listing.scope.workspace_id)
         if cursor is None:
             if listing.dialect is FileDialect.ANTHROPIC:
                 raise UnknownPageCursorError
