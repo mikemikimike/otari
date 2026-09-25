@@ -121,6 +121,38 @@ function toDatetimeLocal(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+type ExpiryParts = { date: string; time: string }
+
+const EMPTY_EXPIRY: ExpiryParts = { date: "", time: "" }
+
+function expiryPartsFromLocal(value: string): ExpiryParts {
+  if (!value) return { ...EMPTY_EXPIRY }
+  const [date = "", time = ""] = value.split("T")
+  return { date, time }
+}
+
+function expiryPartsFromIso(value: string | null): ExpiryParts {
+  return expiryPartsFromLocal(toDatetimeLocal(value))
+}
+
+function currentLocalExpiryParts(): ExpiryParts {
+  return expiryPartsFromIso(new Date().toISOString())
+}
+
+function expiryValue(parts: ExpiryParts): string {
+  return parts.date && parts.time ? `${parts.date}T${parts.time}` : ""
+}
+
+function withExpiryDate(parts: ExpiryParts, date: string): ExpiryParts {
+  if (!date) return { ...EMPTY_EXPIRY }
+  return { date, time: parts.time || currentLocalExpiryParts().time }
+}
+
+function withExpiryTime(parts: ExpiryParts, time: string): ExpiryParts {
+  if (!time) return { ...EMPTY_EXPIRY }
+  return { date: parts.date || currentLocalExpiryParts().date, time }
+}
+
 const label = (apiKey: ApiKey): string => apiKey.key_name ?? apiKey.id
 
 // Stable row-key getter so DataTable's per-row cache holds across re-renders.
@@ -430,7 +462,8 @@ function CreateKeyDialog({
   const { selected: workspace, isLoading: workspaceLoading } =
     useSelectedWorkspace()
   const [keyName, setKeyName] = useState("")
-  const [expiresAt, setExpiresAt] = useState("")
+  const [expiry, setExpiry] = useState(EMPTY_EXPIRY)
+  const expiresAt = expiryValue(expiry)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [userId, setUserId] = useState("")
   const [allowedModels, setAllowedModels] = useState<string[] | undefined>(
@@ -492,7 +525,7 @@ function CreateKeyDialog({
 
   const resetForm = () => {
     setKeyName("")
-    setExpiresAt("")
+    setExpiry({ ...EMPTY_EXPIRY })
     setShowAdvanced(false)
     setUserId("")
     setAllowedModels(undefined)
@@ -612,17 +645,28 @@ function CreateKeyDialog({
         shouldReserveMessage
       />
       <Field
-        label="Expires (optional)"
-        value={expiresAt}
-        onChange={setExpiresAt}
-        type="datetime-local"
+        label="Expiry date (optional)"
+        value={expiry.date}
+        onChange={(date) =>
+          setExpiry((current) => withExpiryDate(current, date))
+        }
+        type="date"
+        shouldReserveMessage={false}
+      />
+      <Field
+        label="Expiry time (local)"
+        value={expiry.time}
+        onChange={(time) =>
+          setExpiry((current) => withExpiryTime(current, time))
+        }
+        type="time"
         description={
           expiresInPast ? (
             <span className="text-danger">
               That time is in the past; the key would be rejected immediately.
             </span>
           ) : (
-            "Leave blank for a key that never expires."
+            "Leave both fields blank for a key that never expires."
           )
         }
         shouldReserveMessage
@@ -744,7 +788,10 @@ function EditKeyForm({
   // key and the note it feeds names other owners.
   const users = useUsers(isDeploymentWide)
   const [keyName, setKeyName] = useState(apiKey.key_name ?? "")
-  const [expiresAt, setExpiresAt] = useState(toDatetimeLocal(apiKey.expires_at))
+  const [expiry, setExpiry] = useState(() =>
+    expiryPartsFromIso(apiKey.expires_at),
+  )
+  const expiresAt = expiryValue(expiry)
   const [allowedModels, setAllowedModels] = useState<string[] | undefined>(
     apiKey.allowed_models ?? undefined,
   )
@@ -806,11 +853,22 @@ function EditKeyForm({
         shouldReserveMessage={false}
       />
       <Field
-        label="Expires"
-        value={expiresAt}
-        onChange={setExpiresAt}
-        type="datetime-local"
-        description="Blank clears the expiry."
+        label="Expiry date"
+        value={expiry.date}
+        onChange={(date) =>
+          setExpiry((current) => withExpiryDate(current, date))
+        }
+        type="date"
+        shouldReserveMessage={false}
+      />
+      <Field
+        label="Expiry time (local)"
+        value={expiry.time}
+        onChange={(time) =>
+          setExpiry((current) => withExpiryTime(current, time))
+        }
+        type="time"
+        description="Leave both fields blank to clear the expiry."
         shouldReserveMessage
       />
       {isDeploymentWide && apiKey.user_id ? (
