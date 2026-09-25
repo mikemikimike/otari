@@ -67,6 +67,13 @@ import {
 } from "@/shared/helpers/tableSelection"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useDeployment } from "@/shared/hooks/useDeployment"
+import {
+  emptyExpiryParts,
+  expiryPartsFromIso,
+  expiryValue,
+  withExpiryDate,
+  withExpiryTime,
+} from "./expiry"
 import { KeyActionsMenu } from "./KeyActionsMenu"
 import { isVirtualUser, keyFingerprint, secretCaption } from "./secretCaption"
 
@@ -110,47 +117,6 @@ function isExpired(key: ApiKey): boolean {
   if (!key.expires_at) return false
   const t = new Date(key.expires_at).getTime()
   return !Number.isNaN(t) && t < Date.now()
-}
-
-// datetime-local wants "YYYY-MM-DDTHH:mm" in local time; build it from an ISO value.
-function toDatetimeLocal(iso: string | null): string {
-  if (!iso) return ""
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ""
-  const pad = (value: number) => String(value).padStart(2, "0")
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-type ExpiryParts = { date: string; time: string }
-
-const EMPTY_EXPIRY: ExpiryParts = { date: "", time: "" }
-
-function expiryPartsFromLocal(value: string): ExpiryParts {
-  if (!value) return { ...EMPTY_EXPIRY }
-  const [date = "", time = ""] = value.split("T")
-  return { date, time }
-}
-
-function expiryPartsFromIso(value: string | null): ExpiryParts {
-  return expiryPartsFromLocal(toDatetimeLocal(value))
-}
-
-function currentLocalExpiryParts(): ExpiryParts {
-  return expiryPartsFromIso(new Date().toISOString())
-}
-
-function expiryValue(parts: ExpiryParts): string {
-  return parts.date && parts.time ? `${parts.date}T${parts.time}` : ""
-}
-
-function withExpiryDate(parts: ExpiryParts, date: string): ExpiryParts {
-  if (!date) return { ...EMPTY_EXPIRY }
-  return { date, time: parts.time || currentLocalExpiryParts().time }
-}
-
-function withExpiryTime(parts: ExpiryParts, time: string): ExpiryParts {
-  if (!time) return { ...EMPTY_EXPIRY }
-  return { date: parts.date || currentLocalExpiryParts().date, time }
 }
 
 const label = (apiKey: ApiKey): string => apiKey.key_name ?? apiKey.id
@@ -462,7 +428,7 @@ function CreateKeyDialog({
   const { selected: workspace, isLoading: workspaceLoading } =
     useSelectedWorkspace()
   const [keyName, setKeyName] = useState("")
-  const [expiry, setExpiry] = useState(EMPTY_EXPIRY)
+  const [expiry, setExpiry] = useState(emptyExpiryParts)
   const expiresAt = expiryValue(expiry)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [userId, setUserId] = useState("")
@@ -525,7 +491,7 @@ function CreateKeyDialog({
 
   const resetForm = () => {
     setKeyName("")
-    setExpiry({ ...EMPTY_EXPIRY })
+    setExpiry(emptyExpiryParts())
     setShowAdvanced(false)
     setUserId("")
     setAllowedModels(undefined)

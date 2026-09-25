@@ -1025,7 +1025,7 @@ describe("KeysPage", () => {
     expect(JSON.parse(String(post?.[1]?.body)).user_id).toBe("alice")
   })
 
-  it("completes a partially selected expiry and keeps clearing it optional", async () => {
+  it("preserves the time when replacing a cleared expiry date", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.setSystemTime(new Date(2026, 8, 25, 14, 37))
     try {
@@ -1052,10 +1052,10 @@ describe("KeysPage", () => {
 
       fireEvent.change(date, { target: { value: "" } })
       expect(date).toHaveValue("")
-      expect(time).toHaveValue("")
+      expect(time).toHaveValue("09:15")
 
-      fireEvent.change(time, { target: { value: "08:30" } })
-      expect(date).toHaveValue("2026-09-25")
+      fireEvent.change(date, { target: { value: "2030-12-01" } })
+      expect(time).toHaveValue("09:15")
       await submitTheCreateDialog(user)
 
       const post = fetchMock.mock.calls.find(
@@ -1064,14 +1064,48 @@ describe("KeysPage", () => {
           (init?.method ?? "") === "POST",
       )
       expect(JSON.parse(String(post?.[1]?.body)).expires_at).toBe(
-        new Date(2026, 8, 25, 8, 30).toISOString(),
+        new Date(2030, 11, 1, 9, 15).toISOString(),
       )
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it("preserves an existing expiry part when editing and clears both together", async () => {
+  it("preserves the date when replacing a cleared expiry time", async () => {
+    const initialExpiry = new Date(2030, 0, 2, 9, 45).toISOString()
+    const fetchMock = mockApi({
+      keys: [
+        apiKey({ id: "key-1", key_name: "ci-bot", expires_at: initialExpiry }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    const row = (await screen.findByText("ci-bot")).closest("tr")!
+    await chooseAction(user, row, "Edit")
+    const date = await screen.findByLabelText("Expiry date")
+    const time = screen.getByLabelText("Expiry time (local)")
+    expect(date).toHaveValue("2030-01-02")
+    expect(time).toHaveValue("09:45")
+
+    fireEvent.change(time, { target: { value: "" } })
+    expect(date).toHaveValue("2030-01-02")
+    expect(time).toHaveValue("")
+    fireEvent.change(time, { target: { value: "16:20" } })
+    expect(date).toHaveValue("2030-01-02")
+    expect(time).toHaveValue("16:20")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    const patch = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url).includes(`${API_ROOT}/keys/key-1`) &&
+        (init?.method ?? "") === "PATCH",
+    )
+    expect(JSON.parse(String(patch?.[1]?.body)).expires_at).toBe(
+      new Date(2030, 0, 2, 16, 20).toISOString(),
+    )
+  })
+
+  it("submits a changed date with the existing time when editing", async () => {
     const initialExpiry = new Date(2030, 0, 2, 9, 45).toISOString()
     const fetchMock = mockApi({
       keys: [
@@ -1089,8 +1123,36 @@ describe("KeysPage", () => {
 
     fireEvent.change(date, { target: { value: "2030-02-06" } })
     expect(time).toHaveValue("09:45")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    const patch = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url).includes(`${API_ROOT}/keys/key-1`) &&
+        (init?.method ?? "") === "PATCH",
+    )
+    expect(JSON.parse(String(patch?.[1]?.body)).expires_at).toBe(
+      new Date(2030, 1, 6, 9, 45).toISOString(),
+    )
+  })
+
+  it("clears both expiry fields together when editing", async () => {
+    const initialExpiry = new Date(2030, 0, 2, 9, 45).toISOString()
+    const fetchMock = mockApi({
+      keys: [
+        apiKey({ id: "key-1", key_name: "ci-bot", expires_at: initialExpiry }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    const row = (await screen.findByText("ci-bot")).closest("tr")!
+    await chooseAction(user, row, "Edit")
+    const date = await screen.findByLabelText("Expiry date")
+    const time = screen.getByLabelText("Expiry time (local)")
+
     fireEvent.change(date, { target: { value: "" } })
     expect(date).toHaveValue("")
+    expect(time).toHaveValue("09:45")
+    fireEvent.change(time, { target: { value: "" } })
     expect(time).toHaveValue("")
 
     await user.click(screen.getByRole("button", { name: "Save" }))
