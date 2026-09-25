@@ -758,6 +758,7 @@ function EditKeyForm({
     expiryPartsFromIso(apiKey.expires_at),
   )
   const expiresAt = expiryValue(expiry)
+  const expiryValid = (!expiry.date && !expiry.time) || Boolean(expiresAt)
   const [allowedModels, setAllowedModels] = useState<string[] | undefined>(
     apiKey.allowed_models ?? undefined,
   )
@@ -779,7 +780,7 @@ function EditKeyForm({
   })
 
   const submit = () => {
-    if (update.isPending || !scopeValid) return
+    if (update.isPending || !scopeValid || !expiryValid) return
     const shared = {
       key_name: keyName.trim() || null,
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
@@ -806,7 +807,7 @@ function EditKeyForm({
       submitLabel="Save"
       onSubmit={submit}
       isPending={update.isPending}
-      isSubmitDisabled={!scopeValid}
+      isSubmitDisabled={!scopeValid || !expiryValid}
       isDirty={isDirty}
       error={update.error}
     >

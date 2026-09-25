@@ -1205,6 +1205,33 @@ describe("KeysPage", () => {
     )
   })
 
+  it("blocks saving a partially cleared expiry when editing", async () => {
+    const initialExpiry = new Date(2030, 0, 2, 9, 45).toISOString()
+    const fetchMock = mockApi({
+      keys: [
+        apiKey({ id: "key-1", key_name: "ci-bot", expires_at: initialExpiry }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    const row = (await screen.findByText("ci-bot")).closest("tr")!
+    await chooseAction(user, row, "Edit")
+    const date = await screen.findByLabelText("Expiry date")
+
+    fireEvent.change(date, { target: { value: "" } })
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).includes(`${API_ROOT}/keys/key-1`) &&
+          (init?.method ?? "") === "PATCH",
+      ),
+    ).toBe(false)
+  })
+
   it("clears both expiry fields together when editing", async () => {
     const initialExpiry = new Date(2030, 0, 2, 9, 45).toISOString()
     const fetchMock = mockApi({
