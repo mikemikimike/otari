@@ -1071,6 +1071,77 @@ describe("KeysPage", () => {
     }
   })
 
+  it("defaults today's expiry date to the next local minute", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date(2026, 8, 25, 14, 37, 40))
+    try {
+      const fetchMock = mockApi({ keys: [] })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      renderPage(<KeysPage />)
+
+      await screen.findByText("No API keys yet")
+      await user.click(
+        screen.getByRole("button", { name: "Create your first key" }),
+      )
+      await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
+      await user.keyboard("{Escape}")
+
+      const date = screen.getByLabelText("Expiry date (optional)")
+      const time = screen.getByLabelText("Expiry time (local)")
+      fireEvent.change(date, { target: { value: "2026-09-25" } })
+
+      expect(time).toHaveValue("14:38")
+      await submitTheCreateDialog(user)
+
+      const post = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith(`${API_ROOT}/keys`) &&
+          (init?.method ?? "") === "POST",
+      )
+      expect(JSON.parse(String(post?.[1]?.body)).expires_at).toBe(
+        new Date(2026, 8, 25, 14, 38).toISOString(),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("advances today's expiry date when the next minute crosses midnight", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date(2026, 8, 25, 23, 59, 40))
+    try {
+      const fetchMock = mockApi({ keys: [] })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      renderPage(<KeysPage />)
+
+      await screen.findByText("No API keys yet")
+      await user.click(
+        screen.getByRole("button", { name: "Create your first key" }),
+      )
+      await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
+      await user.keyboard("{Escape}")
+
+      const date = screen.getByLabelText("Expiry date (optional)")
+      const time = screen.getByLabelText("Expiry time (local)")
+      fireEvent.change(date, { target: { value: "2026-09-25" } })
+
+      expect(date).toHaveValue("2026-09-26")
+      expect(time).toHaveValue("00:00")
+      await submitTheCreateDialog(user)
+
+      const post = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith(`${API_ROOT}/keys`) &&
+          (init?.method ?? "") === "POST",
+      )
+      expect(JSON.parse(String(post?.[1]?.body)).expires_at).toBe(
+        new Date(2026, 8, 26, 0, 0).toISOString(),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("preserves the date when replacing a cleared expiry time", async () => {
     const initialExpiry = new Date(2030, 0, 2, 9, 45).toISOString()
     const fetchMock = mockApi({

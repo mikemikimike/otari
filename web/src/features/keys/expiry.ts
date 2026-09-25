@@ -28,13 +28,24 @@ function currentLocalExpiryParts(): ExpiryParts {
   return expiryPartsFromIso(new Date().toISOString())
 }
 
+function nextLocalExpiryMinute(): ExpiryParts {
+  const nextMinute = new Date()
+  nextMinute.setSeconds(0, 0)
+  nextMinute.setMinutes(nextMinute.getMinutes() + 1)
+  return expiryPartsFromIso(nextMinute.toISOString())
+}
+
 export function expiryValue(parts: ExpiryParts): string {
   return parts.date && parts.time ? `${parts.date}T${parts.time}` : ""
 }
 
 export function withExpiryDate(parts: ExpiryParts, date: string): ExpiryParts {
   if (!date) return { ...parts, date: "" }
-  return { date, time: parts.time || currentLocalExpiryParts().time }
+  if (parts.time) return { date, time: parts.time }
+  const current = currentLocalExpiryParts()
+  return date === current.date
+    ? nextLocalExpiryMinute()
+    : { date, time: current.time }
 }
 
 export function withExpiryTime(parts: ExpiryParts, time: string): ExpiryParts {
