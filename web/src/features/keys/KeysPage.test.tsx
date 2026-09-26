@@ -1071,6 +1071,86 @@ describe("KeysPage", () => {
     }
   })
 
+  describe.each([true, false])(
+    "create expiry validation (deployment operator: %s)",
+    (deploymentOperator) => {
+      it.each([
+        { field: "date", recovery: "complete" },
+        { field: "time", recovery: "complete" },
+        { field: "date", recovery: "clear" },
+        { field: "time", recovery: "clear" },
+      ])(
+        "blocks a cleared $field until $recovery",
+        async ({ field, recovery }) => {
+          const fetchMock = mockApi({ keys: [], deploymentOperator })
+          const user = userEvent.setup()
+          renderPage(<KeysPage />)
+
+          await screen.findByText("No API keys yet")
+          await user.click(
+            screen.getByRole("button", { name: "Create your first key" }),
+          )
+          if (deploymentOperator) {
+            await user.type(screen.getByPlaceholderText(/Pick a user/), "alice")
+            await user.click(screen.getByLabelText("Name"))
+          }
+
+          const dialog = await screen.findByRole("dialog", { name: "New key" })
+          const date = within(dialog).getByLabelText("Expiry date (optional)")
+          const time = within(dialog).getByLabelText("Expiry time (local)")
+          const submit = within(dialog).getByRole("button", {
+            name: "Create key",
+          })
+          fireEvent.change(date, { target: { value: "2030-11-04" } })
+          fireEvent.change(time, { target: { value: "09:15" } })
+          expect(submit).toBeEnabled()
+
+          const cleared = field === "date" ? date : time
+          const retained = field === "date" ? time : date
+          fireEvent.change(cleared, { target: { value: "" } })
+          expect(retained).toHaveValue(
+            field === "date" ? "09:15" : "2030-11-04",
+          )
+          expect(submit).toBeDisabled()
+          await user.click(submit)
+          // Submit the form directly too: disabling its button is not the guard.
+          const form = submit.closest("form")
+          if (!form) throw new Error("Create key button must belong to a form")
+          fireEvent.submit(form)
+          expect(
+            fetchMock.mock.calls.some(
+              ([url, init]) =>
+                KEYS_URL.test(String(url)) && init?.method === "POST",
+            ),
+          ).toBe(false)
+
+          if (recovery === "complete") {
+            fireEvent.change(cleared, {
+              target: { value: field === "date" ? "2030-11-04" : "09:15" },
+            })
+          } else {
+            fireEvent.change(retained, { target: { value: "" } })
+          }
+          expect(submit).toBeEnabled()
+          await submitTheCreateDialog(user)
+          const posts = fetchMock.mock.calls.filter(
+            ([url, init]) =>
+              KEYS_URL.test(String(url)) && init?.method === "POST",
+          )
+          expect(posts).toHaveLength(1)
+          expect(String(posts[0][0])).toBe(
+            `${API_ROOT}/${deploymentOperator ? "keys" : "organizations/me/keys"}`,
+          )
+          expect(JSON.parse(String(posts[0][1]?.body)).expires_at).toBe(
+            recovery === "complete"
+              ? new Date(2030, 10, 4, 9, 15).toISOString()
+              : null,
+          )
+        },
+      )
+    },
+  )
+
   it("defaults today's expiry date to the next local minute", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.setSystemTime(new Date(2026, 8, 25, 14, 37, 40))

@@ -430,6 +430,7 @@ function CreateKeyDialog({
   const [keyName, setKeyName] = useState("")
   const [expiry, setExpiry] = useState(emptyExpiryParts)
   const expiresAt = expiryValue(expiry)
+  const expiryValid = (!expiry.date && !expiry.time) || Boolean(expiresAt)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [userId, setUserId] = useState("")
   const [allowedModels, setAllowedModels] = useState<string[] | undefined>(
@@ -467,7 +468,8 @@ function CreateKeyDialog({
   // caller belongs to that default, which is the answer this form surfaces
   // rather than pre-empting.
   const workspaceUnresolved = workspaceLoading
-  const isBlocked = !scopeValid || ownerMissing || workspaceUnresolved
+  const isBlocked =
+    !scopeValid || !expiryValid || ownerMissing || workspaceUnresolved
 
   // What the form owns, handed to the guard whole rather than compared field by
   // field: the two drifted apart once already, with the guard armed for three
