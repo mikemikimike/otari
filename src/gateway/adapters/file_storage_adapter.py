@@ -99,6 +99,7 @@ class LocalDirFileStore:
 
     def __init__(self, root: str) -> None:
         self._root = Path(root)
+        self._publication_lock = asyncio.Lock()
 
     def _resolve(self, storage_ref: str) -> Path:
         """Resolve ``storage_ref`` under the root, rejecting any escape.
@@ -140,29 +141,60 @@ class LocalDirFileStore:
         def _unlink_partial() -> None:
             temporary_path.unlink(missing_ok=True)
 
+        def _unlink_published() -> None:
+            path.unlink(missing_ok=True)
+
+        publication_succeeded = False
+        publication_lock_acquired = False
+
+        def _publish() -> None:
+            nonlocal publication_succeeded
+            temporary_path.replace(path)
+            publication_succeeded = True
+
         await asyncio.to_thread(_mkparent)
         total = 0
+        opened_handles: list[IO[bytes]] = []
+
+        def _open() -> None:
+            opened_handles.append(temporary_path.open("xb"))
+
         handle: IO[bytes] | None = None
+        handle_closed = False
         try:
-            handle = await _run_blocking(lambda: temporary_path.open("xb"))
+            await _run_blocking(_open)
+            handle = opened_handles[0]
             write_chunk = handle.write
             async for chunk in chunks:
                 total += len(chunk)
                 await _run_blocking(lambda: write_chunk(chunk))
             await _run_blocking(handle.close)
+            handle_closed = True
             handle = None
-            temporary_path.replace(path)
+            await self._publication_lock.acquire()
+            publication_lock_acquired = True
+            await _run_blocking(_publish)
         except BaseException:
-            if handle is not None:
+            if handle is None and opened_handles:
+                handle = opened_handles[0]
+            if handle is not None and not handle_closed:
                 try:
                     await _run_blocking(handle.close)
                 except Exception as close_exc:
                     logger.warning("put_stream: failed to close temporary blob %s: %s", ref, close_exc)
+            if publication_succeeded:
+                try:
+                    await _run_blocking(_unlink_published)
+                except Exception as cleanup_exc:
+                    logger.warning("put_stream: failed to remove published blob %s: %s", ref, cleanup_exc)
             try:
                 await _run_blocking(_unlink_partial)
             except Exception as cleanup_exc:
                 logger.warning("put_stream: failed to remove temporary blob %s: %s", ref, cleanup_exc)
             raise
+        finally:
+            if publication_lock_acquired:
+                self._publication_lock.release()
         return ref, total
 
     async def get_stream(self, storage_ref: str) -> AsyncGenerator[bytes, None]:
@@ -409,11 +441,11 @@ class FsspecFileStore:
         path = self._resolve(ref)
         temporary_path = self._resolve(f"{ref}.partial-{uuid.uuid4().hex}")
         total = 0
+        opened_handles: list[IO[bytes]] = []
 
-        def _open() -> IO[bytes]:
+        def _open() -> None:
             self._mkparent(temporary_path)
-            handle: IO[bytes] = self._fs.open(temporary_path, "wb")
-            return handle
+            opened_handles.append(self._fs.open(temporary_path, "wb"))
 
         publication_attempted = False
 
@@ -426,9 +458,11 @@ class FsspecFileStore:
                     pass
 
         handle: IO[bytes] | None = None
+        handle_closed = False
         try:
             with _translate_fsspec_errors(ref):
-                handle = await _run_blocking(_open)
+                await _run_blocking(_open)
+                handle = opened_handles[0]
             write_chunk = handle.write
             async for chunk in chunks:
                 total += len(chunk)
@@ -436,12 +470,15 @@ class FsspecFileStore:
                     await _run_blocking(lambda: write_chunk(chunk))
             with _translate_fsspec_errors(ref):
                 await _run_blocking(handle.close)
+                handle_closed = True
             handle = None
             publication_attempted = True
             with _translate_fsspec_errors(ref):
                 await _run_blocking(lambda: self._fs.mv(temporary_path, path))
         except BaseException:
-            if handle is not None:
+            if handle is None and opened_handles:
+                handle = opened_handles[0]
+            if handle is not None and not handle_closed:
                 try:
                     with _translate_fsspec_errors(ref):
                         await _run_blocking(handle.close)
