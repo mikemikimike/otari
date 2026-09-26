@@ -849,6 +849,24 @@ describe("KeysPage", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent("Unsaved changes")
   })
 
+  it("guards a partially filled expiry before closing the create dialog", async () => {
+    mockApi({ keys: [] })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    await screen.findByText("No API keys yet")
+    await user.click(
+      screen.getByRole("button", { name: "Create your first key" }),
+    )
+    await user.click(screen.getByRole("button", { name: "Advanced" }))
+    fireEvent.change(await screen.findByLabelText("Expiry date (optional)"), {
+      target: { value: "2030-01-02" },
+    })
+
+    await user.keyboard("{Escape}")
+    expect(screen.getByRole("dialog")).toHaveTextContent("Unsaved changes")
+  })
+
   it("does not walk /v1/users until the create dialog is opened", async () => {
     // The dialog stays mounted while closed so it can animate out, which left
     // its owner picker's roster fetching on every visit to the page.
@@ -1646,6 +1664,21 @@ describe("KeysPage", () => {
     expect(screen.getByRole("button", { name: "Keep editing" })).toBeVisible()
     await user.click(screen.getByRole("button", { name: "Discard" }))
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("guards a partially filled expiry before closing the edit dialog", async () => {
+    mockApi({ keys: [apiKey({ id: "key-1", key_name: "ci-bot" })] })
+    const user = userEvent.setup()
+    renderPage(<KeysPage />)
+
+    const row = (await screen.findByText("ci-bot")).closest("tr")!
+    await chooseAction(user, row, "Edit")
+    fireEvent.change(await screen.findByLabelText("Expiry date"), {
+      target: { value: "2030-01-02" },
+    })
+    await user.keyboard("{Escape}")
+
+    expect(screen.getByRole("button", { name: "Keep editing" })).toBeVisible()
   })
 
   it("toggles exclude_from_budget on an existing key via PATCH", async () => {

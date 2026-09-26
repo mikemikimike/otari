@@ -483,6 +483,8 @@ function CreateKeyDialog({
   // the operator would lose.
   const { isDirty } = useDirtySnapshot({
     keyName,
+    expiryDate: expiry.date,
+    expiryTime: expiry.time,
     expiresAt,
     userId,
     allowedModels,
@@ -774,6 +776,8 @@ function EditKeyForm({
   const [scopeValid, setScopeValid] = useState(true)
   const { isDirty } = useDirtySnapshot({
     keyName,
+    expiryDate: expiry.date,
+    expiryTime: expiry.time,
     expiresAt,
     allowedModels,
     excludeFromBudget,
