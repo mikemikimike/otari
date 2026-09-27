@@ -453,10 +453,12 @@ class FsspecFileStore:
             opened_handles.append(self._fs.open(temporary_path, "wb"))
 
         publication_succeeded = False
+        destination_was_missing: bool | None = None
         publication_lock_acquired = False
 
         def _discard_partial() -> None:
-            candidates = (temporary_path, path) if publication_succeeded else (temporary_path,)
+            discard_destination = publication_succeeded or destination_was_missing is True
+            candidates = (temporary_path, path) if discard_destination else (temporary_path,)
             for candidate in candidates:
                 try:
                     self._fs.rm(candidate)
@@ -464,7 +466,8 @@ class FsspecFileStore:
                     pass
 
         def _publish() -> None:
-            nonlocal publication_succeeded
+            nonlocal destination_was_missing, publication_succeeded
+            destination_was_missing = not self._fs.exists(path)
             self._fs.mv(temporary_path, path)
             publication_succeeded = True
 

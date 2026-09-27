@@ -110,6 +110,51 @@ async def test_failed_publication_preserves_existing_blob(memory_root: str, monk
 
 
 @pytest.mark.asyncio
+async def test_failed_publication_removes_a_partial_new_blob(memory_root: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = FsspecFileStore(memory_root)
+
+    def partial_move(_source: str, destination: str) -> None:
+        store._fs.pipe_file(destination, b"partial")
+        raise OSError("publication failed")
+
+    monkeypatch.setattr(store._fs, "mv", partial_move)
+
+    with pytest.raises(OSError, match="publication failed"):
+        await store.put_stream("file-newpubfail0001", _iter([b"replacement"]))
+
+    assert await asyncio.to_thread(store._fs.find, store._root) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_destination_check_preserves_existing_blob(
+    memory_root: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FsspecFileStore(memory_root)
+    ref = await store.put("file-checkfail0001", b"existing")
+    path = store._resolve(ref)
+    original_exists = store._fs.exists
+    move_called = False
+
+    def failed_exists(candidate: str) -> bool:
+        if candidate == path:
+            raise OSError("destination check failed")
+        return bool(original_exists(candidate))
+
+    def unexpected_move(_source: str, _destination: str) -> None:
+        nonlocal move_called
+        move_called = True
+
+    monkeypatch.setattr(store._fs, "exists", failed_exists)
+    monkeypatch.setattr(store._fs, "mv", unexpected_move)
+
+    with pytest.raises(OSError, match="destination check failed"):
+        await store.put_stream("file-checkfail0001", _iter([b"replacement"]))
+
+    assert not move_called
+    assert await store.get(ref) == b"existing"
+
+
+@pytest.mark.asyncio
 async def test_cancellation_cleanup_preserves_a_concurrent_put(
     memory_root: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
