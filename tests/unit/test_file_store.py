@@ -33,6 +33,20 @@ async def test_put_stream_get_roundtrip(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_put_stream_uses_an_owned_ref_without_replacing_put(tmp_path: Path) -> None:
+    store = LocalDirFileStore(str(tmp_path))
+    file_id = "file-samekeystream01"
+    existing_ref = await store.put(file_id, b"existing")
+
+    stream_ref, size = await store.put_stream(file_id, _iter([b"replacement"]))
+
+    assert stream_ref != existing_ref
+    assert size == len(b"replacement")
+    assert await store.get(existing_ref) == b"existing"
+    assert await store.get(stream_ref) == b"replacement"
+
+
+@pytest.mark.asyncio
 async def test_put_stream_handles_empty_chunks(tmp_path: Path) -> None:
     store = LocalDirFileStore(str(tmp_path))
     ref, size = await store.put_stream("file-emptystream1", _iter([]))

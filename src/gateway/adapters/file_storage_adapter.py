@@ -134,7 +134,9 @@ class LocalDirFileStore:
         return await asyncio.to_thread(path.read_bytes)
 
     async def put_stream(self, file_id: str, chunks: AsyncIterator[bytes]) -> tuple[str, int]:
-        ref = _shard_key(file_id)
+        # Keep the published object owned by this upload so cancellation cleanup
+        # cannot remove a later write that uses the same file id.
+        ref = f"{_shard_key(file_id)}.upload-{uuid.uuid4().hex}"
         path = self._resolve(ref)
         temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
 

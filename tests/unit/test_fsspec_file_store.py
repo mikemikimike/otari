@@ -75,9 +75,9 @@ async def test_failed_stream_publication_preserves_existing_blob(
         await store.put_stream("file-preserveexisting", _iter([b"replacement"]))
 
     assert await store.get(ref) == b"existing"
-    assert [
-        path.lstrip("/") for path in fsspec.filesystem("memory").find("otari-test/pr")
-    ] == ["otari-test/pr/file-preserveexisting"]
+    assert [path.lstrip("/") for path in fsspec.filesystem("memory").find("otari-test/pr")] == [
+        "otari-test/pr/file-preserveexisting"
+    ]
 
 
 @pytest.mark.asyncio

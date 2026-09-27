@@ -295,19 +295,21 @@ async def test_cancellation_cleanup_preserves_a_concurrent_put(tmp_path: Path, m
     cleanup_started = threading.Event()
     release_cleanup = threading.Event()
     put_started = threading.Event()
+    published_paths: set[Path] = set()
     original_replace = Path.replace
     original_unlink = Path.unlink
     original_write_bytes = Path.write_bytes
 
     def blocked_replace(source: Path, target: Path) -> Path:
         published = original_replace(source, target)
+        published_paths.add(target)
         publication_started.set()
         if not release_publication.wait(timeout=5):
             raise TimeoutError("test did not release the publication operation")
         return published
 
     def blocked_unlink(path: Path, missing_ok: bool = False) -> None:
-        if path.name == "file-cancel-put-race":
+        if path in published_paths:
             cleanup_started.set()
             if not release_cleanup.wait(timeout=5):
                 raise TimeoutError("test did not release published-file cleanup")
