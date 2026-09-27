@@ -50,6 +50,19 @@ async def test_put_stream_get_roundtrip(s3_store: S3FileStore) -> None:
 
 
 @pytest.mark.asyncio
+async def test_put_stream_uses_an_owned_key_without_replacing_put(s3_store: S3FileStore) -> None:
+    file_id = "file-samekeystream01"
+    existing_ref = await s3_store.put(file_id, b"existing")
+
+    stream_ref, size = await s3_store.put_stream(file_id, _iter([b"replacement"]))
+
+    assert stream_ref != existing_ref
+    assert size == len(b"replacement")
+    assert await s3_store.get(existing_ref) == b"existing"
+    assert await s3_store.get(stream_ref) == b"replacement"
+
+
+@pytest.mark.asyncio
 async def test_put_stream_handles_empty_chunks(s3_store: S3FileStore) -> None:
     ref, size = await s3_store.put_stream("file-emptystream1", _iter([]))
     assert size == 0
@@ -181,6 +194,8 @@ async def test_put_stream_removes_orphaned_upload_when_cancelled_after_success(
     """
     client = s3_store._client  # noqa: SLF001 - need the raw client to patch upload_fileobj
     original_upload_fileobj = client.upload_fileobj
+    file_id = "file-orphancheck01"
+    existing_ref = await s3_store.put(file_id, b"existing")
 
     upload_started = threading.Event()
     release_upload = threading.Event()
@@ -192,7 +207,7 @@ async def test_put_stream_removes_orphaned_upload_when_cancelled_after_success(
 
     monkeypatch.setattr(client, "upload_fileobj", _gated_upload_fileobj)
 
-    task = asyncio.ensure_future(s3_store.put_stream("file-orphancheck01", _iter([b"data"])))
+    task = asyncio.ensure_future(s3_store.put_stream(file_id, _iter([b"data"])))
     # Don't cancel until the upload thread is truly running: an ignored
     # timeout here would let the test proceed anyway, cancelling before the
     # race it's meant to reproduce even started, silently.
@@ -204,7 +219,8 @@ async def test_put_stream_removes_orphaned_upload_when_cancelled_after_success(
         await task
 
     listing = await asyncio.to_thread(client.list_objects_v2, Bucket=_BUCKET, Prefix="or/")
-    assert listing.get("KeyCount", 0) == 0
+    assert [item["Key"] for item in listing.get("Contents", [])] == [existing_ref]
+    assert await s3_store.get(existing_ref) == b"existing"
 
 
 @pytest.mark.asyncio
@@ -213,6 +229,8 @@ async def test_put_stream_removes_object_when_upload_reports_failure_after_commi
 ) -> None:
     client = s3_store._client  # noqa: SLF001 - simulate a lost response after the server commits
     original_upload_fileobj = client.upload_fileobj
+    file_id = "file-postcommitfailure01"
+    existing_ref = await s3_store.put(file_id, b"existing")
 
     def _commit_then_fail(fileobj: IO[bytes], bucket: str, key: str) -> None:
         original_upload_fileobj(fileobj, bucket, key)
@@ -221,10 +239,11 @@ async def test_put_stream_removes_object_when_upload_reports_failure_after_commi
     monkeypatch.setattr(client, "upload_fileobj", _commit_then_fail)
 
     with pytest.raises(RuntimeError, match="response lost after commit"):
-        await s3_store.put_stream("file-postcommitfailure01", _iter([b"data"]))
+        await s3_store.put_stream(file_id, _iter([b"data"]))
 
-    listing = await asyncio.to_thread(client.list_objects_v2, Bucket=_BUCKET)
-    assert listing.get("KeyCount", 0) == 0
+    listing = await asyncio.to_thread(client.list_objects_v2, Bucket=_BUCKET, Prefix="po/")
+    assert [item["Key"] for item in listing.get("Contents", [])] == [existing_ref]
+    assert await s3_store.get(existing_ref) == b"existing"
 
 
 def test_missing_boto3_names_the_extra_to_install(monkeypatch: pytest.MonkeyPatch) -> None:

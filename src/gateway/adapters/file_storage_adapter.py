@@ -307,7 +307,9 @@ class S3FileStore:
             return await asyncio.to_thread(_get)
 
     async def put_stream(self, file_id: str, chunks: AsyncIterator[bytes]) -> tuple[str, int]:
-        key = _shard_key(file_id)
+        # The ref is opaque, so give each streamed upload an owned key. Cleanup
+        # after an ambiguous transfer can then never remove another write.
+        key = f"{_shard_key(file_id)}.upload-{uuid.uuid4().hex}"
         total = 0
         spool: IO[bytes] = tempfile.SpooledTemporaryFile(max_size=_SPOOL_MAX_MEMORY_BYTES)
         try:
@@ -401,6 +403,7 @@ class FsspecFileStore:
         fs, root = url_to_fs(url, **dict(storage_options or {}))
         self._fs = fs
         self._root = root.rstrip("/")
+        self._publication_lock = asyncio.Lock()
 
     def _resolve(self, storage_ref: str) -> str:
         """Join ``storage_ref`` under the root, rejecting anything that could leave it.
@@ -428,7 +431,8 @@ class FsspecFileStore:
             self._fs.pipe_file(path, data)
 
         with _translate_fsspec_errors(ref):
-            await asyncio.to_thread(_write)
+            async with self._publication_lock:
+                await _run_blocking(_write)
         return ref
 
     async def get(self, storage_ref: str) -> bytes:
@@ -448,15 +452,21 @@ class FsspecFileStore:
             self._mkparent(temporary_path)
             opened_handles.append(self._fs.open(temporary_path, "wb"))
 
-        publication_attempted = False
+        publication_succeeded = False
+        publication_lock_acquired = False
 
         def _discard_partial() -> None:
-            candidates = (temporary_path, path) if publication_attempted else (temporary_path,)
+            candidates = (temporary_path, path) if publication_succeeded else (temporary_path,)
             for candidate in candidates:
                 try:
                     self._fs.rm(candidate)
                 except FileNotFoundError:
                     pass
+
+        def _publish() -> None:
+            nonlocal publication_succeeded
+            self._fs.mv(temporary_path, path)
+            publication_succeeded = True
 
         handle: IO[bytes] | None = None
         handle_closed = False
@@ -473,9 +483,10 @@ class FsspecFileStore:
                 await _run_blocking(handle.close)
                 handle_closed = True
             handle = None
-            publication_attempted = True
+            await self._publication_lock.acquire()
+            publication_lock_acquired = True
             with _translate_fsspec_errors(ref):
-                await _run_blocking(lambda: self._fs.mv(temporary_path, path))
+                await _run_blocking(_publish)
         except BaseException:
             if handle is None and opened_handles:
                 handle = opened_handles[0]
@@ -490,6 +501,9 @@ class FsspecFileStore:
             except Exception as cleanup_exc:  # noqa: BLE001
                 logger.warning("put_stream: failed to remove temporary blob %s: %s", ref, cleanup_exc)
             raise
+        finally:
+            if publication_lock_acquired:
+                self._publication_lock.release()
         return ref, total
 
     async def get_stream(self, storage_ref: str) -> AsyncGenerator[bytes, None]:
