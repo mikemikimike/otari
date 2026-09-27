@@ -358,6 +358,34 @@ describe("FormDialog", () => {
       expect(onOpenChange).not.toHaveBeenCalled()
     })
 
+    it("keeps the form actions after Escape closes a queried combobox", async () => {
+      const user = userEvent.setup()
+      render(
+        <FormDialog {...base} isOpen isDirty>
+          <ComboBoxField
+            label="Owner"
+            value=""
+            onChange={() => {}}
+            onQueryChange={() => {}}
+            options={[{ value: "alice", label: "Alice" }]}
+            allowsCustomValue
+          />
+        </FormDialog>,
+      )
+
+      const owner = screen.getByRole("combobox", { name: "Owner" })
+      await user.click(owner)
+      await user.clear(owner)
+      await user.type(owner, "new-owner")
+      await user.keyboard("{Escape}")
+
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+      expect(
+        screen.getByRole("button", { name: "Create key" }),
+      ).toBeInTheDocument()
+      expect(screen.queryByText("Unsaved changes")).toBeNull()
+    })
+
     it("holds the dialog open and swaps the footer instead of closing", async () => {
       const onOpenChange = vi.fn()
       const user = userEvent.setup()

@@ -138,6 +138,7 @@ export function FormDialog({
   children,
 }: FormDialogProps) {
   const descriptionId = useId()
+  const comboEscapeRef = useRef(false)
   const { isGuarding, requestClose, keepEditing, discard } = useDirtyGuard({
     isOpen,
     onOpenChange,
@@ -169,6 +170,10 @@ export function FormDialog({
       onOpenChange={(next) => {
         if (next) {
           onOpenChange(true)
+          return
+        }
+        if (comboEscapeRef.current) {
+          comboEscapeRef.current = false
           return
         }
         const active = document.activeElement
@@ -262,6 +267,22 @@ export function FormDialog({
               </div>
             ) : null}
             <form
+              onKeyDownCapture={(event) => {
+                if (event.key !== "Escape") return
+                const target = event.target
+                if (
+                  target instanceof HTMLElement &&
+                  target.getAttribute("role") === "combobox" &&
+                  target.getAttribute("aria-expanded") === "true"
+                ) {
+                  // The combobox closes itself before Modal reports the close,
+                  // so the expanded state has to be captured at keydown time.
+                  comboEscapeRef.current = true
+                  queueMicrotask(() => {
+                    comboEscapeRef.current = false
+                  })
+                }
+              }}
               // A real form, so a label associates, a password manager sees a
               // submit, and Enter in a single-line field submits the way it
               // does everywhere else. Cmd/Ctrl+Enter is added on top, for the
