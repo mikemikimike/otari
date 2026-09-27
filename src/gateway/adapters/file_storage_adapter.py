@@ -43,11 +43,13 @@ async def _run_blocking(operation: Callable[[], _T]) -> _T:
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
+        current = asyncio.current_task()
         while not task.done():
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
-                continue
+                if current is not None:
+                    current.uncancel()
             except BaseException:
                 break
         if task.done() and not task.cancelled():
@@ -309,7 +311,7 @@ class S3FileStore:
     async def put_stream(self, file_id: str, chunks: AsyncIterator[bytes]) -> tuple[str, int]:
         # The ref is opaque, so give each streamed upload an owned key. Cleanup
         # after an ambiguous transfer can then never remove another write.
-        key = f"{_shard_key(file_id)}.upload-{uuid.uuid4().hex}"
+        storage_ref = f"{_shard_key(file_id)}.upload-{uuid.uuid4().hex}"
         total = 0
         spool: IO[bytes] = tempfile.SpooledTemporaryFile(max_size=_SPOOL_MAX_MEMORY_BYTES)
         try:
@@ -320,21 +322,21 @@ class S3FileStore:
             try:
                 # _run_blocking waits for the transfer thread to settle even
                 # when this task is cancelled, so cleanup cannot race upload.
-                await _run_blocking(lambda: self._client.upload_fileobj(spool, self._bucket, key))
+                await _run_blocking(lambda: self._client.upload_fileobj(spool, self._bucket, storage_ref))
             except BaseException:
                 try:
                     # A transfer can fail after the server accepted the
-                    # object but before the client received confirmation.
-                    await _run_blocking(lambda: self._client.delete_object(Bucket=self._bucket, Key=key))
+                    # object. Delete only this call's unique object key.
+                    await _run_blocking(lambda: self._client.delete_object(Bucket=self._bucket, Key=storage_ref))
                 except Exception as cleanup_exc:
-                    logger.warning("put_stream: failed to remove orphaned upload %s: %s", key, cleanup_exc)
+                    logger.warning("put_stream: failed to remove orphaned upload %s: %s", storage_ref, cleanup_exc)
                 raise
         finally:
             try:
                 await _run_blocking(spool.close)
             except Exception as cleanup_exc:
-                logger.warning("put_stream: failed to close spool file for %s: %s", key, cleanup_exc)
-        return key, total
+                logger.warning("put_stream: failed to close spool file for %s: %s", storage_ref, cleanup_exc)
+        return storage_ref, total
 
     async def get_stream(self, storage_ref: str) -> AsyncGenerator[bytes, None]:
         with _translate_s3_errors(storage_ref):

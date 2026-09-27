@@ -60,6 +60,127 @@ async def test_put_stream_and_get_stream_roundtrip(memory_root: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_stream_publication_preserves_existing_blob(
+    memory_root: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FsspecFileStore(memory_root)
+    ref = await store.put("file-preserveexisting", b"existing")
+
+    def fail_move(_source: str, _destination: str) -> None:
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(store._fs, "mv", fail_move)
+
+    with pytest.raises(OSError, match="publication failed"):
+        await store.put_stream("file-preserveexisting", _iter([b"replacement"]))
+
+    assert await store.get(ref) == b"existing"
+    assert [
+        path.lstrip("/") for path in fsspec.filesystem("memory").find("otari-test/pr")
+    ] == ["otari-test/pr/file-preserveexisting"]
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_publication_removes_destination_created_before_failure(
+    memory_root: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FsspecFileStore(memory_root)
+    original_move = store._fs.mv
+
+    def move_then_fail(source: str, destination: str) -> object:
+        original_move(source, destination)
+        raise RuntimeError("source cleanup failed after destination copy")
+
+    monkeypatch.setattr(store._fs, "mv", move_then_fail)
+
+    with pytest.raises(OSError, match="source cleanup failed"):
+        await store.put_stream("file-copythenfail", _iter([b"unpublished"]))
+
+    assert fsspec.filesystem("memory").find("otari-test/pr") == []
+
+
+@pytest.mark.asyncio
+async def test_stream_publication_existence_error_preserves_existing_blob(
+    memory_root: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FsspecFileStore(memory_root)
+    ref = await store.put("file-existenceerror", b"existing")
+
+    def fail_exists(_path: str) -> bool:
+        raise RuntimeError("existence check failed")
+
+    monkeypatch.setattr(store._fs, "exists", fail_exists)
+
+    with pytest.raises(OSError, match="existence check failed"):
+        await store.put_stream("file-existenceerror", _iter([b"replacement"]))
+
+    assert await store.get(ref) == b"existing"
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_cleanup_preserves_a_concurrent_put(
+    memory_root: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FsspecFileStore(memory_root)
+    publication_started = threading.Event()
+    release_publication = threading.Event()
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+    put_started = threading.Event()
+    final_paths: set[str] = set()
+    original_move = store._fs.mv
+    original_remove = store._fs.rm
+    original_pipe_file = store._fs.pipe_file
+
+    def blocked_move(source: str, destination: str) -> object:
+        result = original_move(source, destination)
+        final_paths.add(destination)
+        publication_started.set()
+        if not release_publication.wait(timeout=5):
+            raise TimeoutError("test did not release the publication operation")
+        return result
+
+    def blocked_remove(path: str, *args: object, **kwargs: object) -> object:
+        if path in final_paths:
+            cleanup_started.set()
+            if not release_cleanup.wait(timeout=5):
+                raise TimeoutError("test did not release published-file cleanup")
+        return original_remove(path, *args, **kwargs)
+
+    def tracked_pipe_file(path: str, data: bytes, *args: object, **kwargs: object) -> object:
+        if data == b"replacement":
+            put_started.set()
+        return original_pipe_file(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(store._fs, "mv", blocked_move)
+    monkeypatch.setattr(store._fs, "rm", blocked_remove)
+    monkeypatch.setattr(store._fs, "pipe_file", tracked_pipe_file)
+
+    stream_task = asyncio.create_task(store.put_stream("file-cancel-put-race", _iter([b"cancelled"])))
+    put_task: asyncio.Task[str] | None = None
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(publication_started.wait), timeout=5)
+        assert stream_task.cancel()
+        await asyncio.sleep(0)
+        assert stream_task.cancel()
+        release_publication.set()
+        assert await asyncio.wait_for(asyncio.to_thread(cleanup_started.wait), timeout=5)
+        put_task = asyncio.create_task(store.put("file-cancel-put-race", b"replacement"))
+        await asyncio.sleep(0.1)
+        assert not put_started.is_set()
+    finally:
+        release_publication.set()
+        release_cleanup.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
+
+    assert put_task is not None
+    ref = await put_task
+    assert await store.get(ref) == b"replacement"
+
+
+@pytest.mark.asyncio
 async def test_put_stream_removes_partial_blob_on_failure(memory_root: str) -> None:
     store = FsspecFileStore(memory_root)
 

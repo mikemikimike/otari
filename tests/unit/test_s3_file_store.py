@@ -246,6 +246,51 @@ async def test_put_stream_removes_object_when_upload_reports_failure_after_commi
     assert await s3_store.get(existing_ref) == b"existing"
 
 
+@pytest.mark.asyncio
+async def test_failed_same_key_upload_preserves_a_concurrent_success(
+    s3_store: S3FileStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = s3_store._client  # noqa: SLF001 - coordinate concurrent transfer outcomes
+    original_upload_fileobj = client.upload_fileobj
+    first_upload_staged = threading.Event()
+    release_first_failure = threading.Event()
+    first_key: list[str] = []
+    first_call = True
+    first_call_lock = threading.Lock()
+
+    def _fail_first_after_commit(fileobj: IO[bytes], bucket: str, key: str) -> None:
+        nonlocal first_call
+        with first_call_lock:
+            is_first = first_call
+            first_call = False
+        if is_first:
+            first_key.append(key)
+            original_upload_fileobj(fileobj, bucket, key)
+            first_upload_staged.set()
+            if not release_first_failure.wait(timeout=5):
+                raise TimeoutError("test did not release the first upload")
+            raise RuntimeError("first upload response lost after commit")
+        original_upload_fileobj(fileobj, bucket, key)
+
+    monkeypatch.setattr(client, "upload_fileobj", _fail_first_after_commit)
+
+    first_task = asyncio.create_task(s3_store.put_stream("file-samekey-race", _iter([b"failed"])))
+    assert await asyncio.to_thread(first_upload_staged.wait, 5), "first upload thread never staged its object"
+    try:
+        second_ref, second_size = await s3_store.put_stream("file-samekey-race", _iter([b"successful replacement"]))
+    finally:
+        release_first_failure.set()
+
+    with pytest.raises(RuntimeError, match="first upload response lost"):
+        await first_task
+
+    assert second_ref != first_key[0]
+    assert second_size == len(b"successful replacement")
+    assert await s3_store.get(second_ref) == b"successful replacement"
+    listing = await asyncio.to_thread(client.list_objects_v2, Bucket=_BUCKET, Prefix="sa/")
+    assert [item["Key"] for item in listing.get("Contents", [])] == [second_ref]
+
+
 def test_missing_boto3_names_the_extra_to_install(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "boto3", None)
 
