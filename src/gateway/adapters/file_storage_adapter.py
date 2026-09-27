@@ -123,7 +123,8 @@ class LocalDirFileStore:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
 
-        await asyncio.to_thread(_write)
+        async with self._publication_lock:
+            await _run_blocking(_write)
         return ref
 
     async def get(self, storage_ref: str) -> bytes:
