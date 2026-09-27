@@ -442,7 +442,7 @@ class FsspecFileStore:
         return data
 
     async def put_stream(self, file_id: str, chunks: AsyncIterator[bytes]) -> tuple[str, int]:
-        ref = _shard_key(file_id)
+        ref = f"{_shard_key(file_id)}.upload-{uuid.uuid4().hex}"
         path = self._resolve(ref)
         temporary_path = self._resolve(f"{ref}.partial-{uuid.uuid4().hex}")
         total = 0

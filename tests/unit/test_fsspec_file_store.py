@@ -69,7 +69,7 @@ async def test_put_stream_removes_partial_blob_on_failure(memory_root: str) -> N
 
     with pytest.raises(RuntimeError):
         await store.put_stream("file-partial00001", _failing())
-    assert not fsspec.filesystem("memory").exists("otari-test/pa/file-partial00001")
+    assert await asyncio.to_thread(store._fs.find, store._root) == []
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,41 @@ async def test_put_stream_removes_partial_blob_on_cancellation(memory_root: str)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert not fsspec.filesystem("memory").exists("otari-test/ca/file-cancel000001")
+    assert await asyncio.to_thread(store._fs.find, store._root) == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_streams_for_same_id_keep_distinct_objects(memory_root: str) -> None:
+    first_store = FsspecFileStore(memory_root)
+    second_store = FsspecFileStore(memory_root)
+    file_id = "file-concurrentsamekey01"
+    existing_ref = await first_store.put(file_id, b"existing")
+    streams_ready = 0
+    both_streams_ready = asyncio.Event()
+
+    async def chunks(payload: bytes) -> AsyncIterator[bytes]:
+        nonlocal streams_ready
+        streams_ready += 1
+        if streams_ready == 2:
+            both_streams_ready.set()
+        await both_streams_ready.wait()
+        yield payload
+
+    first_upload, second_upload = await asyncio.gather(
+        first_store.put_stream(file_id, chunks(b"first")),
+        second_store.put_stream(file_id, chunks(b"second")),
+    )
+    first_ref, first_size = first_upload
+    second_ref, second_size = second_upload
+
+    assert first_ref != existing_ref
+    assert second_ref != existing_ref
+    assert first_ref != second_ref
+    assert first_size == len(b"first")
+    assert second_size == len(b"second")
+    assert await first_store.get(existing_ref) == b"existing"
+    assert await first_store.get(first_ref) == b"first"
+    assert await second_store.get(second_ref) == b"second"
 
 
 @pytest.mark.asyncio
@@ -131,14 +165,10 @@ async def test_failed_destination_check_preserves_existing_blob(
 ) -> None:
     store = FsspecFileStore(memory_root)
     ref = await store.put("file-checkfail0001", b"existing")
-    path = store._resolve(ref)
-    original_exists = store._fs.exists
     move_called = False
 
-    def failed_exists(candidate: str) -> bool:
-        if candidate == path:
-            raise OSError("destination check failed")
-        return bool(original_exists(candidate))
+    def failed_exists(_candidate: str) -> bool:
+        raise OSError("destination check failed")
 
     def unexpected_move(_source: str, _destination: str) -> None:
         nonlocal move_called
@@ -152,6 +182,7 @@ async def test_failed_destination_check_preserves_existing_blob(
 
     assert not move_called
     assert await store.get(ref) == b"existing"
+    assert await asyncio.to_thread(store._fs.find, store._root) == [store._resolve(ref)]
 
 
 @pytest.mark.asyncio
