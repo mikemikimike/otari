@@ -439,7 +439,7 @@ def test_stop_judge_receives_committed_changes_and_reports_its_base(
 
 
 def test_stop_hook_blocks_a_committed_path_and_sends_the_same_range_to_judge(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: Path
 ) -> None:
     repo = _repo(tmp_path)
     base = subprocess.run(

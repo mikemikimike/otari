@@ -575,7 +575,7 @@ def _hook_run_git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[st
 
 def _hook_stop_branch_header(repo_root: Path) -> str | None:
     """Return the porcelain branch header when Git reports one."""
-    result = _hook_run_git(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--branch")
+    result = _hook_run_git(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--branch")
     if result is None or result.returncode != 0:
         return None
     return next((token[3:] for token in result.stdout.split("\0") if token.startswith("## ")), None)
