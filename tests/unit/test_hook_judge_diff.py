@@ -310,6 +310,7 @@ def test_stop_range_on_default_branch_does_not_include_its_commits(tmp_path: Pat
     assert diff_range is not None
     assert diff_range.base == head
     assert hook_cli._hook_collect_changed_paths(repo, diff_range) == []
+    assert hook_cli._hook_collect_diff(repo, diff_range) == ""
 
 
 def test_stop_range_uses_default_branch_when_pushed_upstream_is_at_head(tmp_path: Path) -> None:
