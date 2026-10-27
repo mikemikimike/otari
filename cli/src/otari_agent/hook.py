@@ -573,14 +573,6 @@ def _hook_run_git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[st
         return None
 
 
-def _hook_stop_branch_header(repo_root: Path) -> str | None:
-    """Return the porcelain branch header when Git reports one."""
-    result = _hook_run_git(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--branch")
-    if result is None or result.returncode != 0:
-        return None
-    return next((token[3:] for token in result.stdout.split("\0") if token.startswith("## ")), None)
-
-
 def _hook_stop_upstream(repo_root: Path) -> str | None:
     """Return the current branch's configured upstream when it resolves to a commit."""
     result = _hook_run_git(repo_root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
@@ -635,16 +627,13 @@ def _hook_stop_merge_base(repo_root: Path, head: str, reference: str, source: st
 def _hook_collect_stop_diff_range(repo_root: Path) -> "_DiffRange | None":
     """Select the committed and working-tree range a Stop event should judge.
 
-    A branch's upstream is the strongest local indication of where its work
-    started unless it points at ``HEAD``, as it does after the branch is
-    pushed. In that case, prefer a remote's advertised default branch and keep
-    the upstream range only when no default-branch range is available. A
+    Prefer the upstream merge base when it is ahead of the default-branch
+    merge base and differs from HEAD; otherwise use the default-branch base.
+    This avoids including default-branch commits after a rebase. A
     repository with neither falls back to ``HEAD`` so the hook still sees
     unstaged changes. The returned description is included in judge evidence
     so a reader can tell which history was reviewed.
     """
-    if _hook_stop_branch_header(repo_root) is None:
-        return None
     head = _hook_revision(repo_root, "HEAD")
     if head is None:
         return None
@@ -655,17 +644,18 @@ def _hook_collect_stop_diff_range(repo_root: Path) -> "_DiffRange | None":
     if upstream is not None:
         has_candidate = True
         diff_range = _hook_stop_merge_base(repo_root, head, upstream, f"upstream {upstream}")
-        if diff_range is not None and diff_range.base != head:
-            return diff_range
         upstream_range = diff_range
 
     default_branch = _hook_default_branch(repo_root)
     if default_branch is not None:
         has_candidate = True
-        if default_branch[0] != upstream:
-            diff_range = _hook_stop_merge_base(repo_root, head, *default_branch)
-            if diff_range is not None:
-                return diff_range
+        diff_range = _hook_stop_merge_base(repo_root, head, *default_branch)
+        if diff_range is not None:
+            if upstream_range is not None and upstream_range.base != head:
+                ancestor = _hook_run_git(repo_root, "merge-base", "--is-ancestor", diff_range.base, upstream_range.base)
+                if ancestor is not None and ancestor.returncode == 0:
+                    return upstream_range
+            return diff_range
 
     if upstream_range is not None:
         return upstream_range
@@ -719,20 +709,8 @@ def _hook_collect_changed_paths(repo_root: Path, diff_range: "_DiffRange | None"
             return None
         return list(dict.fromkeys([*paths, *untracked]))
 
-    try:
-        result = subprocess.run(  # noqa: S603 - fixed argv, no shell, explicit cwd
-            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",  # not the platform locale default, which is not always UTF-8
-            errors="replace",  # a pathologically-named file's bytes need not be valid UTF-8 either
-            timeout=10,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if result.returncode != 0:
+    result = _hook_run_git(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    if result is None or result.returncode != 0:
         return None
     return _hook_status_paths(result.stdout)
 
@@ -2687,12 +2665,7 @@ def hook(
             return  # A tool this harness integration does not check yet.
     elif event == "Stop":
         stop_diff_range = _hook_collect_stop_diff_range(root)
-        if stop_diff_range is None:
-            # Without readable branch metadata, status is the only evidence
-            # available; a resolved range includes committed changes too.
-            collected = _hook_collect_changed_paths(root)
-        else:
-            collected = _hook_collect_changed_paths(root, stop_diff_range)
+        collected = _hook_collect_changed_paths(root, stop_diff_range)
         if collected is None:
             _hook_not_enforcing("could not read Git state; no gate is being enforced.")
             return

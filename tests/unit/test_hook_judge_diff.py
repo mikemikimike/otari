@@ -267,6 +267,51 @@ def test_stop_range_uses_the_upstream_merge_base_for_committed_and_working_tree_
     assert "+uncommitted = True" in diff
 
 
+def test_stop_range_excludes_default_branch_changes_after_rebase(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    subprocess.run(["git", "switch", "-q", "-c", "feature"], cwd=repo, check=True)
+    (repo / "feature.py").write_text("feature = True\n", encoding="utf-8")
+    old_feature = _commit(repo)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/feature", old_feature], cwd=repo, check=True)
+    subprocess.run(["git", "config", "remote.origin.url", "https://example.invalid/repo.git"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "config", "branch.feature.remote", "origin"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "branch.feature.merge", "refs/heads/feature"], cwd=repo, check=True)
+    subprocess.run(["git", "switch", "-q", "main"], cwd=repo, check=True)
+    (repo / "CHANGELOG.md").write_text("release\n", encoding="utf-8")
+    main = _commit(repo)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", main], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "switch", "-q", "feature"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "rebase", "main"], cwd=repo, check=True
+    )
+
+    diff_range = hook_cli._hook_collect_stop_diff_range(repo)
+    assert diff_range is not None
+    assert diff_range.base == main
+    assert hook_cli._hook_collect_changed_paths(repo, diff_range) == ["feature.py"]
+    diff = hook_cli._hook_collect_diff(repo, diff_range)
+    assert diff is not None
+    assert "feature = True" in diff
+    assert "CHANGELOG.md" not in diff
+
+
+def test_stop_range_on_default_branch_does_not_include_its_commits(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    (repo / "committed.py").write_text("committed = True\n", encoding="utf-8")
+    head = _commit(repo)
+
+    diff_range = hook_cli._hook_collect_stop_diff_range(repo)
+    assert diff_range is not None
+    assert diff_range.base == head
+    assert hook_cli._hook_collect_changed_paths(repo, diff_range) == []
+
+
 def test_stop_range_uses_default_branch_when_pushed_upstream_is_at_head(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     base = subprocess.run(

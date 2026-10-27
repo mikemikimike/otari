@@ -66,7 +66,7 @@ Git repository: it refuses outside one, and the branch merge-base diff plus
 untracked working-tree paths are where the `Stop` event's path evidence comes
 from.
 
-The hook runs at most five judge gates per `Stop` event, highest `priority` first, and skips the rest. The CI judge job runs up to twenty (see [The CI jobs](#the-ci-jobs)). To run the same judge gates locally, set `OTARI_HOOK_MAX_JUDGES=20` in the environment the harness starts from, such as your shell profile. Each judge gate is one model call, so this raises the cost of a `Stop` event that many gates apply to.
+The hook runs at most five judge gates per `Stop` event, highest `priority` first, and skips the rest. The CI judge job runs up to twenty (see [The CI jobs](#the-ci-jobs)). To run the same judge gates locally, set `OTARI_HOOK_MAX_JUDGES=20` in the environment the harness starts from, such as your shell profile. Each judge gate is one model call, so this raises the cost of a `Stop` event that many gates apply to. Branch changes remain in the evidence across turns, so matching judges can run again even when a later turn changes nothing.
 
 ### Claude Code
 
@@ -380,7 +380,7 @@ Nothing is contacted and no model is called, so a `judge` gate reports
 otari guardrails check --base origin/main
 ```
 
-The change runs from the commit where the branch left `--base` to the working tree, untracked files included. `--head <commit>` ends it at a commit instead, and reads the change from Git alone. `--base` defaults to `HEAD` for this explicit command. A `Stop` event selects the branch's merge base with its upstream unless that base is `HEAD`; when the upstream is unavailable, unrelated, or points at the pushed `HEAD`, it tries the remote default branch. If that default-branch range is unavailable, it keeps the upstream range when possible, then uses `HEAD` when neither range exists. It includes the working tree, so commits made during the session remain in the evidence. `otari guardrails validate --path` prints this Stop base assumption in its preview.
+The change runs from the commit where the branch left `--base` to the working tree, untracked files included. `--head <commit>` ends it at a commit instead, and reads the change from Git alone. `--base` defaults to `HEAD` for this explicit command. A `Stop` event compares the upstream and default-branch merge bases, preferring the upstream when it is ahead of the default base and differs from `HEAD`. If the default range is unavailable, it keeps the upstream range when possible, then uses `HEAD` when neither range exists. The range includes the working tree and branch commits, but commits made directly on the default branch are not detected when its merge base is `HEAD`. `otari guardrails validate --path` prints this Stop base assumption in its preview.
 
 Every gate sees the paths the change touches as `stop.working_tree` evidence. A deleted path counts as changed, and a rename counts as both of its paths.
 
@@ -396,7 +396,7 @@ A `required` gate that fails, errors or gets no result exits 1. A gate the chang
 
 `--type` runs only the gate types it names, and is repeatable. Without it, the report also lists the `command` and `command_if_changed` gates that cannot run. Naming `verifier` together with `--head` is a usage error. `--judge-model`, `--judge-cli` and `--max-judges` choose the judge's model, its CLI and how many judge gates run, as they do for `otari hook`, and read the same environment variables. `--guardrails-from <directory>` reads the guardrail files and the verifier scripts from another checkout instead of the one being checked. A check reads the repository's own guardrail only, and leaves your files in `~/.otari/` out, so it reads the same on every machine.
 
-A verifier that finds what changed through `git status`, as `no-stranded-docblocks.py` does, sees only the uncommitted part of a change. The path and verifier job below stages the whole pull request against its merge base for that reason; the Stop path and judge evidence use that same merge-base range.
+A verifier that finds what changed through `git status`, as `no-stranded-docblocks.py` does, sees only the uncommitted part of a change. The path and verifier job below stages the whole pull request against its merge base for that reason; Stop path and judge evidence also include committed changes.
 
 ### The CI jobs
 

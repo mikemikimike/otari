@@ -437,8 +437,8 @@ suppresses a warning, never a block.
 `when_changed` is optional, the same repo-relative POSIX glob grammar
 `command_if_changed`'s own field of that name uses. Omitted (the default),
 the gate always applies, the only behavior a judge gate had before this
-field existed. Given, it scopes the gate to a session that actually touched
-a matching path, resolving `not_applicable` on a `Stop` event that changed
+field existed. Given, it scopes the gate to a branch that touched
+a matching path, resolving `not_applicable` when the evidence contains
 nothing the gate cares about, without ever spending a model call to find
 that out: `otari hook` checks this locally, before reading the diff or
 transcript or shelling out to `claude -p`, against the same branch merge-base
