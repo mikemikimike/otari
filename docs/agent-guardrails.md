@@ -396,7 +396,7 @@ A `required` gate that fails, errors or gets no result exits 1. A gate the chang
 
 `--type` runs only the gate types it names, and is repeatable. Without it, the report also lists the `command` and `command_if_changed` gates that cannot run. Naming `verifier` together with `--head` is a usage error. `--judge-model`, `--judge-cli` and `--max-judges` choose the judge's model, its CLI and how many judge gates run, as they do for `otari hook`, and read the same environment variables. `--guardrails-from <directory>` reads the guardrail files and the verifier scripts from another checkout instead of the one being checked. A check reads the repository's own guardrail only, and leaves your files in `~/.otari/` out, so it reads the same on every machine.
 
-A verifier that finds what changed through `git status`, as `no-stranded-docblocks.py` does, sees only the uncommitted part of a change. The path and verifier job below stages the whole pull request against its merge base for that reason; Stop path and judge evidence also include committed changes.
+A verifier that finds what changed through `git status`, as `no-stranded-docblocks.py` does, sees only the uncommitted part of a change. The path and verifier job below stages the whole pull request against its merge base for that reason. Stop path and judge evidence independently include committed changes from the selected Stop range.
 
 ### The CI jobs
 

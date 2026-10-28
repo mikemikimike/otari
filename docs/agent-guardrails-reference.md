@@ -1272,7 +1272,7 @@ PreToolUse, Edit/Write: docs/public/openapi.json
   quiet      no-hand-edited-changelog (required)
   ...
 
-Stop, the finished turn: 1 changed path(s), 1 command(s); judge diff base: the branch merge base with its upstream, falling back to the default branch and then HEAD
+Stop, the finished turn: 1 changed path(s), 1 command(s); judge diff base: the selected Stop range (the branch merge base with its upstream, falling back to the default branch and then HEAD)
   quiet      openapi-changed-needs-postman (required)
   fires      openapi-changed-needs-generator (required)
   would run  no-leftover-conflict-markers (verifier, required)
