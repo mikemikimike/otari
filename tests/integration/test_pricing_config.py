@@ -1,1 +1,1028 @@
-@tests/integration/test_pricing_config.py
+"""Tests for pricing configuration from config file."""
+
+import logging
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+from any_llm.types.completion import CompletionUsage
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
+
+from gateway.api.deps import build_deployment_pricing_service
+from gateway.api.routes.chat import log_usage
+from gateway.core.config import API_ROOT, GatewayConfig
+from gateway.core.settings.pricing import PricingConfig, PricingTierConfig
+from gateway.core.unit_of_work import UnitOfWork
+from gateway.db import ModelPricing, get_db
+from gateway.main import create_app
+from gateway.models.usage import UsageLog
+from gateway.repositories.tools import SearchToolRepository
+from gateway.services.pricing import DeploymentPricingService
+from gateway.services.pricing_init_service import initialize_pricing_from_config
+
+from .conftest import build_async_session_override
+
+
+def test_pricing_loaded_from_config(postgres_url: str, test_db: Session) -> None:
+    """Test that pricing is loaded from config file on startup."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={
+            "openai:gpt-4": PricingConfig(
+                input_price_per_million=30.0,
+                output_price_per_million=60.0,
+            ),
+            "openai:gpt-3.5-turbo": PricingConfig(
+                input_price_per_million=0.5,
+                output_price_per_million=1.5,
+            ),
+        },
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app):
+            # Check GPT-4 pricing
+            pricing = test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai:gpt-4").first()
+            assert pricing is not None, "GPT-4 pricing should be loaded from config"
+            assert pricing.input_price_per_million == 30.0
+            assert pricing.output_price_per_million == 60.0
+
+            # Check GPT-3.5 pricing
+            pricing = test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai:gpt-3.5-turbo").first()
+            assert pricing is not None, "GPT-3.5-turbo pricing should be loaded from config"
+            assert pricing.input_price_per_million == 0.5
+            assert pricing.output_price_per_million == 1.5
+    finally:
+        dispose_override()
+
+
+def test_pricing_loaded_with_explicit_effective_at(postgres_url: str, test_db: Session) -> None:
+    """Configuration respects explicitly provided effective_at timestamps."""
+
+    effective_at = datetime(2025, 1, 15, tzinfo=UTC)
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={
+            "openai:gpt-4": PricingConfig(
+                input_price_per_million=30.0,
+                output_price_per_million=60.0,
+                effective_at=effective_at,
+            ),
+        },
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app):
+            pricing = test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai:gpt-4").first()
+            assert pricing is not None
+            assert pricing.effective_at == effective_at
+    finally:
+        dispose_override()
+
+
+def test_database_pricing_takes_precedence(postgres_url: str, test_db: Session) -> None:
+    """Test that existing database pricing is not overwritten by config."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={
+            "openai:gpt-4": PricingConfig(
+                input_price_per_million=30.0,
+                output_price_per_million=60.0,
+            ),
+        },
+    )
+
+    # Pre-populate database with different pricing
+    existing_pricing = ModelPricing(
+        model_key="openai:gpt-4",
+        input_price_per_million=25.0,
+        output_price_per_million=50.0,
+    )
+    test_db.add(existing_pricing)
+    test_db.commit()
+
+    # Create app (which loads config pricing)
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app):
+            # Check that database pricing was preserved
+            pricing = test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai:gpt-4").first()
+            assert pricing is not None
+            # Should keep database values, not config values
+            assert pricing.input_price_per_million == 25.0
+            assert pricing.output_price_per_million == 50.0
+    finally:
+        dispose_override()
+
+
+def test_pricing_for_unlisted_provider_is_skipped_not_fatal(
+    postgres_url: str,
+    test_db: Session,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pricing for a provider absent from `providers:` is skipped with a warning, not a crash.
+
+    The provider may still be reachable via environment credentials, so a pricing/provider
+    mismatch must not abort startup (see issue #191).
+    """
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={
+            # Unlisted provider: should be skipped.
+            "anthropic:claude-3-opus": PricingConfig(
+                input_price_per_million=15.0,
+                output_price_per_million=75.0,
+            ),
+            # Listed provider: should still be loaded.
+            "openai:gpt-4": PricingConfig(
+                input_price_per_million=30.0,
+                output_price_per_million=60.0,
+            ),
+        },
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+
+    # The gateway logger does not propagate to the root logger, so caplog's
+    # root handler never sees its records; attach caplog's handler directly.
+    gateway_logger = logging.getLogger("gateway")
+    gateway_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="gateway"):
+            with TestClient(app):
+                # Startup succeeded: the unlisted provider's pricing was skipped, not fatal.
+                skipped = (
+                    test_db.query(ModelPricing).filter(ModelPricing.model_key == "anthropic:claude-3-opus").first()
+                )
+                assert skipped is None, "Pricing for an unlisted provider should be skipped"
+
+                # The listed provider's pricing is still loaded.
+                loaded = test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai:gpt-4").first()
+                assert loaded is not None, "Pricing for a listed provider should still be loaded"
+                assert loaded.input_price_per_million == 30.0
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+        dispose_override()
+
+    assert any("Skipping pricing" in record.message and "anthropic" in record.message for record in caplog.records), (
+        "Expected a warning that anthropic pricing was skipped"
+    )
+
+
+def test_pricing_for_a_decision_provider_is_loaded(postgres_url: str, test_db: Session) -> None:
+    """A decisions provider prices its models in ``pricing`` although it is not under ``providers``."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        decision_providers={"typesafe": {"api_key": "test-key"}},
+        pricing={"typesafe:jev-latest": PricingConfig(input_price_per_million=2.0, output_price_per_million=10.0)},
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app):
+            loaded = test_db.query(ModelPricing).filter(ModelPricing.model_key == "typesafe:jev-latest").first()
+            assert loaded is not None
+            assert loaded.input_price_per_million == 2.0
+    finally:
+        dispose_override()
+
+
+def test_pricing_for_a_search_tool_provider_is_loaded(postgres_url: str, test_db: Session) -> None:
+    """A search tool's ``provider:tool`` rate is kept although its provider is not under ``providers``."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        search_tools={"exa-search": {"provider": "exa", "api_key": "test-key"}},
+        pricing={"exa:exa-search": PricingConfig(input_price_per_million=5000.0, output_price_per_million=0.0)},
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app):
+            loaded = test_db.query(ModelPricing).filter(ModelPricing.model_key == "exa:exa-search").first()
+            assert loaded is not None
+            assert loaded.input_price_per_million == 5000.0
+    finally:
+        dispose_override()
+
+
+def test_a_tools_price_per_call_is_stored_under_its_kind_and_name(postgres_url: str, test_db: Session) -> None:
+    """Beside a model price spelled like it, and a restart with the same rate adds no version."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        providers={"exa": {"provider": "openai", "api_key": "test-key"}},
+        search_tools={"exa": {"provider": "exa", "api_key": "test-key", "price_per_call": 0.005}},
+        fetch_tools={"exa-fetch": {"provider": "exa", "api_key": "test-key", "price_per_call": 0.001}},
+        pricing={"exa:exa": PricingConfig(input_price_per_million=1.0, output_price_per_million=2.0)},
+    )
+
+    for _restart in range(2):
+        app = create_app(config)
+        override_get_db, dispose_override = build_async_session_override(postgres_url)
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            with TestClient(app):
+                pass
+        finally:
+            dispose_override()
+
+    rows = {(row.kind, row.model_key): row for row in test_db.query(ModelPricing).all()}
+    assert rows[("search", "exa")].input_price_per_million == 5000
+    assert rows[("search", "exa")].unit == "request"
+    assert rows[("fetch", "exa-fetch")].input_price_per_million == 1000
+    assert rows[("model", "exa:exa")].input_price_per_million == 1
+    assert test_db.query(ModelPricing).filter(ModelPricing.kind == "search").count() == 1
+
+
+def test_a_start_whose_stored_tools_do_not_load_writes_no_tool_price(
+    postgres_url: str, test_db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stored instance may share a priced entry's name; its rate is left alone until the stored tools load."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        search_tools={"exa": {"provider": "exa", "api_key": "test-key", "price_per_call": 0.005}},
+    )
+
+    async def refuse(_repository: object) -> list[object]:
+        raise OperationalError("SELECT", {}, Exception("database restarting"))
+
+    def start() -> None:
+        app = create_app(config)
+        override_get_db, dispose_override = build_async_session_override(postgres_url)
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            with TestClient(app):
+                pass
+        finally:
+            dispose_override()
+
+    with monkeypatch.context() as patched:
+        patched.setattr(SearchToolRepository, "list_committed", refuse)
+        start()
+    assert test_db.query(ModelPricing).filter(ModelPricing.kind == "search").count() == 0
+
+    start()
+    assert test_db.query(ModelPricing).filter(ModelPricing.kind == "search").one().input_price_per_million == 5000
+
+
+def test_pricing_under_a_search_tools_provider_naming_no_tool_is_skipped(
+    postgres_url: str, test_db: Session, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only a tool's exact old key is a tool rate; the warning names the provider's tools."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        search_tools={"exa-search": {"provider": "exa", "api_key": "test-key"}},
+        pricing={
+            "exa:exa-search": PricingConfig(input_price_per_million=5000.0, output_price_per_million=0.0),
+            "exa:a-model": PricingConfig(input_price_per_million=1.0, output_price_per_million=2.0),
+        },
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+    gateway_logger = logging.getLogger("gateway")
+    gateway_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="gateway"), TestClient(app):
+            assert test_db.query(ModelPricing).filter(ModelPricing.model_key == "exa:exa-search").first() is not None
+            assert test_db.query(ModelPricing).filter(ModelPricing.model_key == "exa:a-model").first() is None
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+        dispose_override()
+
+    [skipped] = [record.message for record in caplog.records if "Skipping pricing for 'exa:a-model'" in record.message]
+    # It names the provider's tools and how a tool is priced now, not the old <provider>:<tool> form.
+    assert "none of exa's search or fetch tools (exa-search)" in skipped
+    assert "price_per_call on its entry" in skipped and "with its kind and its name as model_key" in skipped
+    assert "Add 'exa' to the providers section" not in skipped
+    assert "exa:exa-search (deployment)" in caplog.text
+
+
+def test_pricing_for_a_fetch_instance_provider_is_loaded(postgres_url: str, test_db: Session) -> None:
+    """A fetch instance's ``provider:instance`` rate is kept although its provider is not under ``providers``."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        fetch_tools={"tabstack": {"provider": "tabstack", "api_key": "test-key"}},
+        pricing={"tabstack:tabstack": PricingConfig(input_price_per_million=2000.0, output_price_per_million=0.0)},
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app):
+            loaded = test_db.query(ModelPricing).filter(ModelPricing.model_key == "tabstack:tabstack").first()
+            assert loaded is not None
+            assert loaded.input_price_per_million == 2000.0
+    finally:
+        dispose_override()
+
+
+def test_pricing_for_the_builtin_fetcher_is_loaded_without_any_fetch_instance(
+    postgres_url: str, test_db: Session
+) -> None:
+    """``builtin:builtin_fetch`` prices the built-in fetcher, which every deployment has."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        pricing={"builtin:builtin_fetch": PricingConfig(input_price_per_million=1000.0, output_price_per_million=0.0)},
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app):
+            loaded = test_db.query(ModelPricing).filter(ModelPricing.model_key == "builtin:builtin_fetch").first()
+            assert loaded is not None
+            assert loaded.input_price_per_million == 1000.0
+    finally:
+        dispose_override()
+
+
+def test_pricing_loaded_from_config_normalizes_legacy_slash_format(postgres_url: str, test_db: Session) -> None:
+    """Test that pricing configured with legacy slash format is normalized to colon format."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={
+            "openai/gpt-4": PricingConfig(
+                input_price_per_million=30.0,
+                output_price_per_million=60.0,
+            ),
+        },
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app):
+            # Pricing should be stored with canonical colon format, not slash
+            pricing_slash = test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai/gpt-4").first()
+            assert pricing_slash is None, "Pricing should not be stored with legacy slash format"
+
+            pricing_colon = test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai:gpt-4").first()
+            assert pricing_colon is not None, "Pricing should be stored with canonical colon format"
+            assert pricing_colon.input_price_per_million == 30.0
+            assert pricing_colon.output_price_per_million == 60.0
+    finally:
+        dispose_override()
+
+
+@pytest.mark.filterwarnings("ignore:Model format 'provider/model' is deprecated:DeprecationWarning")
+def test_set_pricing_api_normalizes_legacy_slash_format(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """Test that the pricing API normalizes legacy slash format to colon format."""
+    response = client.post(
+        f"{API_ROOT}/pricing",
+        json={
+            "model_key": "gemini/gemini-2.5-flash",
+            "input_price_per_million": 0.075,
+            "output_price_per_million": 0.30,
+        },
+        headers=master_key_header,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["model_key"] == "gemini:gemini-2.5-flash", "API should normalize slash to colon format"
+
+
+def test_set_pricing_persists_cache_rates(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """Cache rates round-trip through /api/v1/pricing and are stored on the row."""
+    resp = client.post(
+        f"{API_ROOT}/pricing",
+        json={
+            "model_key": "anthropic:claude-sonnet-4",
+            "input_price_per_million": 3.0,
+            "output_price_per_million": 15.0,
+            "cache_read_price_per_million": 0.3,
+            "cache_write_price_per_million": 3.75,
+        },
+        headers=master_key_header,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cache_read_price_per_million"] == 0.3
+    assert data["cache_write_price_per_million"] == 3.75
+
+
+def test_set_pricing_persists_context_tiers(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """The pricing API round-trips long-context rates."""
+    key = "anthropic:claude-sonnet-4"
+    payload = {
+        "model_key": key,
+        "input_price_per_million": 3.0,
+        "output_price_per_million": 15.0,
+        "cache_write_price_per_million": 3.75,
+        "pricing_tiers": [
+            {
+                "min_input_tokens": 200000,
+                "input_price_per_million": 6.0,
+                "output_price_per_million": 22.5,
+                "cache_read_price_per_million": None,
+                "cache_write_price_per_million": 4.5,
+            }
+        ],
+    }
+    response = client.post(f"{API_ROOT}/pricing", json=payload, headers=master_key_header)
+
+    assert response.status_code == 200
+    assert response.json()["pricing_tiers"] == payload["pricing_tiers"]
+
+    # Omission preserves thresholds during a new price version, while explicit
+    # null intentionally removes them.
+    preserved = client.post(
+        f"{API_ROOT}/pricing",
+        json={"model_key": key, "input_price_per_million": 4.0, "output_price_per_million": 16.0},
+        headers=master_key_header,
+    )
+    assert preserved.json()["pricing_tiers"] == payload["pricing_tiers"]
+
+    cleared = client.post(
+        f"{API_ROOT}/pricing",
+        json={
+            "model_key": key,
+            "input_price_per_million": 4.0,
+            "output_price_per_million": 16.0,
+            "pricing_tiers": None,
+        },
+        headers=master_key_header,
+    )
+    assert cleared.json()["pricing_tiers"] == []
+
+
+def test_set_pricing_rejects_tier_without_rate_override(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    response = client.post(
+        f"{API_ROOT}/pricing",
+        json={
+            "model_key": "anthropic:claude-sonnet-4",
+            "input_price_per_million": 3.0,
+            "output_price_per_million": 15.0,
+            "pricing_tiers": [{"min_input_tokens": 200_000}],
+        },
+        headers=master_key_header,
+    )
+
+    assert response.status_code == 422
+    assert "must override at least one price field" in response.text
+
+
+def test_set_pricing_omitted_cache_rates_preserve_stored_values(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """A later update that omits cache fields must not wipe stored cache rates
+    (only an explicit null clears them). Guards the partial-update footgun."""
+    key = "anthropic:claude-sonnet-4"
+    client.post(
+        f"{API_ROOT}/pricing",
+        json={
+            "model_key": key,
+            "input_price_per_million": 3.0,
+            "output_price_per_million": 15.0,
+            "cache_read_price_per_million": 0.3,
+            "cache_write_price_per_million": 3.75,
+        },
+        headers=master_key_header,
+    )
+
+    # Update only input/output, omitting cache fields entirely.
+    resp = client.post(
+        f"{API_ROOT}/pricing",
+        json={"model_key": key, "input_price_per_million": 4.0, "output_price_per_million": 16.0},
+        headers=master_key_header,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["input_price_per_million"] == 4.0
+    assert data["cache_read_price_per_million"] == 0.3, "omitted cache_read must be preserved"
+    assert data["cache_write_price_per_million"] == 3.75, "omitted cache_write must be preserved"
+
+    # An explicit null still clears a rate.
+    resp = client.post(
+        f"{API_ROOT}/pricing",
+        json={
+            "model_key": key,
+            "input_price_per_million": 4.0,
+            "output_price_per_million": 16.0,
+            "cache_read_price_per_million": None,
+        },
+        headers=master_key_header,
+    )
+    assert resp.json()["cache_read_price_per_million"] is None
+    assert resp.json()["cache_write_price_per_million"] == 3.75, "unmentioned cache_write still preserved"
+
+
+def test_pricing_history_endpoint_returns_entries(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """GET /api/v1/pricing/{model_key}/history returns versions in descending order."""
+
+    model_key = "openai:gpt-4"
+    first_effective = datetime(2025, 1, 1, tzinfo=UTC)
+    second_effective = datetime(2025, 2, 1, tzinfo=UTC)
+
+    for effective_at, input_price in [(first_effective, 20.0), (second_effective, 25.0)]:
+        resp = client.post(
+            f"{API_ROOT}/pricing",
+            json={
+                "model_key": model_key,
+                "input_price_per_million": input_price,
+                "output_price_per_million": 40.0,
+                "effective_at": effective_at.isoformat(),
+            },
+            headers=master_key_header,
+        )
+        assert resp.status_code == 200
+
+    history_resp = client.get(f"{API_ROOT}/pricing/{model_key}/history", headers=master_key_header)
+    assert history_resp.status_code == 200
+    history = history_resp.json()
+    assert [entry["effective_at"] for entry in history] == [
+        second_effective.isoformat(),
+        first_effective.isoformat(),
+    ]
+
+
+def test_get_pricing_respects_as_of(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """GET /api/v1/pricing/{model_key} returns the effective price at a timestamp."""
+
+    model_key = "anthropic:claude-3"
+    early = datetime(2025, 3, 1, tzinfo=UTC)
+    later = datetime(2025, 4, 1, tzinfo=UTC)
+
+    for effective_at, input_price in [(early, 15.0), (later, 18.0)]:
+        resp = client.post(
+            f"{API_ROOT}/pricing",
+            json={
+                "model_key": model_key,
+                "input_price_per_million": input_price,
+                "output_price_per_million": 30.0,
+                "effective_at": effective_at.isoformat(),
+            },
+            headers=master_key_header,
+        )
+        assert resp.status_code == 200
+
+    latest_resp = client.get(f"{API_ROOT}/pricing/{model_key}", headers=master_key_header)
+    assert latest_resp.status_code == 200
+    assert latest_resp.json()["input_price_per_million"] == 18.0
+
+    old_resp = client.get(
+        f"{API_ROOT}/pricing/{model_key}",
+        params={"as_of": early.isoformat()},
+        headers=master_key_header,
+    )
+    assert old_resp.status_code == 200
+    assert old_resp.json()["input_price_per_million"] == 15.0
+
+
+def test_delete_pricing_with_effective_at(
+    client: TestClient,
+    master_key_header: dict[str, str],
+) -> None:
+    """Deleting with effective_at removes only the targeted row."""
+
+    model_key = "openai:gpt-4o"
+    old_effective = datetime(2025, 5, 1, tzinfo=UTC)
+    new_effective = datetime(2025, 5, 15, tzinfo=UTC)
+
+    for effective_at in (old_effective, new_effective):
+        resp = client.post(
+            f"{API_ROOT}/pricing",
+            json={
+                "model_key": model_key,
+                "input_price_per_million": 1.0,
+                "output_price_per_million": 2.0,
+                "effective_at": effective_at.isoformat(),
+            },
+            headers=master_key_header,
+        )
+        assert resp.status_code == 200
+
+    delete_resp = client.delete(
+        f"{API_ROOT}/pricing/{model_key}",
+        params={"effective_at": old_effective.isoformat()},
+        headers=master_key_header,
+    )
+    assert delete_resp.status_code == 204
+
+    history_resp = client.get(f"{API_ROOT}/pricing/{model_key}/history", headers=master_key_header)
+    assert history_resp.status_code == 200
+    history = history_resp.json()
+    assert len(history) == 1
+    assert history[0]["effective_at"] == new_effective.isoformat()
+
+
+def test_pricing_initialization_with_no_config(postgres_url: str, test_db: Session) -> None:
+    """Test that app starts successfully when no pricing is configured."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={},  # Empty pricing
+    )
+
+    app = create_app(config)
+    override_get_db, dispose_override = build_async_session_override(postgres_url)
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app):
+            # App should start successfully
+            # No pricing should be in database
+            rows = [(row.kind, row.model_key, row.origin) for row in test_db.query(ModelPricing)]
+            # The one row on a fresh database is the migration's price of 0 for the built-in fetcher.
+            assert rows == [("fetch", "builtin_fetch", "migration")], "No pricing should be loaded when config is empty"
+    finally:
+        dispose_override()
+
+
+def _undated_pricing_config(input_price: float) -> GatewayConfig:
+    return GatewayConfig(
+        master_key="test-master-key",
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={
+            "openai:gpt-4": PricingConfig(
+                input_price_per_million=input_price,
+                output_price_per_million=60.0,
+                cache_read_price_per_million=3.0,
+                pricing_tiers=[PricingTierConfig(min_input_tokens=1000, input_price_per_million=40.0)],
+            )
+        },
+    )
+
+
+def _pricing(db: AsyncSession) -> DeploymentPricingService:
+    return build_deployment_pricing_service(UnitOfWork(db))
+
+
+async def _config_versions(db: AsyncSession) -> list[ModelPricing]:
+    result = await db.execute(
+        select(ModelPricing).where(ModelPricing.model_key == "openai:gpt-4").order_by(ModelPricing.effective_at)
+    )
+    return list(result.scalars().all())
+
+
+@pytest.mark.asyncio
+async def test_undated_config_pricing_is_seeded_once_across_restarts(async_db: AsyncSession) -> None:
+    """A pricing entry without effective_at adds no row on a restart that leaves it unchanged."""
+    config = _undated_pricing_config(30.0)
+
+    await initialize_pricing_from_config(config, async_db, _pricing(async_db))
+    await initialize_pricing_from_config(config, async_db, _pricing(async_db))
+
+    versions = await _config_versions(async_db)
+    assert len(versions) == 1
+    assert versions[0].origin == "config"
+
+
+@pytest.mark.asyncio
+async def test_undated_config_pricing_adds_a_version_when_the_rate_changes(async_db: AsyncSession) -> None:
+    """Editing the configured rate still takes effect on the next start."""
+    await initialize_pricing_from_config(_undated_pricing_config(30.0), async_db, _pricing(async_db))
+    await initialize_pricing_from_config(_undated_pricing_config(35.0), async_db, _pricing(async_db))
+
+    versions = await _config_versions(async_db)
+    assert [version.input_price_per_million for version in versions] == [Decimal(30), Decimal(35)]
+
+
+def _undated_rates_config(audio_input_price: float) -> GatewayConfig:
+    return GatewayConfig(
+        master_key="test-master-key",
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={
+            "openai:gpt-4": PricingConfig.model_validate(
+                {
+                    "rates": {
+                        "text": {"input": {"price": 30, "unit": "token"}, "output": {"price": 60, "unit": "token"}},
+                        "audio": {"input": {"price": audio_input_price, "unit": "token"}},
+                    }
+                }
+            )
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_restart_puts_an_undated_config_rate_back_over_a_rate_set_through_the_api(
+    async_db: AsyncSession,
+) -> None:
+    """The file's rate differs from the API's version in force, so the restart adds it again."""
+    config = _undated_pricing_config(30.0)
+    await initialize_pricing_from_config(config, async_db, _pricing(async_db))
+    await _pricing(async_db).write_rate(
+        "openai:gpt-4", input_price_per_million=25.0, output_price_per_million=50.0, cache_rates={}
+    )
+    await async_db.commit()
+    set_through_the_api = (await _pricing(async_db).current_versions(["openai:gpt-4"], datetime.now(UTC)))[
+        "openai:gpt-4"
+    ]
+    assert set_through_the_api.origin == "api"
+    assert set_through_the_api.input_price_per_million == Decimal(25)
+
+    await initialize_pricing_from_config(config, async_db, _pricing(async_db))
+
+    in_force = (await _pricing(async_db).current_versions(["openai:gpt-4"], datetime.now(UTC)))["openai:gpt-4"]
+    assert in_force.origin == "config"
+    assert in_force.input_price_per_million == Decimal(30)
+    assert in_force.output_price_per_million == Decimal(60)
+    assert in_force.cache_read_price_per_million == Decimal(3)
+    assert in_force.pricing_tiers == [{"min_input_tokens": 1000, "input_price_per_million": 40.0}]
+
+
+@pytest.mark.asyncio
+async def test_undated_config_rates_block_is_seeded_once_across_restarts(async_db: AsyncSession) -> None:
+    """An unchanged ``rates`` block adds no row on a restart."""
+    config = _undated_rates_config(100.0)
+
+    await initialize_pricing_from_config(config, async_db, _pricing(async_db))
+    await initialize_pricing_from_config(config, async_db, _pricing(async_db))
+
+    assert len(await _config_versions(async_db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_undated_config_rates_block_change_no_column_holds_adds_a_version(async_db: AsyncSession) -> None:
+    """A rate only the ``rates`` block carries still takes effect on the next start."""
+    await initialize_pricing_from_config(_undated_rates_config(100.0), async_db, _pricing(async_db))
+    await initialize_pricing_from_config(_undated_rates_config(120.0), async_db, _pricing(async_db))
+
+    versions = await _config_versions(async_db)
+    assert [version.rates["audio"]["input"]["price"] for version in versions] == [Decimal(100), Decimal(120)]
+
+
+@pytest.mark.asyncio
+async def test_dated_config_pricing_is_not_skipped_for_an_undated_sibling(async_db: AsyncSession) -> None:
+    """A dated entry is written at its date even when an undated key for the same model holds its rates."""
+    await initialize_pricing_from_config(_undated_pricing_config(30.0), async_db, _pricing(async_db))
+    undated = _undated_pricing_config(30.0).pricing["openai:gpt-4"]
+    config = _undated_pricing_config(30.0).model_copy(
+        update={
+            "pricing": {
+                "openai:gpt-4": undated,
+                "openai/gpt-4": undated.model_copy(update={"effective_at": datetime(2025, 1, 1, tzinfo=UTC)}),
+            }
+        }
+    )
+
+    await initialize_pricing_from_config(config, async_db, _pricing(async_db))
+
+    versions = await _config_versions(async_db)
+    assert datetime(2025, 1, 1, tzinfo=UTC) in [version.effective_at for version in versions]
+
+
+@pytest.mark.asyncio
+async def test_undated_config_pricing_is_written_over_a_newer_dated_sibling(async_db: AsyncSession) -> None:
+    """An undated entry whose rates are in force still takes effect when a dated sibling added now overtakes it."""
+    undated = _undated_pricing_config(30.0).pricing["openai:gpt-4"]
+
+    def config_with(pricing: dict[str, PricingConfig]) -> GatewayConfig:
+        return _undated_pricing_config(30.0).model_copy(update={"pricing": pricing})
+
+    now = datetime.now(UTC)
+    two_days_ago = undated.model_copy(update={"effective_at": now - timedelta(days=2)})
+    await initialize_pricing_from_config(config_with({"openai:gpt-4": two_days_ago}), async_db, _pricing(async_db))
+    yesterday = undated.model_copy(update={"input_price_per_million": 25.0, "effective_at": now - timedelta(days=1)})
+
+    await initialize_pricing_from_config(
+        config_with({"openai:gpt-4": undated, "openai/gpt-4": yesterday}), async_db, _pricing(async_db)
+    )
+
+    current = await _pricing(async_db).current_versions(["openai:gpt-4"], datetime.now(UTC))
+    assert current["openai:gpt-4"].input_price_per_million == Decimal(30)
+
+
+def test_undated_config_pricing_boots_on_a_one_connection_pool(postgres_url: str, test_db: Session) -> None:
+    """Startup reads the version in force without waiting on the connection it already holds."""
+    config = _undated_pricing_config(30.0).model_copy(
+        update={
+            "database_url": postgres_url,
+            "host": "127.0.0.1",
+            "port": 8000,
+            "db_pool_size": 1,
+            "db_max_overflow": 0,
+            "db_pool_timeout": 2.0,
+        }
+    )
+    # The second start finds the bootstrap key and the version in force already stored.
+    for _ in range(2):
+        with TestClient(create_app(config)):
+            pass
+
+    assert test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai:gpt-4").count() == 1
+
+
+@pytest.mark.asyncio
+async def test_log_usage_finds_pricing_with_legacy_slash_format(async_db: AsyncSession) -> None:
+    """Test that log_usage falls back to legacy slash format when colon format is absent."""
+
+    class _Writer:
+        def __init__(self) -> None:
+            self.logs: list[UsageLog] = []
+
+        async def put(self, log: UsageLog) -> bool:
+            self.logs.append(log)
+            return True
+
+        async def stage(self, _db: object, logs: list[UsageLog]) -> None:
+            self.logs.extend(logs)
+
+        async def after_commit(self, _logs: list[UsageLog]) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    legacy_pricing = ModelPricing(
+        model_key="openai/gpt-4",
+        input_price_per_million=30.0,
+        output_price_per_million=60.0,
+    )
+    async_db.add(legacy_pricing)
+    await async_db.commit()
+
+    usage = CompletionUsage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    writer = _Writer()
+
+    await log_usage(
+        db=async_db,
+        log_writer=writer,
+        api_key_id=None,
+        model="gpt-4",
+        provider="openai",
+        endpoint="/v1/chat/completions",
+        usage_override=usage,
+    )
+
+    assert len(writer.logs) == 1
+    log = writer.logs[0]
+    expected_cost = (Decimal(1000) * Decimal("30") + Decimal(500) * Decimal("60")) / Decimal(1_000_000)
+    assert log.cost == expected_cost
+
+
+@pytest.mark.asyncio
+async def test_log_usage_finds_pricing_with_colon_format(async_db: AsyncSession) -> None:
+    """Test that log_usage uses canonical colon pricing when available."""
+
+    class _Writer:
+        def __init__(self) -> None:
+            self.logs: list[UsageLog] = []
+
+        async def put(self, log: UsageLog) -> bool:
+            self.logs.append(log)
+            return True
+
+        async def stage(self, _db: object, logs: list[UsageLog]) -> None:
+            self.logs.extend(logs)
+
+        async def after_commit(self, _logs: list[UsageLog]) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    pricing = ModelPricing(
+        model_key="openai:gpt-4",
+        input_price_per_million=30.0,
+        output_price_per_million=60.0,
+    )
+    async_db.add(pricing)
+    await async_db.commit()
+
+    usage = CompletionUsage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    writer = _Writer()
+
+    await log_usage(
+        db=async_db,
+        log_writer=writer,
+        api_key_id=None,
+        model="gpt-4",
+        provider="openai",
+        endpoint="/v1/chat/completions",
+        usage_override=usage,
+    )
+
+    assert len(writer.logs) == 1
+    log = writer.logs[0]
+    expected_cost = (Decimal(1000) * Decimal("30") + Decimal(500) * Decimal("60")) / Decimal(1_000_000)
+    assert log.cost == expected_cost
+
+
+def test_pricing_loaded_from_config_as_rates(postgres_url: str, test_db: Session) -> None:
+    """A config entry given as a cost block stores the block and the columns read out of it."""
+    config = GatewayConfig(
+        database_url=postgres_url,
+        master_key="test-master-key",
+        host="127.0.0.1",
+        port=8000,
+        providers={"openai": {"api_key": "test-key"}},
+        pricing={
+            "openai:gpt-image-1": PricingConfig.model_validate(
+                {"rates": {"image": {"output": {"price": 0.04, "unit": "image"}}}}
+            ),
+        },
+    )
+    app = create_app(config)
+    with TestClient(app):
+        pass
+
+    pricing = test_db.query(ModelPricing).filter(ModelPricing.model_key == "openai:gpt-image-1").one()
+    assert (pricing.unit, pricing.input_price_per_million, pricing.output_price_per_million) == (
+        "image",
+        Decimal(40000),
+        Decimal(0),
+    )
+    assert pricing.rates == {"image": {"output": {"price": Decimal("0.04"), "unit": "image"}}}
+
+
+def test_pricing_config_refuses_rates_beside_per_million_fields() -> None:
+    with pytest.raises(ValueError, match="remove input_price_per_million"):
+        PricingConfig.model_validate(
+            {"input_price_per_million": 3, "output_price_per_million": 15, "rates": {"text": {"input": {"price": 3}}}}
+        )
