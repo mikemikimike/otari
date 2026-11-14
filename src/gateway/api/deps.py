@@ -2696,13 +2696,13 @@ UsageServiceDep = Annotated[UsageService, Depends(get_usage_service)]
 
 def get_batch_results_service(db: Annotated[AsyncSession, Depends(get_db)], uow: UnitOfWorkDep) -> BatchResultsService:
     """Build the batch-results accounting service on the request's Unit of Work."""
-    repositories = BudgetRepositories.on(uow)
+    budgets = get_budget_service(uow, db)
 
     class RequestBatchClaim:
         async def claim_accounting(self, batch_id: str) -> bool:
             return await claim_batch_accounting(db, batch_id)
 
-    return BatchResultsService(uow, RequestBatchClaim(), UsageLogRepository(uow), repositories.budgets)
+    return BatchResultsService(uow, RequestBatchClaim(), UsageLogRepository(uow), budgets)
 
 
 BatchResultsServiceDep = Annotated[BatchResultsService, Depends(get_batch_results_service)]

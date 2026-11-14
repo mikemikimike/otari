@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.usage import UsageLog
+from gateway.services.budgets import BudgetService
 from gateway.services.inference import BatchResultsService
 
 
@@ -25,7 +26,7 @@ def _service() -> tuple[BatchResultsService, AsyncSession, _BatchClaim, AsyncMoc
     uow = UnitOfWork(session)
     claim = _BatchClaim(AsyncMock(return_value=True))
     usage_logs = AsyncMock()
-    budgets = AsyncMock()
+    budgets = AsyncMock(spec=BudgetService)
     writer = AsyncMock()
     return BatchResultsService(uow, claim, usage_logs, budgets), session, claim, usage_logs, budgets, writer
 

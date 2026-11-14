@@ -5,6 +5,7 @@ from typing import Protocol
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.models.usage import UsageLog
+from gateway.services.budgets import BudgetService
 from gateway.services.inference._deployment_funding import DeploymentCharge
 
 
@@ -22,10 +23,6 @@ class _UsageLogRepository(Protocol):
     async def add_many(self, rows: list[UsageLog]) -> None: ...
 
 
-class _BudgetRepository(Protocol):
-    async def record_external_spend(self, user_id: str, cost: Decimal) -> None: ...
-
-
 class BatchResultsService:
     """Claim, write, settle and publish completed batch usage."""
 
@@ -34,7 +31,7 @@ class BatchResultsService:
         uow: UnitOfWork,
         batches: _BatchClaim,
         usage_logs: _UsageLogRepository,
-        budgets: _BudgetRepository,
+        budgets: BudgetService,
     ) -> None:
         self._uow = uow
         self._batches = batches
